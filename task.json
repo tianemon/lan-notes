@@ -1,0 +1,523 @@
+{
+  "project": "局域网笔记",
+  "description": "纯局域网内同步笔记的跨平台应用（Flutter 一套代码覆盖 iOS/Android/Windows/macOS），mDNS 设备发现 + WebSocket 同步，drift(SQLite) 本地存储，LWW 冲突处理",
+  "tasks": [
+    {
+      "id": "task-1",
+      "title": "初始化 Flutter 工程骨架与平台配置",
+      "description": "创建 Flutter 工程（支持 android/ios/windows/macos 四平台），配置全部依赖，完成各平台网络权限配置",
+      "steps": [
+        "在项目根目录创建 Flutter 工程：flutter create . --project-name lan_notes --platforms android,ios,windows,macos（若已有则检查补齐）",
+        "pubspec.yaml 添加依赖：drift、drift_flutter、sqlite3_flutter_libs、flutter_riverpod、go_router、multicast_dns、web_socket_channel、uuid，dev_dependencies 加 drift_dev、build_runner",
+        "执行 flutter pub get 确认依赖解析成功",
+        "Android：AndroidManifest.xml 配置 android:usesCleartextTraffic=\"true\"（Android 9+ 明文流量限制，局域网 ws:// 必须放行）",
+        "iOS：Info.plist 添加 NSLocalNetworkUsageDescription 描述文案 + NSBonjourServices 声明 _lan_notes._tcp",
+        "macOS：DebugProfile.entitlements 与 Release.entitlements 添加 com.apple.security.network.server 和 com.apple.security.network.client",
+        "将 lib/ 下的默认计数器示例代码清空，替换为最小可运行空壳（MaterialApp + 空 Home 页），执行 flutter analyze 无错误",
+        "执行 flutter build windows（或 flutter run -d windows）验证工程可编译运行"
+      ],
+      "reference": "Flutter 官方 multi-platform 工程规范；各平台网络权限按系统官方文档配置",
+      "passes": false,
+      "evaluated": false,
+      "status": "done"
+    },
+    {
+      "id": "task-2",
+      "title": "数据层：drift 数据库与笔记 DAO",
+      "description": "实现 notes 表、Note 数据类（含同步所需字段与 JSON 编解码）、笔记 DAO 的全部 CRUD 与流式查询",
+      "steps": [
+        "定义 Notes 表：id(TEXT UUID 主键)、title、content、createdAt、updatedAt(epoch ms)、version(int，默认0)，updatedAt 建索引",
+        "编写数据库代码生成（drift_dev + build_runner），生成后执行 flutter pub run build_runner build 成功",
+        "Note 数据类：实现 fromRow / toJson / fromJson（供 WebSocket 同步协议传输，字段与表一致）",
+        "NoteDao 实现：insertOrReplace、updateNote（自动递增 version、刷新 updatedAt）、deleteById、getAllStream（按 updatedAt 倒序的流式查询）、getById、searchStream(关键字过滤标题+内容)",
+        "flutter analyze 无错误"
+      ],
+      "reference": "drift 官方文档（表定义/代码生成/流式查询）；SQLite 索引最佳实践",
+      "passes": false,
+      "evaluated": false,
+      "status": "done"
+    },
+    {
+      "id": "task-3",
+      "title": "状态层：Riverpod providers 与笔记仓库",
+      "description": "实现全局 Provider 体系与 NoteRepository 统一读写入口，串联本地数据库与后续同步推送",
+      "steps": [
+        "databaseProvider：全局单例 AppDatabase（drift_flutter 的 driftDatabase 初始化，桌面/移动端统一）",
+        "noteRepositoryProvider：NoteRepository 封装全部笔记读写方法（createNote/updateNote/deleteNote/getStream/search/getById），供 UI 与同步层共用",
+        "notesStreamProvider(StreamProvider)：暴露笔记列表流（含搜索关键字过滤），UI 只消费此流",
+        "editorNoteProvider(FutureProvider)：按 id 读取单条笔记供编辑页使用",
+        "所有 UI 变更统一走 Repository 方法，验证单向数据流（UI → Repository → drift 流 → UI 自动刷新）",
+        "flutter analyze 无错误"
+      ],
+      "reference": "Riverpod 官方分层示例（Provider 组织与依赖注入模式）",
+      "passes": false,
+      "evaluated": false,
+      "status": "done"
+    },
+    {
+      "id": "task-4",
+      "title": "笔记列表页（含新建/删除/搜索）",
+      "description": "实现主页：笔记列表展示（更新时间倒序、标题+摘要+时间）、新建入口、删除（确认）、搜索",
+      "steps": [
+        "HomePage：AppBar 含搜索框（或搜索图标展开）、新建笔记按钮（跳转 /editor）、同步入口（跳转 /sync）",
+        "NotesList：消费 notesStreamProvider，按 updatedAt 倒序渲染列表，每项显示标题、正文摘要（截断）、相对时间；空态显示引导文案",
+        "新建：点击 + 跳转 /editor（无 id）；返回后列表自动刷新",
+        "删除：列表项长按或滑动弹出删除确认，确认后调 repository.deleteNote",
+        "搜索：searchQueryProvider 绑定搜索框，输入即过滤标题+正文，支持清空",
+        "UI 风格：Material 3 flat（无阴影、简洁扁平配色），列表项圆角卡片",
+        "flutter analyze 无错误"
+      ],
+      "reference": "Material 3 列表页规范（Google Material Design）；主流笔记应用（备忘录/Google Keep）列表交互模式",
+      "passes": false,
+      "evaluated": false,
+      "status": "done"
+    },
+    {
+      "id": "task-5",
+      "title": "笔记编辑页（自动保存）",
+      "description": "实现编辑器：标题 + 正文编辑、防抖自动保存、新建/编辑双模式",
+      "steps": [
+        "EditorPage：路由参数 id 可选——无 id 为新建（创建后替换路由为编辑态），有 id 通过 editorNoteProvider 加载",
+        "标题输入框 + 正文多行输入框（自动聚焦、撑满剩余空间）",
+        "自动保存：内容变更防抖 1s 后调 repository（新建→创建，已有→更新，version 自动递增）；保存状态指示（保存中/已保存）",
+        "返回处理：未保存的变更在返回前兜底保存；删除按钮（编辑态）二次确认删除",
+        "flutter analyze 无错误"
+      ],
+      "reference": "主流笔记应用自动保存交互（Google Keep、Apple 备忘录）；防抖保存模式",
+      "passes": false,
+      "evaluated": false,
+      "status": "done"
+    },
+    {
+      "id": "task-6",
+      "title": "同步传输层：mDNS 设备发现 + WebSocket 连接",
+      "description": "实现局域网设备自动发现（mDNS 发布/监听）与 WebSocket 服务端/客户端连接管理",
+      "steps": [
+        "DiscoveryService：开启同步时发布 mDNS 服务（_lan_notes._tcp，携带设备名）；未开启时监听并列出发现的可用主机",
+        "使用 multicast_dns 实现：服务发布（registerService）+ 服务发现（startDiscovery），解析出主机 IP 与端口",
+        "SyncConnection：WebSocket 服务端（开启同步的设备监听 ws://0.0.0.0:随机端口）+ 客户端（连接 ws://host:port）",
+        "连接生命周期管理：连接、断开、自动重连（指数退避，最多 5 次）",
+        "心跳保活：每 15s 发送 {type:'ping'}，45s 无响应判定断连",
+        "多客户端支持：服务端维护连接列表，可同时服务多台设备",
+        "flutter analyze 无错误"
+      ],
+      "reference": "mDNS/Bonjour 协议标准；multicast_dns 官方示例；WebSocket 保活与重连通用模式",
+      "passes": false,
+      "evaluated": false,
+      "status": "done"
+    },
+    {
+      "id": "task-7",
+      "title": "同步协议：握手/全量/增量/LWW 冲突合并",
+      "description": "实现完整同步协议：设备握手、全量同步、增量推送、删除广播、版本冲突合并（LWW）",
+      "steps": [
+        "sync_protocol.dart：定义消息模型（hello/welcome/sync_request/sync_data/note_upsert/note_delete/devices_update）与 JSON 编解码",
+        "SyncService 编排：连接建立→客户端发 hello→主机回 welcome→客户端发 sync_request→主机回 sync_data 全量快照→客户端合并",
+        "增量同步：任一方本地笔记增删改后，通过 Repository 变更钩子自动推送 note_upsert / note_delete 到所有对端",
+        "LWW 合并：接收方按「version 大者胜；相等时 updatedAt 新者胜；采用远端后本地 version=max+1 保证单调」规则合并写库",
+        "删除防乱序：note_delete 携带 version，仅当本地 version ≤ 消息 version 时执行删除",
+        "主机维护已连接设备列表，连接/断开时广播 devices_update",
+        "flutter analyze 无错误"
+      ],
+      "reference": "Dynamo 论文 LWW 冲突解决模式；WebSocket JSON 消息协议通用设计；CRDT 对比后简化取舍（个人单写者场景）",
+      "passes": false,
+      "evaluated": false,
+      "status": "done"
+    },
+    {
+      "id": "task-8",
+      "title": "同步页 UI（设备发现/连接管理/状态显示/手动同步）",
+      "description": "实现同步管理页：开启/关闭同步服务、发现设备并连接、连接管理、同步状态显示、手动同步按钮",
+      "steps": [
+        "SyncPage 布局（flat 风格）：顶部同步总开关（Switch）+ 状态说明",
+        "本机作为主机：显示开启状态、已连接设备列表（设备名 + 断开按钮），断开后广播 devices_update",
+        "本机作为客户端：自动列出发现的主机（设备名 + IP），点击连接；显示当前连接目标与断开按钮",
+        "SyncStatusBar：连接状态（未连接/连接中/已连接）、最近同步时间、同步进行中指示（转圈/进度）",
+        "「立即同步」按钮：手动触发 sync_request 全量对齐",
+        "连接异常（断线/被拒）以 SnackBar 或状态文案提示，不崩溃",
+        "flutter analyze 无错误"
+      ],
+      "reference": "主流笔记应用同步设置页交互；iOS 设置页分组列表模式",
+      "passes": false,
+      "evaluated": false,
+      "status": "done"
+    },
+    {
+      "id": "task-9",
+      "title": "端到端联调与多平台验证",
+      "description": "打通全流程：两台设备同步实测、四平台编译验证、补充 README 运行说明",
+      "steps": [
+        "Windows 桌面端运行：验证本地笔记 CRUD、搜索、持久化（重启保留）",
+        "同机双实例联调：启动两个 Windows 实例（或 Windows + Android 模拟器）分别作为主机与客户端，验证 mDNS 发现、连接、双向增删改同步、冲突合并、删除同步",
+        "验证断线重连：关闭主机再开启，客户端自动重连并数据对齐",
+        "验证多客户端：三端连接，主机广播 devices_update 正确",
+        "执行 flutter build windows 与 flutter build apk 确认四平台代码编译（iOS/macOS 需 Mac，代码层保持一致）",
+        "flutter analyze 零错误",
+        "更新根 README.md：项目介绍、运行方式（各平台）、同步使用说明、已知限制（iOS/macOS 需 Mac 编译）"
+      ],
+      "reference": "端到端验收清单（见 docs/需求文档.md 整体验收标准）",
+      "passes": false,
+      "evaluated": false,
+      "status": "done"
+    },
+    {
+      "id": "task-10",
+      "title": "Android 运行时 SQLite 库修复 + 多客户端增量转发",
+      "description": "解决验收发现的遗留问题：① Android APK 未打包 libsqlite3.so 导致运行时可能崩溃（手机端主场景）；② 3 台设备场景下主机不转发客户端间增量，A 的变更无法实时到 B",
+      "steps": [
+        "调研并尝试让 Android APK 打包 libsqlite3.so 的可行方案（候选：sqlite3 2.x + sqlite3_flutter_libs 0.5.x 走 Maven 路径；sqlite3 3.x native assets 的 Android 配置；本地预编译库缓存），验收点：flutter build apk --debug 后 APK 内存在 libsqlite3.so，且 flutter build windows 不回归失败",
+        "若 Windows/Android 无法同时满足：以 Android 可用优先（手机端主场景），记录权衡结论与 Windows 端回退方案",
+        "多客户端转发：SyncService._onHostMessage 收到客户端 A 的 note_upsert/note_delete 合并后，向除来源外的其他已连接客户端 broadcast（fan-out），保证 3 台设备实时一致；防回声：对端收到后走 merge* 入口不回推",
+        "更新 temp/drafts/verify_sync.dart 补充多客户端转发验证（可选，不强制）；不运行 flutter test、不截图",
+        "flutter analyze 0 issues；更新 docs/开发进度.md 与 README 已知限制"
+      ],
+      "reference": "Evaluator 验收问题清单（【中】多客户端 fan-out、【低】Android sqlite3 运行时风险）",
+      "passes": false,
+      "evaluated": false,
+      "status": "done"
+    },
+    {
+      "id": "task-11",
+      "title": "发现层修复：列表去重 + Android 多播锁",
+      "description": "修复真机实测反馈：① 发现列表出现重复设备（同一设备多个 IP / 轮询缓存叠加，_discoverOnce 无去重）；② 手机端发现/连接慢（Android WiFi 省电过滤多播包，需 MulticastLock）",
+      "steps": [
+        "发现列表去重：_discoverOnce 结果按 instanceName（或 deviceId）去重，同一设备多个 IP 只保留一个可连接地址（优先真实网卡地址）；轮询期间缓存叠加不产生重复条目",
+        "Android 多播锁：AndroidManifest.xml 添加 CHANGE_WIFI_MULTICAST_STATE 权限；在 Android 平台启动 mDNS 发布/发现时获取 WifiManager.MulticastLock（需在 MainActivity/FlutterActivity 通过 method channel 暴露，或使用插件），停止时释放；Windows/iOS/macOS 不受影响",
+        "验证：Windows 双实例发现列表无重复；Android 端真机无法验证时记录实现说明",
+        "flutter analyze 0 issues；不运行 flutter test、不截图；更新 docs/开发进度.md"
+      ],
+      "reference": "Android MulticastLock 官方文档（WifiManager）；真机实测反馈（搜到两个一样、手机发现慢）",
+      "passes": false,
+      "evaluated": false,
+      "status": "done"
+    },
+    {
+      "id": "task-12",
+      "title": "设备身份与配对：deviceId 持久化 + 设备密码 + 信任列表 + 认证协议",
+      "description": "实现设备持久化身份、设备密码设置、信任列表存储与认证握手协议（首次连接必须输密码，配对后永久信任）",
+      "steps": [
+        "设备身份：首次启动生成 deviceId（UUID）持久化存储（drift 表或本地文件）；设备名默认取主机名，可在设置中修改；providers 暴露本机身份",
+        "设备密码：设置页可设置/修改本机连接密码（本地持久化存储，明文可接受——局域网个人场景，注释说明权衡）",
+        "信任列表：drift 表 trusted_devices(deviceId, deviceName, pairedAt)；增删查 API；已配对设备连接直接放行",
+        "认证协议消息：sync_protocol.dart 新增 pairing_request/pairing_verify/pairing_ok/pairing_fail，hello/welcome 增加 deviceId/trusted 字段；握手流程：双方互发 hello → 查信任列表 → 命中直接 welcome，未命中走配对流程（密码验证通过双方写信任列表）",
+        "密码错误重试 ≤3 次后断开；配对成功后双方互信（双向写入）",
+        "flutter analyze 0 issues；不运行 flutter test、不截图；更新 docs/开发进度.md"
+      ],
+      "reference": "技术架构 7.2/7.3（认证与配对流程）；需求文档 F13-F15",
+      "passes": false,
+      "evaluated": false,
+      "status": "done"
+    },
+    {
+      "id": "task-13",
+      "title": "P2P 对等架构：双角色服务 + 连接去重 + 自动发现自动连接 + 固定端口",
+      "description": "主机-客户端模式改为 P2P 对等：每台设备同时运行服务端+客户端，两两直连，自动发现自动连接，IP 变化自动重连",
+      "steps": [
+        "SyncService 重构：每台设备同时启动 WebSocket 服务端（固定端口，默认 58888 可配置）+ mDNS 发布 + mDNS 发现 + 对端连接管理，去掉 startHosting/connectTo 主机客户端概念",
+        "连接去重：deviceId 字典序小者主动连接，大者接受；双向同时发现时不产生双连接；同一对设备只有一条连接",
+        "自动连接：发现新设备（已配对）自动建立连接；连接失败自动重试（指数退避）；断开自动重连；IP 变化通过重新 mDNS 发现解析新地址",
+        "未配对设备：发现列表显示但自动连接需等待用户操作（配合 task-12 配对流程，不自动发配对请求）",
+        "复用 SyncServer/SyncClient 传输层，必要时扩展多连接管理（本机对多个对端的连接表）",
+        "flutter analyze 0 issues；不运行 flutter test、不截图；更新 docs/开发进度.md"
+      ],
+      "reference": "技术架构 7.1（P2P 拓扑与连接去重规则）；需求文档 F16",
+      "passes": false,
+      "evaluated": false,
+      "status": "done"
+    },
+    {
+      "id": "task-14",
+      "title": "多向同步 + 同步页 UI 改造 + 联调验证",
+      "description": "P2P 多向同步（任一设备变更广播所有对端）、同步页改为设备列表（含配对操作、密码输入弹窗、设备名/密码设置）、端到端联调验证",
+      "steps": [
+        "多向同步：任一对端变更 → 广播所有已连接对端；全量同步连接建立后双向对齐；devices_update 多向广播",
+        "同步页 UI 改造：去掉主机/客户端概念，改为设备列表（已配对/未配对状态标识）；点击未配对设备弹密码输入框（配对流程）；已配对设备显示连接状态；顶部总开关保留；「立即同步」保留",
+        "设置入口：设备名修改 + 本机连接密码设置/修改（可在同步页或单独设置页）",
+        "配对交互：收到 pairing_request 时 UI 弹窗提示（被动配对）；主动配对：点击设备→输密码→pairing_verify",
+        "联调验证：扩展 temp/drafts/verify_sync.dart 覆盖 P2P 场景——双设备互相发现自动连接、未配对拒绝连接、输密码配对成功后续自动连接、三设备互连广播同步、IP 变化（模拟重新发现）重连",
+        "README 更新：P2P 使用说明（首次配对步骤）；docs/需求文档.md 与 docs/技术架构.md 同步确认",
+        "flutter analyze 0 issues；不运行 flutter test、不截图"
+      ],
+      "reference": "需求文档 F7-F16；技术架构 4/6/7 节",
+      "passes": false,
+      "evaluated": false,
+      "status": "done"
+    },
+    {
+      "id": "task-15",
+      "title": "修复验收问题：fan-out 回声风暴 + 同名设备去重 + 健壮性加固",
+      "description": "修复 Evaluator 验收发现的 1 个 HIGH（三设备全互联 fan-out 无限中继回声循环）与 1 个 MEDIUM（发现去重按 instanceName 合并同名设备）及若干 LOW 问题",
+      "steps": [
+        "【HIGH】回声风暴：mergeRemoteNote/mergeRemoteDelete 改为返回是否实际变更本地（bool）；SyncService 转发逻辑改为仅当合并实际变更时才向其他就绪会话 fan-out（note_upsert/note_delete 均处理）；未变更消息直接丢弃，保证三设备全互联下消息链收敛",
+        "【MEDIUM】发现去重键改为 deviceId：_deduplicateByInstance 改为优先按 TXT 中的 deviceId 去重（无 deviceId 的旧设备回退 instanceName），解决两台同名设备（如 Android 默认 localhost）被合并问题",
+        "【LOW-MEDIUM】会话就绪（ready 状态翻转）时统一刷新 peerList（_emitPeers），修复接受方同步页长期显示连接中的问题",
+        "【LOW-MEDIUM】_onPairingOk 增加 _isSubmitter 守卫，信任写入用会话登记的 peerDeviceId 而非消息载荷",
+        "【LOW】disable() 时清理 _reportedDiscoveryConflicts；pairing_ok 与 welcome 双路径触发 _onReady 去重（ready 只触发一次全量对齐）",
+        "【LOW】hello.trusted 按实际信任状态填充",
+        "联调脚本补充：3 设备全互联 mesh 下消息量级断言（每个设备收到每条笔记变更的消息数有上限，检测消息风暴收敛）；基线 116 PASS 不得回归",
+        "flutter analyze 0 issues；不运行 flutter test、不截图；更新 docs/开发进度.md 与 docs/技术架构.md（fan-out 规则修订）"
+      ],
+      "reference": "Evaluator 验收问题清单（task-13 FAIL：fan-out 中继回声死循环；task-11 同名设备合并）",
+      "passes": false,
+      "evaluated": false,
+      "status": "done"
+    },
+    {
+      "id": "task-16",
+      "title": "WiFi 式断开机制：手动断开保持 + 每设备自动连接配置 + 取消配对",
+      "description": "用户实测反馈，参考常见 WiFi 连接机制：① 手动断开后当下不自动重连，但重新开启同步/重启 App 后自动重连（会话级断开）；② 每台已配对设备增加「自动连接」配置（类似 WiFi 自动加入，默认开，关后保持配对但不自动连）；③ 取消配对功能（移除信任关系）",
+      "steps": [
+        "手动断开保持（会话级）：SyncService 增加手动断开集合（按对端 deviceId）；UI 点击断开 → 断开连接 + 标记；自动连接逻辑跳过已标记对端；disable/enable、App 重启时清除标记（对应重新开启同步/重新打开软件自动重连）；清除后走每设备自动连接配置",
+        "每设备「自动连接」配置（WiFi 式）：TrustedDevices 表加 auto_connect 字段（默认 true）；SyncService 自动连接逻辑改为：已配对 + auto_connect=true 才自动连；auto_connect=false 的设备保持配对但不自动连接，需手动点击连接（连接成功不改变配置）；UI 已配对设备卡片提供「自动连接」开关（默认开，类似 WiFi 自动加入）",
+        "取消配对：SyncPage 已配对设备卡片加「取消配对」操作（长按菜单或操作按钮）→ 二次确认 → 调用 SyncService.unpairPeer(deviceId)：断开连接 + 从信任列表移除 + 清除手动断开标记；取消后该设备在发现列表重新显示为「未配对」，需重新输密码配对",
+        "同步页状态文案同步更新：已配对但手动断开的设备显示「已断开（手动）」；已配对且 auto_connect=false 显示「已保存（不自动连接）」；未配对显示「未配对」",
+        "联调脚本补充断言：手动断开后当下不自动重连（发现轮询后仍断开）、disable/enable 后自动重连、auto_connect=false 不自动连但手动可连、取消配对后信任列表移除且重新配对需输密码；基线 124 PASS 不得回归",
+        "flutter analyze 0 issues；不运行 flutter test、不截图；更新 docs/开发进度.md 与 docs/技术架构.md（7.1 自动连接语义修订：WiFi 式断开 + 每设备自动连接配置）"
+      ],
+      "reference": "用户真机反馈（参考 WiFi 连接机制：手动断开会话级、每设备自动加入开关）；docs/技术架构.md 7.1",
+      "passes": false,
+      "evaluated": false,
+      "status": "done"
+    },
+    {
+      "id": "task-17",
+      "title": "启动自动开启同步 + 后台恢复同步",
+      "description": "用户实测反馈：① 打开软件应自动开启同步（加配置项，默认开启）；② 安卓端后台时同步被系统关闭，回前台应自动恢复",
+      "steps": [
+        "自动同步配置：DeviceSettings 新增 auto_sync 配置（默认 true）；SyncPage 设置弹窗加「启动时自动同步」开关；App 启动（main.dart 或首帧后）检查配置：开启则自动 enable（无需手动点开关）",
+        "前台恢复：App 从后台回到前台（AppLifecycleState.resumed）时，若 auto_sync 开启且当前未 enable，自动重新 enable 并恢复发现/连接（解决安卓后台被杀/挂起后同步丢失）",
+        "同步开关状态与配置联动：用户手动关闭开关时同步关闭（不覆盖 auto_sync 配置）；重启后按配置恢复",
+        "验证：verify_sync.dart 不受影响；flutter analyze 0 issues；不运行 flutter test、不截图",
+        "README 更新：自动同步配置说明；docs/开发进度.md 更新"
+      ],
+      "reference": "用户真机反馈（安卓后台同步被关闭）；Android 生命周期（AppLifecycleState）",
+      "passes": false,
+      "evaluated": false,
+      "status": "done"
+    },
+    {
+      "id": "task-18",
+      "title": "编辑模式实时同步（远端修改实时刷新编辑页）",
+      "description": "用户需求：编辑模式下自动同步——另一台设备修改了当前打开的笔记，编辑页实时刷新；冲突按 LWW 强覆盖（最后保存者赢）",
+      "steps": [
+        "editorNoteProvider 改为流式：从 FutureProvider 改为 StreamProvider（drift watchSingle 订阅单条笔记，远端合并写库后自动推送）",
+        "EditorPage 订阅流：有 id（编辑态）时监听流变化——内容与当前输入一致（本地保存回推）时不更新 controller（避免光标跳动）；不一致（远端修改）时直接替换标题/正文输入框内容（强覆盖）",
+        "新建模式（无 id）不受影响：创建成功转为编辑态后再订阅流",
+        "防抖保存与流更新协调：本地输入→保存→写库→流回推（内容一致跳过）；远端更新→写库→流推送（内容不一致→覆盖显示）；不产生循环",
+        "联调脚本补充断言：双端同时打开同一笔记，一端修改后另一端编辑页数据流实时收到新内容（脚本层验证 provider/仓库流）；基线 124 PASS 不得回归",
+        "flutter analyze 0 issues；不运行 flutter test、不截图；更新 docs/开发进度.md"
+      ],
+      "reference": "用户需求（编辑模式实时同步，LWW 强覆盖）；drift watchSingle 流式查询",
+      "passes": false,
+      "evaluated": false,
+      "status": "done"
+    },
+    {
+      "id": "task-19",
+      "title": "Syncthing 式发现优化：周期通告 + 监听模式 + 低频兜底 + 地址缓存重连",
+      "description": "用户确认参考 Syncthing 的发现机制优化：发布端改为周期主动通告（30s），发现端改为监听通告 + 60s 低频轮询兜底；连接建立后记住对端地址，重连优先用已知地址，mDNS 仅作兜底",
+      "steps": [
+        "发布端周期通告：_MDnsResponder 增加定时器（默认 30s，可配置）主动广播 mDNS 通告包（unsolicited response，PTR+SRV+TXT+A 全记录，复用现有编码逻辑）；start 时立即发一次（上线即宣告），stop 时可选发 goodbye 通告（TTL=0）",
+        "发现端监听模式：DiscoveryService 增加监听 socket（绑定 5353 reuseAddress，解析响应/通告包，复用现有 DNS 解码逻辑）；收到通告提取 PTR 记录 → 更新对应设备（设备名/IP/端口），实现零查询发现；通告 TTL 过期（如 90s 无通告）判定设备离线移除",
+        "低频兜底：轮询频率 5s → 60s（防漏包/补查监听未覆盖场景）；轮询与监听并行，结果合并去重（按 deviceId）",
+        "地址缓存重连：SyncService 维护对端地址缓存（deviceId → 最近地址/端口，内存态）；重连时优先用缓存地址直接连接，失败/超时再走 mDNS 重新发现；连接成功后刷新缓存",
+        "联调脚本：verify_sync.dart 更新/新增断言——发布端通告能被监听端解析发现（不轮询也能发现）、60s 兜底频率可配置化（测试用短间隔验证轮询兜底）、地址缓存重连（断开后直接用缓存地址重连成功）；基线 167 PASS 不得回归",
+        "flutter analyze 0 issues；不运行 flutter test、不截图；更新 docs/技术架构.md（7.1 发现机制修订：周期通告+监听+兜底）与 docs/开发进度.md"
+      ],
+      "reference": "Syncthing 局域网发现机制（每 30s 周期广播宣告，发现与同步解耦）；mDNS RFC 6762 通告机制",
+      "passes": false,
+      "evaluated": false,
+      "status": "done"
+    },
+    {
+      "id": "task-20",
+      "title": "数据层：回收站 + 墓碑表（deletedAt + tombstones + v3→v4 迁移）",
+      "description": "删除机制改造（用户确认方案：回收站+时间线）：notes 表加 deletedAt（软删除），新建 tombstones 表（防复活），数据库 v3→v4 迁移，DAO/Repository 增删改恢复清空与墓碑读写",
+      "steps": [
+        "Notes 表加 deletedAt 列（INTEGER NULL，null=正常，非 null=回收站，schemaVersion 3→4 + MigrationStrategy addColumn）",
+        "新建 Tombstones 表（id TEXT PK / version INTEGER / deletedAt INTEGER，永不清除）",
+        "Note 数据类加 deletedAt 字段（fromRow/toRow/toJson/fromJson，JSON 序列化包含，null 兼容旧版）",
+        "NoteDao：softDelete（置 deletedAt+version+1）/ restore（清 deletedAt+version+1）/ purge（物理删除）/ trashStream（回收站列表，按 deletedAt 倒序）/ 列表流与搜索过滤 deletedAt IS NULL / getAll 含回收站条目 / 墓碑读写",
+        "NoteRepository：softDeleteNote/restoreNote/purgeNote + 变更事件扩展（NoteTrashedEvent/NoteRestoredEvent/NotePurgedEvent 或统一事件带类型）",
+        "存量数据迁移验证（内存库 + 文件库实测 v3→v4）；flutter analyze 0 issues；不运行 flutter test、不截图"
+      ],
+      "reference": "docs/技术架构.md 3.3（v3 修订：回收站+墓碑）；需求文档 F3/F17",
+      "passes": false,
+      "evaluated": false,
+      "status": "done"
+    },
+    {
+      "id": "task-21",
+      "title": "同步协议与合并规则：deletedAt + 墓碑交换 + 时间裁决",
+      "description": "同步层适配回收站+时间线：sync_data 携带墓碑列表，合并规则改为 version→操作时间→删除优先",
+      "steps": [
+        "sync_protocol：Note JSON 已含 deletedAt；sync_data 增加 tombstones 字段（缺省空列表，兼容旧对端）；Tombstone 编解码",
+        "合并规则重写（统一比较器）：version 大者胜 → 相等比操作时间（updatedAt vs deletedAt）→ 平局删除优先；mergeRemoteNote 处理 deletedAt（删除=软删保留内容、恢复=清标记）、查本地墓碑（墓碑 version ≥ 消息 version 拒绝，防复活；消息 version > 墓碑 version 允许复活）",
+        "mergeRemoteDelete 语义改为清空：物理删除 + 写墓碑（version=max(本地,消息)）；本地墓碑已存在则更新为 max",
+        "全量同步：sync_data 快照含回收站条目 + 墓碑列表；双向对齐流程不变",
+        "verify_sync.dart 重建并补充断言：双端软删/恢复/清空同步、离线复活拦截（墓碑 version）、离线修改复活（时间裁决）、同 version 删除优先；原基线（若无脚本则重新编写覆盖核心场景）",
+        "flutter analyze 0 issues；不运行 flutter test、不截图；更新 docs/技术架构.md（7.2/7.4 合并规则）"
+      ],
+      "reference": "docs/技术架构.md 3.3/7.2/7.4（v3 修订）；需求文档 F17",
+      "passes": false,
+      "evaluated": false,
+      "status": "done"
+    },
+    {
+      "id": "task-22",
+      "title": "回收站 UI：删除改软删除 + 回收站页面（恢复/清空）",
+      "description": "UI 适配回收站机制：列表删除改为移到回收站，新增回收站页面（列表/恢复/清空单条/清空全部）",
+      "steps": [
+        "列表页删除确认文案改为「移到回收站？」（长按/左滑删除 → 调 softDeleteNote）",
+        "列表页 AppBar 新增回收站入口（垃圾桶图标 → 新路由 /trash）",
+        "TrashPage：回收站列表（标题+删除时间+摘要，按 deletedAt 倒序）、每条操作（恢复 ↺ / 清空 🗑 二次确认）、顶部「清空全部」（二次确认）、空态「回收站是空的」、flat 风格与全站一致",
+        "恢复/清空后列表自动刷新（drift 流）；路由表加 /trash；flutter analyze 0 issues；不运行 flutter test、不截图"
+      ],
+      "reference": "docs/技术架构.md 4/5 节（组件树/路由）；需求文档 F3/F17",
+      "passes": false,
+      "evaluated": false,
+      "status": "done"
+    },
+    {
+      "id": "task-23",
+      "title": "端到端验证：回收站+墓碑全链路 + 文档收尾",
+      "description": "回收站+时间线机制端到端验证与文档收尾",
+      "steps": [
+        "双实例/三实例联调验证：A 删→B 回收站可见可恢复；A 清空→B 物理删除；C 离线→A 清空→C 上线不复活；C 离线修改→A 删→C 上线复活为修改版",
+        "flutter analyze 0 issues；构建验证（macOS 或现有平台至少一个）",
+        "README 更新：回收站使用说明 + 删除功能需全员升级说明；docs/开发进度.md 更新"
+      ],
+      "reference": "docs/需求文档.md 整体验收标准；docs/技术架构.md v3 修订",
+      "passes": false,
+      "evaluated": false,
+      "status": "done"
+    },
+    {
+      "id": "task-24",
+      "title": "UDP 广播发现改造（完整实现，不分步）",
+      "description": "发现层 mDNS → UDP 广播（融合 Syncthing 周期广播 + LocalSend 上线即发与回播）：重写 discovery_service，删除 mDNS/多播锁代码，移除 multicast_dns 依赖，验证与文档一步到位",
+      "steps": [
+        "重写 lib/app/sync/discovery_service.dart：UDP 广播收发（逐网卡计算广播地址 IP+掩码 + 255.255.255.255 兜底，端口 UDP 58888）+ JSON 通告协议（v/deviceId/name/port/ts）+ 上线立即三连发（100ms/500ms/2s）+ 30s 周期通告 + 收到新设备通告立即回播 + 90s 无通告离线移除（清理定时器）+ 按 deviceId 去重 + isSelf 过滤（本机 deviceId）+ DiscoveredDevice 数据结构与现有 API（publish/startDiscovery/devices 流/isPublishing/isDiscovering）完全保持，SyncService 零改动",
+        "删除 multicast_lock 相关文件（multicast_lock.dart / multicast_lock_flutter.dart / multicast_lock_stub.dart）、AndroidManifest 的 CHANGE_WIFI_MULTICAST_STATE 权限、MainActivity.kt 的 multicast_lock MethodChannel（UDP 广播不受 MulticastLock 限制）",
+        "pubspec.yaml 移除 multicast_dns 依赖并 flutter pub get",
+        "verify_sync.dart 更新发现断言：UDP 广播发现（发布端上线三连发可被监听端收到）、周期通告维持在线、90s 离线移除、新设备回播（收到通告后对端立即再发）、发现→自动连接→同步全链路；基线场景（配对/同步/重连/回收站）不得回归",
+        "flutter analyze 0 issues；flutter build macos 构建验证；不运行 flutter test、不截图、不运行 GUI",
+        "文档：docs/技术架构.md 7.1 重写为 UDP 广播方案（协议/时序/平台适配）；README 更新（发现机制升级说明：所有设备需升级新版，旧版互不可见）；docs/开发进度.md 更新"
+      ],
+      "reference": "方案确认：UDP 广播发现改造（Syncthing lib/discover/local.go + LocalSend multicast_discovery.dart 参考）",
+      "passes": false,
+      "evaluated": false,
+      "status": "done"
+    },
+    {
+      "id": "task-25",
+      "title": "UI 优化：EE 风格主题 + 卡片化列表 + 动效 + 设置/同步页美化（一步到位）",
+      "description": "参考 EasyEdit（/Users/amon/dev/project/intelligent_editot_reader/smart_txt_reader）的 UI 风格体系优化 EasyNote UI：主题配色（亮 #F2F2F7 / 暗 #0D1B2A + 强调色）、笔记列表卡片化（圆角16/柔和阴影/玻璃模拟）、动效（列表进出/Hero/保存状态/同步状态）、设置与同步页美化（SwitchListTile 分组列表），一步到位",
+      "steps": [
+        "主题重建（theme.dart）：亮色背景 #F2F2F7 灰白 + 暗色背景 #0D1B2A 暗夜蓝 + 卡片 #1B2838 + 强调色亮 #4F6EF7 / 暗 #5B9BD5；支持亮/暗/跟随系统（themeMode）；设计令牌：圆角 16、阴影从表面色插值（非纯黑）、表面分层（背景/卡片/浮层）",
+        "玻璃装饰体系（参考 EE ui_style.dart）：styledListDecoration（滚列表用半透明模拟，零 GPU）+ styledDecoration（弹窗/菜单用 BackdropFilter blur）+ 卡片工厂函数，供列表/弹窗/菜单统一使用",
+        "笔记列表卡片化（notes_list.dart）：EE 式卡片（圆角16 + 柔和阴影 6%黑+blur20 + 玻璃模拟装饰）+ 标题16bold/摘要13灰/时间11outline 三段式布局；空态优化（图标 + 淡入）",
+        "动效：列表项新增/恢复淡入上移（AnimatedSwitcher）；列表卡片→编辑页 Hero 过渡（标题+内容）；编辑页保存状态 AnimatedSwitcher 淡入淡出 + ✓ 图标微动画；同步页连接/同步中图标旋转/脉冲、连接成功弹跳",
+        "设置与同步页美化：SwitchListTile 分组列表（图标+标题+副标题）；同步页设备列表卡片化（对齐 EE 卡片风格）+ 状态彩色圆点；配对弹窗用玻璃装饰（styledDecoration）",
+        "页面转场：自定义 FadeThrough/滑动+淡入替代默认 Material 转场（go_router pageBuilder 或 MaterialApp pageTransitionsTheme）",
+        "平台适配：桌面 hover 微抬升 + 移动端点击涟漪/触觉反馈，用平台判断分流；列表动画轻量（仅增删/状态变化触发，滚动不叠加）",
+        "flutter analyze 0 issues；flutter build macos 验证；不运行 flutter test、不截图、不运行 GUI；更新 docs/开发进度.md"
+      ],
+      "reference": "EasyEdit UI 风格（smart_txt_reader：app.dart 主题 + ui_style.dart 设计令牌 + home_screen 卡片列表 + settings_screen SwitchListTile）；用户确认配色（亮 #F2F2F7 / 暗 #0D1B2A 基调）",
+      "passes": false,
+      "evaluated": false,
+      "status": "done"
+    },
+    {
+      "id": "task-26",
+      "title": "UI 调整：多列错落布局 + 页面重组（设置收纳/主题切换）+ 照搬 EE 细节",
+      "description": "用户对 task-25 UI 的调整要求：① 列表多列模式（手机默认双列、桌面默认单列、桌面可切 4 列错落瀑布流）；② 编辑页保持简约（无卡片框）；③ 右上角按钮重组：排列模式切换 + 设置 + 主题切换，同步/回收站移入设置；④ 新建按钮照搬 EE 毛玻璃 FAB；⑤ 能照搬 EE 的 UI 就照搬",
+      "steps": [
+        "多列布局（notes_list.dart + home_page.dart）：实现单列横排 / 双列 / 四列错落瀑布流三种模式；平台默认：手机双列、桌面单列；切换按钮（AppBar 图标，EE 式 view_list/grid_view）持久化（SharedPreferences 或现有设置存储）；双列/四列用奇偶拆列瀑布流（参考 EE _buildGrid：SingleChildScrollView + Row + Expanded，列间错落）；卡片内容仍是 EN 的 NoteListItem（标题/摘要/时间 + 点击进编辑 + 删除），网格下卡片自适应窄列布局（摘要行数减少）",
+        "页面重组（home_page.dart）：AppBar 右上角只保留：排列模式切换 + 设置；同步、回收站入口从 AppBar 移入设置；主题切换按钮加入（EE 式，亮/暗/跟随系统三档，themeModeNotifier 已有，需持久化）",
+        "设置页（新建或扩展）：参照 EE settings_screen 风格（分组 SwitchListTile/ListTile 列表）：外观组（主题三档切换）+ 设备组（同步入口/设备设置/回收站入口）+ 高级（如适用）；同步入口 push 到 sync_page，回收站入口 push 到 trash_page",
+        "新建按钮：照搬 EE _buildFrostedFab（右下角毛玻璃圆形 FAB：BackdropFilter blur 15 + add 图标，玻璃/新拟物自适应），点击新建笔记",
+        "编辑页：确认保持简约（当前已去掉卡片框），如需微调只调间距/排版，不加装饰",
+        "flutter analyze 0 issues；flutter build macos 构建验证；不运行 flutter test、不截图、不运行 GUI；更新 docs/开发进度.md"
+      ],
+      "reference": "EasyEdit home_screen.dart（_buildFrostedFab/双列瀑布流 _buildGrid）与 settings_screen.dart（主题三档切换）；用户逐项确认的调整要求",
+      "passes": false,
+      "evaluated": false,
+      "status": "done"
+    },
+    {
+      "id": "task-27",
+      "title": "连接策略重设计：智能扫描/直连优先 + 请求-同意配对 + HMAC 认证 + 双边解除",
+      "description": "用户确认的方案（v4）：① 扫描策略——常态不扫描、未配对仅手动扫描、已配对断线退避扫描（5s→10s→…→60s 封顶）、广播保留；② 连接——打开 App 直连缓存地址（3 次）失败再扫描；③ 配对去密码改请求-同意；④ 取消配对双边解除；⑤ HMAC 挑战认证防伪装；⑥ 不保活（亮屏回前台自动恢复）",
+      "steps": [
+        "发现策略（SyncService/DiscoveryService）：常态不主动扫描（已连接靠连接通信）；未配对设备不自动扫描——同步页新增「重新扫描」按钮，手动触发一次扫描（3s 收集窗口，列表定格不再自动更新）；已配对设备断线退避扫描：断开后 5s 扫一次 → 10s → 15s → … 每轮 +5s 直到 60s 封顶持续低频；广播（30s 周期通告 + goodbye）保留不变",
+        "连接策略：已配对设备记住 IP+端口（地址缓存），打开软件/开启同步时直接尝试连接 3 次，失败等 5s 再试 3 次，仍失败进入退避扫描（扫描发现新地址后直连）；连接成功后正常心跳/重连机制不变",
+        "配对去密码改请求-同意：删除配对密码设置/输入/验证全部逻辑；pairing_request{deviceId,name} → 对端全局弹窗「xx 请求连接」→ 同意（pairing_accept）或拒绝（pairing_fail）；同步页移除密码输入弹窗，设备设置移除连接密码项",
+        "HMAC 挑战认证：配对成功时双方交换随机 32 字节密钥（A 生成 K_B 发 B 用于验证 A，B 生成 K_A 发 A 用于验证 B）；trusted_devices 表加 secret 字段（schemaVersion 4→5 迁移）；每次连接握手 hello 后发 challenge{nonce} → 对端返回 HMAC-SHA256(secret, nonce)（dart crypto 包）→ 验证匹配才 welcome{trusted:true}；不匹配/无密钥视为未配对",
+        "取消配对双边解除：任一方取消 → 发 unpair{deviceId} → 对端移除信任+断开，本机同步移除，双边不残留",
+        "协议版本：通告与 hello 携带协议版本（v2），版本不兼容提示升级不互连",
+        "verify_sync.dart 更新断言：手动扫描、退避扫描节奏（可注入短间隔）、直连优先、配对请求-同意流程、HMAC 挑战（正确密钥通过/伪造密钥拒绝）、unpair 双边解除、基线场景无回归",
+        "flutter analyze 0 issues；flutter build macos 构建验证；不运行 flutter test、不截图、不运行 GUI；更新 docs/开发进度.md 与 README（升级说明：配对协议变更需全员升级）"
+      ],
+      "reference": "docs/技术架构.md 7.1/7.2/7.3（v4 修订）；需求文档 F14/F18；用户确认方案（智能扫描/HMAC/请求同意/双边解除）",
+      "passes": false,
+      "evaluated": false,
+      "status": "done"
+    },
+    {
+      "id": "task-28",
+      "title": "轻量功能：置顶 + 标签 + 离线状态 + 字数统计",
+      "description": "用户确认的一期功能：① 笔记置顶（列表置顶优先排序，跨设备同步）；② 标签（笔记打标签 + 列表顶部标签筛选，跨设备同步）；③ 离线状态提示（列表页顶部）；④ 编辑页字数统计",
+      "steps": [
+        "置顶：Notes 表加 isPinned 字段（BOOL 默认 false，schemaVersion 5→6 迁移）；Note 模型/JSON 同步携带；置顶/取消置顶操作（version+1 随同步）；列表排序：isPinned 优先 → updatedAt 倒序；UI 长按菜单加「置顶/取消置顶」（置顶图标小标）",
+        "标签：Notes 表加 tags 字段（TEXT，JSON 数组存标签名，schemaVersion 6→7 迁移）；Note 模型/JSON 同步携带；编辑页标签编辑（chip 输入，简单实现）；列表页顶部标签栏（全部 + 各标签，点击筛选，与搜索共存）",
+        "离线状态：列表页顶部状态条——未开启同步/未连接时显示「离线中，改动将稍后同步」（灰点），已连接显示「已连接」（绿点），监听 syncService 状态流",
+        "字数统计：编辑页底部显示字数（实时监听输入，标题+正文合计或正文字数，中英文计数）",
+        "同步注意：isPinned/tags 随笔记 upsert 同步（LWW 框架不变）；标签列表从笔记流聚合（不用单独表）",
+        "verify_sync.dart 补充断言：置顶同步（A 置顶 → B 收到 isPinned）、标签同步（A 打标签 → B 收到）；基线 135 PASS 不得回归",
+        "flutter analyze 0 issues；flutter build macos 构建验证；不运行 flutter test、不截图、不运行 GUI；更新 docs/开发进度.md 与 docs/技术架构.md（数据模型）"
+      ],
+      "reference": "用户确认的功能清单（置顶/标签/离线状态/字数统计）；docs/技术架构.md 3.1 数据模型",
+      "passes": false,
+      "evaluated": false,
+      "status": "done"
+    },
+    {
+      "id": "task-29",
+      "title": "富文本替换：flutter_quill 集成 + delta 数据模型 + 存量转换 + 本地插图",
+      "description": "用户确认的富文本路线：编辑页换 flutter_quill（所见即所得），内容字段改 delta JSON，存量纯文本自动转换，同步协议 v3（content 格式），本地插图（压缩+附件目录+嵌入显示）",
+      "steps": [
+        "集成 flutter_quill（最新 v11.x，跟着官方迁移指南）：编辑页替换 TextField/re_editor 相关为 QuillEditor + 工具栏（加粗/斜体/列表/标题/图片等基础按钮）",
+        "数据模型：notes.content TEXT → 存 delta JSON（列类型不变，存 JSON 字符串，schemaVersion 7→8 迁移）；存量纯文本 → delta（{insert: text}）自动转换（迁移时或首次读取时）",
+        "同步协议 v3：Note.content 格式变化（纯文本 → delta JSON 字符串），协议版本 v2→v3；LWW 合并框架不变（version + 时间戳整篇覆盖）；存量同步兼容处理（升级后全量重新对齐）",
+        "本地插图：插入图片 → 压缩（移动端原图压缩到合理尺寸）→ 存附件目录（app 支持目录 attachments/<hash>.<ext>，path_provider）→ delta embed 节点引用（asset 协议）；预览/编辑直接渲染本地文件",
+        "编辑模式实时同步适配：远端 delta 覆盖本地输入（LWW 强覆盖语义保持）",
+        "flutter analyze 0 issues；flutter build macos 构建验证；不运行 flutter test、不截图、不运行 GUI；更新 docs/技术架构.md（数据模型/协议 v3）与 docs/开发进度.md、README（升级说明）"
+      ],
+      "reference": "用户确认的富文本路线（flutter_quill v11）；docs/技术架构.md 3.1/7.2",
+      "passes": false,
+      "evaluated": false,
+      "status": "done"
+    },
+    {
+      "id": "task-30",
+      "title": "图片跨设备同步：文件传输协议（请求/分片/hash 校验）",
+      "description": "二期功能：笔记内图片（attachments/<hash>.jpg）跨设备同步——接收方发现缺失图片文件 → 向对端请求 → 分片传输 → hash 校验落盘 → UI 刷新；协议 v3→v4",
+      "steps": [
+        "协议扩展（v3→v4）：新增 file_request{fileId（hash）, expectedSize} / file_chunk{fileId, chunkIndex, totalChunks, data（base64）} / file_complete{fileId}；chunk 大小 64KB；协议版本 kProtocolVersion/kAnnounceVersion 3→4，hello 携带 v4",
+        "AttachmentsStore 扩展：exists(hash)、createEmpty/appendChunk（分片写入临时文件）、finalizeChunked（校验 sha256 后重命名为最终文件）；已有 resolveFile 防穿越保留",
+        "缺失检测：mergeRemoteNote 后解析 delta content 中的图片引用（attachments/<hash>.<ext> 模式，含 quill image embed 值）→ 本地附件不存在且未在请求队列 → 入队 file_request（同 hash 去重）",
+        "发送侧：收到 file_request → 读本地文件 → 分片发送（64KB，base64）→ file_complete；文件不存在回失败（简单 file_request 带 expectedSize，接收方超时放弃）",
+        "接收侧：收到 file_chunk 写入临时文件（按 fileId+会话）→ file_complete 后校验 sha256 == fileId → 重命名落盘 → 通知 UI（图片 embed 重新加载）；校验失败丢弃可重新请求",
+        "UI 刷新：_LocalImageEmbedBuilder 监听附件就绪通知（ValueNotifier/流），文件到达后重建 Image.file；占位提示保留（对端无此图时）",
+        "安全与边界：单文件大小上限（如 20MB，超限拒绝）；会话断开未完成传输丢弃，重连后重新请求；路径穿越防护复用现有 resolveFile",
+        "verify_sync.dart 新增场景：A 插入图片引用 → B 收到笔记发现缺图 → 自动请求 → A 分片传输 → B 文件存在且 sha256 一致 → 多分片（>64KB 图片）→ 校验失败重传；基线 166 PASS 不得回归",
+        "flutter analyze 0 issues；flutter build macos 构建验证；不运行 flutter test、不截图、不运行 GUI；更新 docs/技术架构.md（7.2 协议 v4、3.4 图片同步）、docs/开发进度.md、README（升级说明 v4）"
+      ],
+      "reference": "docs/技术架构.md 3.4（本地插图）+ 7.2；用户确认二期图片同步；task-29 遗留问题（图片二进制不跨设备同步）",
+      "passes": false,
+      "evaluated": false,
+      "status": "done"
+    }
+  ]
+}

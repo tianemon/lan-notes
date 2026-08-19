@@ -1,0 +1,24 @@
+node_modules/
+.env
+.env.local
+temp/
+.playwright-mcp/
+.vite/
+.DS_Store
+
+# Flutter / Dart
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+build/
+*.iml
+.idea/
+.metadata
+.flutter-miscellaneous
+
+# EasyMint 内部（非项目文件）
+.easymint/
+
+# macOS
+.DS_Store

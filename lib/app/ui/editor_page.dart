@@ -7,6 +7,7 @@ import 'package:gal/gal.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart' show kSecondaryMouseButton;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_quill/flutter_quill.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -249,8 +250,18 @@ class _EditorPageState extends ConsumerState<EditorPage> {
         final bytes = await file.readAsBytes();
         await Gal.putImageBytes(bytes, name: fileName);
         messenger.showSnackBar(const SnackBar(content: Text('已保存到相册')));
+      } else if (Platform.isMacOS) {
+        // macOS：自研原生保存面板（NSOpenPanel 中文按钮"保存"，替代
+        // file_picker 的英文 "Open" 面板——App 无中文本地化导致回退英文，
+        // 且"打开"语义不符）。
+        const channel = MethodChannel('easynote/save_directory');
+        final dir = await channel.invokeMethod<String>('pick');
+        if (dir == null || dir.isEmpty) return; // 用户取消
+        final target = File('$dir/$fileName');
+        await file.copy(target.path);
+        messenger.showSnackBar(SnackBar(content: Text('已保存到 $dir')));
       } else {
-        // 桌面端：选择目录并复制。
+        // Windows 等桌面端：file_picker 选择目录并复制。
         final dir = await FilePicker.platform.getDirectoryPath(
           dialogTitle: '选择保存位置',
         );
@@ -699,9 +710,18 @@ class _EditorPageState extends ConsumerState<EditorPage> {
               ),
           ],
         ),
-        // 富文本工具栏固定在屏幕底部（键盘弹出时自动置顶于键盘上方），
-        // 参考移动端富文本编辑器布局（输入区在上、工具条贴底）。
-        bottomNavigationBar: _buildToolbar(),
+        // 底部栏（工具栏+字数）：包 AnimatedPadding 跟随键盘上移——
+        // 注：Scaffold 的 bottomNavigationBar 默认**不会**随键盘顶起
+        // （Flutter 已知行为，body 才避让键盘），否则键盘弹出时被盖。
+        // 这里手动加 viewInsets.bottom 内边距，让工具栏/字数显示在键盘上方。
+        bottomNavigationBar: AnimatedPadding(
+          duration: const Duration(milliseconds: 200),
+          curve: Curves.easeOut,
+          padding: EdgeInsets.only(
+            bottom: MediaQuery.of(context).viewInsets.bottom,
+          ),
+          child: _buildToolbar(),
+        ),
       ),
     );
   }
@@ -781,8 +801,6 @@ class _EditorPageState extends ConsumerState<EditorPage> {
             ),
           ),
         ),
-        // 字数统计（task-28）：标题+正文合计，实时刷新。
-        _WordCountBar(count: _wordCount),
       ],
     );
 
@@ -816,9 +834,14 @@ class _EditorPageState extends ConsumerState<EditorPage> {
             children: [
               IconButton(
                 tooltip: '展开格式工具栏',
-                icon: const Icon(Icons.format_paint_outlined),
+                icon: _LucideHammerIcon(
+                  size: 21,
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
                 onPressed: () => setState(() => _toolbarCollapsed = false),
               ),
+              const Spacer(),
+              _WordCountBar(count: _wordCount),
             ],
           ),
         ),
@@ -838,11 +861,22 @@ class _EditorPageState extends ConsumerState<EditorPage> {
         ),
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-          child: QuillSimpleToolbar(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+            QuillSimpleToolbar(
             controller: _contentController,
             config: QuillSimpleToolbarConfig(
               multiRowsDisplay: true,
               showDividers: false,
+              // 紧凑：缩小图标与按钮触控区（iconSize 14 × factor 1.2 ≈ 17px，
+              // 默认 15×1.6=24px），按钮排列更密集、占用面积更小。
+              buttonOptions: const QuillSimpleToolbarButtonOptions(
+                base: QuillToolbarBaseButtonOptions(
+                  iconSize: 14,
+                  iconButtonFactor: 1.2,
+                ),
+              ),
               showFontFamily: false,
               showFontSize: false,
               showBoldButton: true,
@@ -876,16 +910,26 @@ class _EditorPageState extends ConsumerState<EditorPage> {
               tooltip: '插入图片',
               onPressed: _insertImage,
             ),
-            // 收起工具栏（返回单按钮态，不遮挡输入/不碍眼）。
-            QuillToolbarCustomButtonOptions(
-              icon: const Icon(Icons.keyboard_arrow_down, size: 20),
-              tooltip: '收起工具栏',
-              onPressed: () => setState(() => _toolbarCollapsed = true),
-            ),
           ],
         ),
         ),
+        Row(
+          children: [
+            // 收起按钮与字数同行（不独占工具栏格位）。
+            IconButton(
+              tooltip: '收起工具栏',
+              visualDensity: VisualDensity.compact,
+              iconSize: 18,
+              icon: const Icon(Icons.keyboard_arrow_down),
+              onPressed: () => setState(() => _toolbarCollapsed = true),
+            ),
+            const Spacer(),
+            _WordCountBar(count: _wordCount),
+          ],
         ),
+      ],
+      ),
+      ),
       ),
     );
   }
@@ -1252,4 +1296,104 @@ class _SaveStatusIndicator extends StatelessWidget {
       child: Center(child: content),
     );
   }
+}
+
+
+/// 手绘 Lucide 标准「锤子」图标（lucide hammer，viewBox 24x24，stroke）。
+///
+/// 项目图标优先用 SVG/手绘（CLAUDE.md 规则）：不引入图标库，直接按
+/// lucide 官方 hammer 的 path 用 CustomPainter 绘制（stroke 风格：
+/// round cap/join、线宽 2/24 相对缩放，任意尺寸清晰）。
+class _LucideHammerIcon extends StatelessWidget {
+  const _LucideHammerIcon({this.size = 24, this.color});
+
+  final double size;
+  final Color? color;
+
+  @override
+  Widget build(BuildContext context) {
+    return CustomPaint(
+      size: Size.square(size),
+      painter: _LucideHammerPainter(
+        color ?? Theme.of(context).colorScheme.onSurfaceVariant,
+      ),
+    );
+  }
+}
+
+class _LucideHammerPainter extends CustomPainter {
+  _LucideHammerPainter(this.color);
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.0
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+    // 24x24 坐标系，缩放到目标尺寸。
+    canvas.save();
+    canvas.scale(size.width / 24.0, size.height / 24.0);
+    canvas.drawPath(_buildPath(), paint);
+    canvas.restore();
+  }
+
+  /// 还原 lucide hammer.svg 的三段 path（M/m、L/l、H/h、V/v、A/a）。
+  Path _buildPath() {
+    final p = Path();
+    // path1：锤头右上部
+    p.moveTo(15, 12);
+    p.relativeLineTo(-9.373, 9.373);
+    p.relativeArcToPoint(
+      const Offset(-3.001, -3),
+      radius: const Radius.circular(1),
+      clockwise: true,
+    );
+    p.lineTo(12, 9);
+    // path2：手持短把
+    p.moveTo(18, 15);
+    p.relativeLineTo(4, -4);
+    // path3：锤柄主体
+    p.moveTo(21.5, 11.5);
+    p.relativeLineTo(-1.914, -1.914);
+    p.arcToPoint(
+      const Offset(19, 8.172),
+      radius: const Radius.circular(2),
+      clockwise: true,
+    );
+    p.relativeLineTo(0, -0.344);
+    p.relativeArcToPoint(
+      const Offset(-0.586, -1.414),
+      radius: const Radius.circular(2),
+      clockwise: false,
+    );
+    p.relativeLineTo(-1.657, -1.657);
+    p.arcToPoint(
+      const Offset(12.516, 3),
+      radius: const Radius.circular(6),
+      clockwise: false,
+    );
+    p.lineTo(9, 3); // H9
+    p.relativeLineTo(1.243, 1.243);
+    p.arcToPoint(
+      const Offset(12, 8.485),
+      radius: const Radius.circular(6),
+      clockwise: true,
+    );
+    p.lineTo(12, 10); // V10
+    p.relativeLineTo(2, 2);
+    p.relativeLineTo(1.172, 0); // h1.172
+    p.relativeArcToPoint(
+      const Offset(1.414, 0.586),
+      radius: const Radius.circular(2),
+      clockwise: true,
+    );
+    p.lineTo(18.5, 14.5);
+    return p;
+  }
+
+  @override
+  bool shouldRepaint(covariant _LucideHammerPainter old) => old.color != color;
 }

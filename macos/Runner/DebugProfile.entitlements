@@ -10,8 +10,8 @@
 	<true/>
 	<key>com.apple.security.network.client</key>
 	<true/>
-	<!-- 富文本插图（task-29）：file_picker 选取本地图片需用户选中文件读取权限 -->
-	<key>com.apple.security.files.user-selected.read-only</key>
+	<!-- 富文本插图（task-29）：file_picker 选取/保存文件需用户选中文件读写权限（保存图片到所选目录） -->
+	<key>com.apple.security.files.user-selected.read-write</key>
 	<true/>
 </dict>
 </plist>

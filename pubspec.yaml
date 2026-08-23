@@ -68,7 +68,6 @@ dependencies:
   intl: ^0.20.2
   # 附件路径拼接（task-29）。
   path: ^1.9.1
-
 dev_dependencies:
   flutter_test:
     sdk: flutter

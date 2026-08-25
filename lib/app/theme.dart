@@ -19,7 +19,11 @@ const double kAppRadius = 16;
 
 /// 亮色（灰白）：背景 #F2F2F7、强调色 #4F6EF7。
 const Color kLightBackground = Color(0xFFF2F2F7);
+/// 亮色主题强调色（默认蓝；task-32 曾临时改黑，已恢复）。
 const Color kLightAccent = Color(0xFF4F6EF7);
+
+/// 亮色主题按钮图标/文字色（task-32：与强调色一致，蓝色）。
+const Color kLightButtonForeground = Color(0xFF4F6EF7);
 const Color kLightTextPrimary = Color(0xFF1C1C1E);
 const Color kLightTextSecondary = Color(0xFF6E6E73);
 
@@ -181,6 +185,16 @@ ThemeData buildLightTheme() {
       backgroundColor: kLightTextPrimary,
       contentTextStyle: const TextStyle(color: Colors.white, fontSize: 14),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+    ),
+    outlinedButtonTheme: OutlinedButtonThemeData(
+      style: OutlinedButton.styleFrom(
+        foregroundColor: kLightButtonForeground,
+      ),
+    ),
+    textButtonTheme: TextButtonThemeData(
+      style: TextButton.styleFrom(
+        foregroundColor: kLightButtonForeground,
+      ),
     ),
     inputDecorationTheme: InputDecorationTheme(
       filled: false,

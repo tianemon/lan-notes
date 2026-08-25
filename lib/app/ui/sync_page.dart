@@ -92,6 +92,10 @@ class _SyncPageState extends ConsumerState<SyncPage> {
   /// 扫描次数（task-32）：每次点击扫描 +1，用于重置转圈动画（KeyedSubtree）。
   int _scanSeq = 0;
 
+  /// 扫描 UI 状态定时器（task-32）：30s 后复位转圈；重复点击重置。
+  /// 不依赖 scanOnce 的 future——restart 时旧 future 提前完成会误清状态。
+  Timer? _scanUiTimer;
+
   /// 设备 ID 冲突提示（非空时置顶展示横幅，可手动关闭）。
   String? _conflictMessage;
 
@@ -138,6 +142,7 @@ class _SyncPageState extends ConsumerState<SyncPage> {
   void dispose() {
     _syncTimeout?.cancel();
     _announceTimer?.cancel();
+    _scanUiTimer?.cancel();
     _nameSaveTimer?.cancel();
     _portController.dispose();
     _nameController.dispose();
@@ -264,9 +269,15 @@ class _SyncPageState extends ConsumerState<SyncPage> {
 
   void _showSnack(String message) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(content: Text(message)));
+    // 防御：页面卸载瞬间 ScaffoldMessenger.of(context) 可能抛
+    // 「Looking up a deactivated widget's ancestor」（task-32 排查）。
+    try {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(content: Text(message)));
+    } catch (_) {
+      // 页面正在销毁：跳过提示，不崩溃。
+    }
   }
 
   // ---------- 状态文案 ----------
@@ -294,14 +305,17 @@ class _SyncPageState extends ConsumerState<SyncPage> {
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
             child: Row(
               children: [
-                Text(
-                  '设备名',
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.w600,
-                        color: Theme.of(context).colorScheme.onSurfaceVariant,
-                      ),
+                // 标签定宽（与端口行左对齐，输入框同一垂直线上）。
+                SizedBox(
+                  width: 56,
+                  child: Text(
+                    '设备名',
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.w600,
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        ),
+                  ),
                 ),
-                const SizedBox(width: 12),
                 Expanded(
                   child: TextField(
                     controller: _nameController,
@@ -410,20 +424,22 @@ class _SyncPageState extends ConsumerState<SyncPage> {
               ),
             ],
           ),
-          const SizedBox(height: 10),
-          // 端口行：修改端口后点「重启」重新开启同步服务。
-          Row(
-            children: [
-              Text(
-                '端口',
-                style: theme.textTheme.titleMedium?.copyWith(
-                  fontWeight: FontWeight.w600,
-                  color: colorScheme.onSurfaceVariant,
+          // 端口行（仅同步开启时显示）：修改端口后点「重启」重新开启服务。
+          if (_syncEnabled) ...[
+            const SizedBox(height: 10),
+            Row(
+              children: [
+              SizedBox(
+                width: 56,
+                child: Text(
+                  '端口',
+                  style: theme.textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w600,
+                    color: colorScheme.onSurfaceVariant,
+                  ),
                 ),
               ),
-              const SizedBox(width: 8),
-              SizedBox(
-                width: 110,
+              Expanded(
                 child: TextField(
                   controller: _portController,
                   keyboardType: TextInputType.number,
@@ -450,6 +466,7 @@ class _SyncPageState extends ConsumerState<SyncPage> {
               ),
             ],
           ),
+          ],
         ],
       ),
     );
@@ -618,6 +635,25 @@ class _SyncPageState extends ConsumerState<SyncPage> {
                 Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
+                    // 转圈在按钮左侧：占位恒宽（含间距），显示/隐藏不移动
+                    // 按钮；转圈固定 14×14 + Center 居中（不被压扁）。
+                    SizedBox(
+                      width: 24,
+                      height: 20,
+                      child: _scanning
+                          ? KeyedSubtree(
+                              key: ValueKey(_scanSeq),
+                              child: const Center(
+                                child: SizedBox(
+                                  width: 14,
+                                  height: 14,
+                                  child:
+                                      CircularProgressIndicator(strokeWidth: 2),
+                                ),
+                              ),
+                            )
+                          : null,
+                    ),
                     OutlinedButton(
                       onPressed: _syncEnabled ? _rescan : null,
                       style: OutlinedButton.styleFrom(
@@ -626,16 +662,6 @@ class _SyncPageState extends ConsumerState<SyncPage> {
                       ),
                       child: const Text('扫描'),
                     ),
-                    const SizedBox(width: 6),
-                    if (_scanning)
-                      KeyedSubtree(
-                        key: ValueKey(_scanSeq),
-                        child: const SizedBox(
-                          width: 14,
-                          height: 14,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        ),
-                      ),
                   ],
                 ),
               ],
@@ -687,18 +713,21 @@ class _SyncPageState extends ConsumerState<SyncPage> {
   /// （常态不自动扫描，互联手动化。）
   /// 「扫描」（task-31/32）：触发 30s 扫描窗口，期间列表实时更新；
   /// 可重复点击——扫描中再点 = 结束当前窗口重新扫描（重置 30s）。
+  ///
+  /// UI 状态用独立 Timer 管理（不 await scanOnce 的 future：restart 时
+  /// 旧 future 提前完成，其 finally 会把 _scanning 误清、转圈消失）。
   Future<void> _rescan() async {
+    _scanUiTimer?.cancel();
     setState(() {
       _scanning = true;
-      _scanSeq++; // 重置转圈动画
+      _scanSeq++; // 重置转圈动画（KeyedSubtree key 变化强制重建）
     });
-    try {
-      await _service.scanOnce(window: const Duration(seconds: 30), restart: true);
-    } catch (_) {
-      if (mounted) _showSnack('扫描失败，请重试');
-    } finally {
+    unawaited(
+      _service.scanOnce(window: const Duration(seconds: 30), restart: true),
+    );
+    _scanUiTimer = Timer(const Duration(seconds: 30), () {
       if (mounted) setState(() => _scanning = false);
-    }
+    });
   }
 
   /// 「可被发现」（task-31）：向外广播 30s（每 5s 一次），UI 同步倒计时。

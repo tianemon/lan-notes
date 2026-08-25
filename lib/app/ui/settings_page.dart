@@ -82,13 +82,6 @@ class SettingsPage extends ConsumerWidget {
               trailing: const Icon(Icons.chevron_right),
               onTap: () => context.push('/trash'),
             ),
-            ListTile(
-              leading: const Icon(Icons.devices_other),
-              title: const Text('设备设置'),
-              subtitle: const Text('设备名、自动同步与设备 ID'),
-              trailing: const Icon(Icons.chevron_right),
-              onTap: () => context.push('/sync'),
-            ),
             const SizedBox(height: 16),
           ],
         ),

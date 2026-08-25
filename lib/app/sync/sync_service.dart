@@ -711,22 +711,21 @@ class SyncService {
     final sessionId = _sessionByPeerId[peerId];
     final session = sessionId == null ? null : _sessions[sessionId];
     if (session != null && session.ready) return true; // 已连接：完成
-    final connected = await _connectFromCacheOnce(peerId, manual: manual);
-    if (connected) {
-      // TCP 已连上：等握手就绪（ready）——对端拒绝（自动连接被拒）时
-      // 会话会被关闭，ready 永不成立，返回失败（task-32：修复「提示
-      // 连接成功但实际没连」）。
-      final deadline = DateTime.now().add(const Duration(seconds: 5));
-      while (DateTime.now().isBefore(deadline)) {
-        final sid = _sessionByPeerId[peerId];
-        final s = sid == null ? null : _sessions[sid];
-        if (s == null) return false; // 会话被关闭（对端拒绝/异常）
-        if (s.ready) return true;
-        await Future<void>.delayed(const Duration(milliseconds: 200));
+    // task-32：短间隔重试（最多 3 次，间隔 3s）——上线瞬间对端可能
+    // 瞬时不可达（服务端启动中/竞态），一次失败就放弃会导致双方死锁
+    // （在线方不主动重连）。仍失败才冷却，防离线设备反复尝试。
+    for (var attempt = 0; attempt < 3; attempt++) {
+      if (attempt > 0) {
+        await Future<void>.delayed(_directRetryDelay);
+        if (!isEnabled) return false;
       }
-      return false; // 握手超时未就绪
+      final connected = await _connectFromCacheOnce(peerId, manual: manual);
+      if (connected) {
+        final ok = await _waitReady(peerId);
+        if (ok) return true;
+      }
     }
-    // 直连失败：清理未就绪的出站会话——client 连接挂起时状态停在
+    // 全部失败：清理未就绪的出站会话——client 连接挂起时状态停在
     // connecting，不清理会让 UI 一直显示「连接中」转圈（task-32）。
     final cleanupId = _sessionByPeerId[peerId];
     final cleanup = cleanupId == null ? null : _sessions[cleanupId];
@@ -736,6 +735,19 @@ class SyncService {
     // 记录失败时间（冷却期内不再自动重试，防回前台频繁刷新）。
     _directFailAt[peerId] = DateTime.now();
     return false;
+  }
+
+  /// 等会话握手就绪（ready）：TCP 已连上后握手可能被拒/卡住，超时失败。
+  Future<bool> _waitReady(String peerId) async {
+    final deadline = DateTime.now().add(const Duration(seconds: 5));
+    while (DateTime.now().isBefore(deadline)) {
+      final sid = _sessionByPeerId[peerId];
+      final s = sid == null ? null : _sessions[sid];
+      if (s == null) return false; // 会话被关闭（对端拒绝/异常）
+      if (s.ready) return true;
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+    }
+    return false; // 握手超时未就绪
   }
 
   /// 凭缓存地址发起一次出站连接尝试（无会话则创建；已有出站会话则重新
@@ -787,6 +799,9 @@ class SyncService {
 
   /// 直连失败冷却期：冷却期内 [_runDirectConnectPhase] 跳过该设备。
   static const Duration _directRetryCooldown = Duration(seconds: 60);
+
+  /// 直连重试间隔（task-32：瞬时不可达场景短间隔重试）。
+  static const Duration _directRetryDelay = Duration(seconds: 3);
 
   /// 手动扫描后未连接的对端由 [_onDiscoveredDevices] 自动连接（扫描结果
   /// 流驱动）；无其他动作。
@@ -1491,7 +1506,11 @@ class SyncService {
 
   /// 向所有已就绪对端推送（本地变更 → note_upsert / note_delete）。
   void _pushToAllPeers(Map<String, dynamic> message) {
+    // ignore: avoid_print
+    print('[增量推送] type=${message['type']} origin=${message['origin']} 本机会话数=${_sessions.length}');
     for (final session in _sessions.values) {
+      // ignore: avoid_print
+      print('[增量推送]   对端=${session.peerDeviceId} ready=${session.ready} 可推=${_canPushTo(session)}');
       if (session.ready && _canPushTo(session)) {
         session.sendMessage(message);
       }
@@ -2747,6 +2766,8 @@ class _PeerSession {
     final authorId = (note.origin != null && note.origin!.isNotEmpty)
         ? note.origin!
         : (origin.isNotEmpty ? origin : peerDeviceId);
+    // ignore: avoid_print
+    print('[增量接收] note=${note.id} origin=$authorId 来源会话=$peerDeviceId 从$authorId开关=${service._syncFromByPeerId[authorId] ?? true}');
     if (authorId != null &&
         (service._syncFromByPeerId[authorId] ?? true) == false) {
       return;

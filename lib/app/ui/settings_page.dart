@@ -4,7 +4,6 @@ import 'package:go_router/go_router.dart';
 
 import '../repository/providers.dart';
 import '../theme.dart';
-import 'sync_page.dart' show DeviceSettingsDialog;
 import 'widgets/section_label.dart';
 
 /// 设置页：分组列表（参照 EE settings_screen 风格，task-26）。
@@ -86,12 +85,9 @@ class SettingsPage extends ConsumerWidget {
             ListTile(
               leading: const Icon(Icons.devices_other),
               title: const Text('设备设置'),
-              subtitle: const Text('设备名、连接密码与设备 ID'),
+              subtitle: const Text('设备名、自动同步与设备 ID'),
               trailing: const Icon(Icons.chevron_right),
-              onTap: () => showDialog<void>(
-                context: context,
-                builder: (_) => const DeviceSettingsDialog(),
-              ),
+              onTap: () => context.push('/sync'),
             ),
             const SizedBox(height: 16),
           ],

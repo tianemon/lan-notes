@@ -38,6 +38,7 @@ sealed class SyncMessage {
         'pairing_accept' => PairingAcceptMessage.fromJson(json),
         'pairing_fail' => PairingFailMessage.fromJson(json),
         'unpair' => UnpairMessage.fromJson(json),
+        'disconnect' => const DisconnectMessage(),
         'challenge' => ChallengeMessage.fromJson(json),
         'challenge_response' => ChallengeResponseMessage.fromJson(json),
         'sync_request' => const SyncRequestMessage(),
@@ -646,6 +647,21 @@ class AutoConnectRejectedMessage extends SyncMessage {
 
   factory AutoConnectRejectedMessage.fromJson(Map<String, dynamic> json) =>
       AutoConnectRejectedMessage(deviceId: (json['deviceId'] as String?) ?? '');
+}
+
+/// 主动断开通知（task-32）：本机手动断开某设备（手动连接开关关闭/
+/// [SyncService.disconnectPeer]）时发送——对端收到后标记该设备为「手动
+/// 断开」，不再自动重连（避免「手机主动断开后，mac 切前台又自动连回」）。
+///
+/// 载荷为空；发送方为本机，接收方以会话登记的 peerDeviceId 识别发送方。
+class DisconnectMessage extends SyncMessage {
+  const DisconnectMessage();
+
+  @override
+  String get type => 'disconnect';
+
+  @override
+  Map<String, dynamic> toJson() => {'type': type};
 }
 
 /// 心跳探活 ping（离线检测，v4 恢复）：连接内周期发送，对端回 pong。

@@ -682,15 +682,16 @@ class SyncService {
   /// task-32：直连只尝试一次，失败立即清理未就绪的出站会话——不再
   /// 多轮重试（2 组×3 次×5s 超时≈55s，离线对端会一直显示「连接中」转圈）；
   /// 重连责任在重新上线方，离线方上线后会凭缓存直连本机，无需本机重试。
-  Future<void> _directConnectPeer(String peerId) async {
+  /// 返回是否连接成功（手动连接开关/UI 提示用）。
+  Future<bool> _directConnectPeer(String peerId) async {
     // 无缓存地址：无从直连，静默结束（等对方连本机或手动扫描）。
-    if (_addressCache[peerId] == null) return;
-    if (!isEnabled) return; // 同步已关闭：中止直连
+    if (_addressCache[peerId] == null) return false;
+    if (!isEnabled) return false; // 同步已关闭：中止直连
     final sessionId = _sessionByPeerId[peerId];
     final session = sessionId == null ? null : _sessions[sessionId];
-    if (session != null && session.ready) return; // 已连接：完成
+    if (session != null && session.ready) return true; // 已连接：完成
     final connected = await _connectFromCacheOnce(peerId);
-    if (connected) return;
+    if (connected) return true;
     // 直连失败：清理未就绪的出站会话——client 连接挂起时状态停在
     // connecting，不清理会让 UI 一直显示「连接中」转圈（task-32）。
     final cleanupId = _sessionByPeerId[peerId];
@@ -700,6 +701,7 @@ class SyncService {
     }
     // 记录失败时间（冷却期内不再自动重试，防回前台频繁刷新）。
     _directFailAt[peerId] = DateTime.now();
+    return false;
   }
 
   /// 凭缓存地址发起一次出站连接尝试（无会话则创建；已有出站会话则重新
@@ -805,11 +807,13 @@ class SyncService {
   ///
   /// 与 [connectToPeer]（发现列表点击，未配对可发起配对）不同：本方法
   /// 仅用于已配对设备的手动重连（设备行「手动连接」开关）。
-  Future<void> connectTrustedPeer(String peerId) async {
-    if (peerId.isEmpty || peerId == deviceId) return;
+  ///
+  /// 返回是否连接成功（task-32：UI 据此提示「正在连接/无法连接」）。
+  Future<bool> connectTrustedPeer(String peerId) async {
+    if (peerId.isEmpty || peerId == deviceId) return false;
     _manuallyDisconnected.remove(peerId);
-    if (!_trustedIds.contains(peerId)) return;
-    await _directConnectPeer(peerId);
+    if (!_trustedIds.contains(peerId)) return false;
+    return _directConnectPeer(peerId);
   }
 
   /// 断开指定对端的连接（幂等）。
@@ -818,6 +822,10 @@ class SyncService {
   /// 连接逻辑跳过已标记对端，当下不自动重连；重新开启同步（[enable]/
   /// [disable]）/重启 App 时标记清除（自动重连恢复）；手动连接
   /// （[connectToPeer]）时清除。
+  ///
+  /// task-32：断开前发送 [DisconnectMessage] 通知对端——对端收到后同样
+  /// 标记本机为「手动断开」，不再自动重连（避免「手机主动断开后，mac 切
+  /// 前台又凭缓存自动连回」的误判）。
   Future<void> disconnectPeer(String peerId) async {
     _manuallyDisconnected.add(peerId);
     final sessionId = _sessionByPeerId[peerId];
@@ -827,6 +835,10 @@ class SyncService {
     }
     final session = _sessions[sessionId];
     if (session != null) {
+      // 先通知对端「主动断开」再关闭连接（close 帧语义区分主动/意外）。
+      if (session.ready) {
+        session.sendMessage(const DisconnectMessage().toJson());
+      }
       await _closeSession(session);
     }
   }
@@ -2150,6 +2162,17 @@ class _PeerSession {
         // 对端关闭了对本机的自动连接：本机收到被拒通知 → 自动关闭对
         // 该对端的自动连接开关（持久化），避免反复尝试自动连被拒（Q4）。
         await service._onAutoConnectRejected(rejectingPeerId);
+        break;
+      case DisconnectMessage():
+        // 对端主动断开（手动断开/关同步）：标记该对端为「手动断开」——
+        // 本机不再自动重连它（切前台凭缓存直连也跳过），直到用户手动
+        // 恢复（手动连接开关 / connectTrustedPeer 清除标记）。
+        final fromPeer = peerDeviceId;
+        if (fromPeer != null && fromPeer.isNotEmpty) {
+          service._manuallyDisconnected.add(fromPeer);
+          service._emitPeers();
+        }
+        unawaited(service._closeSession(this));
         break;
       case PingMessage():
         // 收到 ping → 回 pong（对端心跳探活）。

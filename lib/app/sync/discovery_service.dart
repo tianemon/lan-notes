@@ -299,7 +299,11 @@ class DiscoveryService {
       socket.broadcastEnabled = true;
       _receiveSocket = socket;
       socket.listen(_onDatagram);
-    } catch (_) {
+      // ignore: avoid_print
+      print('[discovery] 扫描监听已绑定 UDP $kDiscoveryPort');
+    } catch (e) {
+      // ignore: avoid_print
+      print('[discovery] 扫描监听绑定失败: $e');
       _scanning = false;
       _finishScan();
     }
@@ -358,6 +362,8 @@ class DiscoveryService {
       'ts': DateTime.now().millisecondsSinceEpoch,
     }));
     final targets = await _broadcastTargets();
+    // ignore: avoid_print
+    print('[discovery] 广播发送 targets=${targets.map((t) => t.address).toList()}');
     for (final target in targets) {
       try {
         socket.send(payload, target, kDiscoveryPort);
@@ -463,6 +469,8 @@ class DiscoveryService {
     final socket = _receiveSocket;
     final datagram = socket?.receive();
     if (socket == null || datagram == null) return;
+    // ignore: avoid_print
+    print('[discovery] 收到 UDP 包 ${datagram.address.address}:${datagram.port} len=${datagram.data.length}');
     final announcement = _parseAnnouncement(datagram.data);
     if (announcement == null) return; // 坏包/非本协议：忽略
     _handleAnnouncement(announcement, datagram.address);
@@ -482,11 +490,9 @@ class DiscoveryService {
       port: announcement.port,
     );
     final existing = _devices[announcement.deviceId];
-    var changed = false;
     if (existing == null) {
       // 新设备：登记 + 立即回播自己的通告（LocalSend 式握手）。
       _devices[announcement.deviceId] = _DeviceEntry(device, now);
-      changed = true;
       _maybeReplyAnnouncement(announcement.deviceId, now);
     } else {
       existing.lastSeen = now; // 刷新最后可见时间（离线判定依据）
@@ -495,10 +501,12 @@ class DiscoveryService {
           existing.device.deviceName != announcement.name) {
         // 地址/端口/名称变化（IP 变更等）：更新条目并推送。
         existing.device = device;
-        changed = true;
       }
     }
-    if (changed && _scanning) {
+    if (_scanning) {
+      // 收到有效通告即推送列表——设备表跨扫描保留、UI 可能在 disable 时
+      // 被清空（sync_page _discoveredDevices = []）后重新扫描：此时条目
+      // 即使无变化（changed=false）也必须刷新 UI，否则「扫描不到」（task-32）。
       _pushMerged();
     }
   }

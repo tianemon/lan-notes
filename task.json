@@ -538,9 +538,9 @@
         "flutter analyze 0 issues；verify_sync.dart 基线不回归（退避扫描相关场景按新架构调整）；更新 docs/技术架构.md（同步页布局/互联手动化/退避扫描删除）、docs/开发进度.md、README"
       ],
       "reference": "用户确认（task-31）：同步开关容器合并、设备双开关垂直排列、发现区按钮化、enable 不广播、互联手动化、精致 Switch + hover 修复；docs/需求文档.md 需求变更记录",
-      "passes": false,
-      "evaluated": false,
-      "status": "building"
+      "passes": true,
+      "evaluated": true,
+      "status": "done"
     }
   ]
 }

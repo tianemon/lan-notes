@@ -10,7 +10,6 @@ import '../sync/sync_protocol.dart';
 import '../sync/sync_service.dart';
 import '../theme.dart';
 import 'widgets/glass_style.dart';
-import 'widgets/section_label.dart';
 
 /// 同步管理页：开启/关闭同步（P2P 总开关）、设备发现与对端连接管理、
 /// 状态显示、手动同步、设备设置（含重置设备 ID）。
@@ -72,6 +71,12 @@ class _SyncPageState extends ConsumerState<SyncPage> {
   /// 端口输入框控制器（task-32：改端口后重启同步服务）。
   late final TextEditingController _portController;
 
+  /// 设备名输入框控制器（task-32：顶部设备名直接编辑、输入自动保存）。
+  late final TextEditingController _nameController;
+
+  /// 设备名自动保存防抖定时器（500ms 无输入后落盘）。
+  Timer? _nameSaveTimer;
+
   /// 顶部同步总开关状态（与 [SyncService.isEnabled] 保持一致）。
   bool _syncEnabled = false;
 
@@ -98,6 +103,7 @@ class _SyncPageState extends ConsumerState<SyncPage> {
     _portController = TextEditingController(
       text: '${_service.port ?? kDefaultSyncPort}',
     );
+    _nameController = TextEditingController(text: _service.deviceName);
 
     _syncSub = _service.syncCompleted.listen((time) {
       _setSyncing(false);
@@ -129,7 +135,9 @@ class _SyncPageState extends ConsumerState<SyncPage> {
   void dispose() {
     _syncTimeout?.cancel();
     _announceTimer?.cancel();
+    _nameSaveTimer?.cancel();
     _portController.dispose();
+    _nameController.dispose();
     _syncSub?.cancel();
     _devicesSub?.cancel();
     _peersSub?.cancel();
@@ -193,11 +201,22 @@ class _SyncPageState extends ConsumerState<SyncPage> {
 
   /// 切换某设备的「手动连接」开关（task-31）：
   /// - 打开：手动连接该已配对设备（清除手动断开标记 + 凭缓存直连）；
+  ///   失败（不在线/无缓存地址）提示，不再误报「正在连接」；
   /// - 关闭：断开连接（会话级手动断开标记，当下不自动重连）。
   Future<void> _onManualConnectChanged(PeerDevice peer, bool value) async {
     if (value) {
-      await _service.connectTrustedPeer(peer.deviceId);
-      if (mounted) _showSnack('正在连接 ${peer.deviceName}…');
+      // 设备离线（已断开）：不主动连——架构设计是离线设备上线后自己
+      // 凭缓存直连本机（task-32），本机只等它连回来。
+      if (peer.status == PeerStatus.disconnected) {
+        if (mounted) _showSnack('${peer.deviceName} 离线，上线后会自动连接');
+        return;
+      }
+      final ok = await _service.connectTrustedPeer(peer.deviceId);
+      if (mounted) {
+        _showSnack(ok
+            ? '已连接 ${peer.deviceName}'
+            : '无法连接 ${peer.deviceName}（设备可能不在线，可先「扫描设备」）');
+      }
     } else {
       await _service.disconnectPeer(peer.deviceId);
       if (mounted) _showSnack('已断开 ${peer.deviceName}');
@@ -264,16 +283,6 @@ class _SyncPageState extends ConsumerState<SyncPage> {
       ..showSnackBar(SnackBar(content: Text(message)));
   }
 
-  /// 打开设备设置弹窗（设备名 + 本机连接密码 + 重置设备 ID）；关闭后
-  /// 刷新本页（设备名可能已修改）。
-  Future<void> _showSettingsDialog() async {
-    await showDialog<void>(
-      context: context,
-      builder: (_) => const DeviceSettingsDialog(),
-    );
-    if (mounted) setState(() {});
-  }
-
   // ---------- 状态文案 ----------
 
   /// 已配对设备行：设备名 + 手动连接开关（状态即连接状态）+ 自动连接开关。
@@ -285,13 +294,6 @@ class _SyncPageState extends ConsumerState<SyncPage> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('同步'),
-        actions: [
-          IconButton(
-            tooltip: '设备设置',
-            icon: const Icon(Icons.settings_outlined),
-            onPressed: _showSettingsDialog,
-          ),
-        ],
       ),
       body: ListView(
         padding: const EdgeInsets.all(16),
@@ -300,6 +302,40 @@ class _SyncPageState extends ConsumerState<SyncPage> {
             _buildConflictBanner(context),
             const SizedBox(height: 12),
           ],
+          // 本机设备名（task-32：卡片风格，左侧「设备名」标签 + 右侧输入框
+          // 直接编辑、输入自动保存——与端口行样式一致）。
+          GlassCard(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+            child: Row(
+              children: [
+                Text(
+                  '设备名',
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w600,
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: TextField(
+                    controller: _nameController,
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.w600,
+                        ),
+                    // 参考端口输入框：描边 + 内边距，不贴边。
+                    decoration: const InputDecoration(
+                      isDense: true,
+                      border: OutlineInputBorder(),
+                      contentPadding:
+                          EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                    ),
+                    onChanged: (_) => _scheduleSaveDeviceName(),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 12),
           _buildSwitchCard(context),
           if (_syncEnabled) ...[
             const SizedBox(height: 12),
@@ -394,17 +430,21 @@ class _SyncPageState extends ConsumerState<SyncPage> {
             children: [
               Text(
                 '端口',
-                style: theme.textTheme.bodySmall?.copyWith(
+                style: theme.textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w600,
                   color: colorScheme.onSurfaceVariant,
                 ),
               ),
               const SizedBox(width: 8),
               SizedBox(
-                width: 90,
+                width: 110,
                 child: TextField(
                   controller: _portController,
                   keyboardType: TextInputType.number,
                   enabled: !_busy,
+                  style: theme.textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w600,
+                  ),
                   decoration: const InputDecoration(
                     isDense: true,
                     border: OutlineInputBorder(),
@@ -423,6 +463,18 @@ class _SyncPageState extends ConsumerState<SyncPage> {
         ],
       ),
     );
+  }
+
+  /// 设备名修改防抖自动保存：500ms 无输入后写入持久化 + 刷新 UDP 广播
+  /// 发布（对端立即看到新名字）；空名不保存。
+  void _scheduleSaveDeviceName() {
+    _nameSaveTimer?.cancel();
+    _nameSaveTimer = Timer(const Duration(milliseconds: 500), () async {
+      final name = _nameController.text.trim();
+      if (name.isEmpty) return;
+      await ref.read(deviceIdentityProvider).setDeviceName(name);
+      await _service.refreshPublishedIdentity();
+    });
   }
 
   /// 改端口后重启同步服务：校验端口 → 关闭 → 以新端口开启 → 临时广播
@@ -700,185 +752,6 @@ class _SyncPageState extends ConsumerState<SyncPage> {
   }
 }
 
-/// 设备设置弹窗：设备名 + 启动时自动同步 + **重置设备 ID**（task-14）。
-///
-/// - 设备名：默认取系统主机名，修改后持久化；同步开启时刷新 UDP 广播发布
-///   （[SyncService.refreshPublishedIdentity]），已配对设备不受影响；
-/// - v4（task-27）：**已移除连接密码设置**——配对改为请求-同意 + HMAC
-///   认证（见 docs/技术架构.md 7.3 节），无密码可设；
-/// - **重置设备 ID**：重新生成 deviceId 并清空信任列表——旧配对关系
-///   全部失效，其他设备需重新请求配对（设备 ID 冲突修复入口）。
-class DeviceSettingsDialog extends ConsumerStatefulWidget {
-  const DeviceSettingsDialog({super.key});
-
-  @override
-  ConsumerState<DeviceSettingsDialog> createState() =>
-      _DeviceSettingsDialogState();
-}
-
-class _DeviceSettingsDialogState extends ConsumerState<DeviceSettingsDialog> {
-  late final TextEditingController _nameController;
-  late String _deviceId;
-  late bool _autoSync;
-  bool _nameError = false;
-  bool _saving = false;
-
-  @override
-  void initState() {
-    super.initState();
-    final identity = ref.read(deviceIdentityProvider);
-    _nameController = TextEditingController(text: identity.deviceName);
-    _deviceId = identity.deviceId;
-    _autoSync = identity.autoSync;
-  }
-
-  @override
-  void dispose() {
-    _nameController.dispose();
-    super.dispose();
-  }
-
-  Future<void> _save() async {
-    final name = _nameController.text.trim();
-    if (name.isEmpty) {
-      setState(() => _nameError = true);
-      return;
-    }
-    setState(() => _saving = true);
-    final identity = ref.read(deviceIdentityProvider);
-    await identity.setDeviceName(name);
-    // 同步开启时刷新 UDP 广播发布：设备名变更立即对局域网生效。
-    await ref.read(syncServiceProvider).refreshPublishedIdentity();
-    if (!mounted) return;
-    setState(() => _saving = false);
-    Navigator.of(context).pop();
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('设备设置已保存')),
-    );
-  }
-
-  /// 重置设备 ID：二次确认后重新生成 deviceId 并清空信任列表
-  /// （旧配对关系失效需重新配对），断开全部会话并以新身份重新发布 UDP 广播通告。
-  Future<void> _resetDeviceId() async {
-    final confirmed = await showGlassDialog<bool>(
-      context: context,
-      title: const Text('重置设备 ID？'),
-      content: const Text(
-        '将重新生成设备 ID 并清空全部配对关系（旧配对失效）。\n\n'
-        '其他设备将视本机为新设备，需重新请求配对。\n'
-        '此操作用于修复「设备 ID 冲突」（两台设备 deviceId 相同，'
-        '常见于从备份恢复数据）。确定继续？',
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(false),
-          child: const Text('取消'),
-        ),
-        FilledButton(
-          onPressed: () => Navigator.of(context).pop(true),
-          child: const Text('重置'),
-        ),
-      ],
-    );
-    if (confirmed != true || !mounted) return;
-    setState(() => _saving = true);
-    await ref.read(syncServiceProvider).resetDeviceIdentity();
-    final identity = ref.read(deviceIdentityProvider);
-    if (!mounted) return;
-    setState(() {
-      _saving = false;
-      _deviceId = identity.deviceId;
-    });
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('设备 ID 已重置，旧配对关系已失效，请重新配对')),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final colorScheme = theme.colorScheme;
-    return GlassDialog(
-      title: const Text('设备设置'),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // ---- 设备组 ----
-          const SectionLabel('设备'),
-          // 设备名：图标 + 标题 + 副标题（TextField 内嵌）
-          ListTile(
-            contentPadding: EdgeInsets.zero,
-            leading: const Icon(Icons.badge_outlined),
-            title: const Text('设备名'),
-            subtitle: TextField(
-              controller: _nameController,
-              decoration: InputDecoration(
-                hintText: '设备名',
-                errorText: _nameError ? '设备名不能为空' : null,
-                helperText: '其他设备发现/连接时显示的名称',
-                contentPadding: const EdgeInsets.symmetric(vertical: 8),
-              ),
-            ),
-          ),
-          const Divider(height: 20),
-          // ---- 同步组 ----
-          const SectionLabel('同步'),
-          // 启动时自动同步（task-17）：独立于顶部同步总开关，修改后立即
-          // 持久化；下次启动/回前台恢复时按新配置生效（重启后生效语义）。
-          SwitchListTile(
-            contentPadding: EdgeInsets.zero,
-            secondary: const Icon(Icons.bolt),
-            title: const Text('启动时自动同步'),
-            subtitle: const Text(
-              '打开 App 时自动开启同步；从后台回到前台时若同步被系统关闭自动恢复',
-            ),
-            value: _autoSync,
-            onChanged: (value) async {
-              setState(() => _autoSync = value);
-              await ref.read(deviceIdentityProvider).setAutoSync(value);
-            },
-          ),
-          const Divider(height: 20),
-          // ---- 高级组 ----
-          const SectionLabel('高级'),
-          // 设备 ID（只读展示）
-          ListTile(
-            contentPadding: EdgeInsets.zero,
-            leading: const Icon(Icons.fingerprint),
-            title: const Text('设备 ID'),
-            subtitle: Text(
-              _shortId(_deviceId),
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: colorScheme.onSurfaceVariant,
-              ),
-            ),
-          ),
-          // 重置设备 ID（task-14：设备 ID 冲突修复入口）。
-          ListTile(
-            contentPadding: EdgeInsets.zero,
-            leading: Icon(Icons.refresh, color: colorScheme.error),
-            title: Text('重置设备 ID', style: TextStyle(color: colorScheme.error)),
-            subtitle: const Text('重新生成身份并清空配对关系（旧配对失效需重新配对）'),
-            enabled: !_saving,
-            onTap: _resetDeviceId,
-          ),
-        ],
-      ),
-      actions: [
-        TextButton(
-          onPressed: _saving ? null : () => Navigator.of(context).pop(),
-          child: const Text('取消'),
-        ),
-        FilledButton(
-          onPressed: _saving ? null : _save,
-          child: Text(_saving ? '保存中…' : '保存'),
-        ),
-      ],
-    );
-  }
-}
-
 /// 单个发现设备的列表项：设备名 + IP:端口（+ 设备 ID 前缀）+ 配对状态标记。
 ///
 /// - 未配对：橙色「未配对」标记，点击连接进入配对流程（密码弹窗全局展示）；
@@ -962,10 +835,6 @@ class _StatusBadge extends StatelessWidget {
     );
   }
 }
-
-/// 设备 ID 缩写（展示用：前 8 位 + …）。
-String _shortId(String id) =>
-    id.length <= 8 ? id : '${id.substring(0, 8)}…';
 
 /// 彩色状态圆点：已连接绿 / 连接中橙（呼吸动画）/ 未连接灰。
 ///
@@ -1132,9 +1001,8 @@ class _PeerTile extends StatelessWidget {
             onChanged: onAutoConnectChanged,
             colorScheme: colorScheme,
           ),
-          // 更多菜单（取消配对）：hover 圆角适配容器（task-32）——
-          // 按钮 hover 圆角矩形；菜单 MenuAnchor + MenuItemButton（hover
-          // 圆角，单选项时正好填满圆角菜单容器，不留直角/缝隙）。
+          // 更多菜单（取消配对）：单选项时 hover 覆盖整个下拉容器——
+          // 容器 padding 归零（容器=按钮大小），圆角与按钮一致（task-32）。
           MenuAnchor(
             style: MenuStyle(
               shape: WidgetStatePropertyAll(
@@ -1143,7 +1011,7 @@ class _PeerTile extends StatelessWidget {
                 ),
               ),
               backgroundColor: WidgetStatePropertyAll(colorScheme.surface),
-              padding: const WidgetStatePropertyAll(EdgeInsets.all(4)),
+              padding: WidgetStatePropertyAll(EdgeInsets.zero),
             ),
             builder: (context, controller, _) => IconButton(
               tooltip: '更多操作',
@@ -1159,9 +1027,14 @@ class _PeerTile extends StatelessWidget {
               MenuItemButton(
                 onPressed: onUnpair,
                 style: MenuItemButton.styleFrom(
-                  minimumSize: const Size(120, 40),
+                  // 宽度适配文字：padding 决定按钮大小；圆角与容器一致，
+                  // 单选项时 hover 高亮正好覆盖整个下拉容器。
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 10,
+                  ),
                   shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(10),
+                    borderRadius: BorderRadius.circular(12),
                   ),
                 ),
                 child: const Text('取消配对'),

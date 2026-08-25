@@ -88,6 +88,10 @@ class NoteRepository {
 
   final NoteDao _dao;
 
+  /// 本机 deviceId（task-32 v5）：本地创建/修改笔记的 origin 标记（最后
+  /// 修改者）；由 SyncService 在身份加载后设置。
+  String? localDeviceId;
+
   /// 变更事件通道（广播：允许多个订阅者，如 SyncService 与调试日志）。
   final StreamController<NoteChangeEvent> _changes =
       StreamController<NoteChangeEvent>.broadcast();
@@ -107,6 +111,7 @@ class NoteRepository {
       content: content,
       createdAt: now,
       updatedAt: now,
+      origin: localDeviceId,
     );
     await _dao.insertOrReplace(note);
     _changes.add(NoteUpsertedEvent(note));
@@ -124,8 +129,11 @@ class NoteRepository {
       title: title,
       content: content,
     );
-    _changes.add(NoteUpsertedEvent(updated));
-    return updated;
+    // task-32 v5：本地修改 → 最后修改者 = 本机。
+    final marked = updated.copyWith(origin: localDeviceId);
+    await _dao.insertOrReplace(marked);
+    _changes.add(NoteUpsertedEvent(marked));
+    return marked;
   }
 
   /// 置顶/取消置顶（task-28）：isPinned 置值 + version+1 + updatedAt 刷新。
@@ -298,6 +306,7 @@ class NoteRepository {
         deletedAt: remote.deletedAt,
         isPinned: remote.isPinned,
         tags: remote.tags,
+        origin: remote.origin ?? local.origin,
       );
       await _dao.insertOrReplace(aligned);
       return true;
@@ -312,6 +321,7 @@ class NoteRepository {
       deletedAt: remote.deletedAt,
       isPinned: remote.isPinned,
       tags: remote.tags,
+      origin: remote.origin ?? local.origin,
     );
     await _dao.insertOrReplace(merged);
     return true;

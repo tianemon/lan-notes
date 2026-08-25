@@ -48,6 +48,7 @@ class NoteDao extends DatabaseAccessor<AppDatabase> with _$NoteDaoMixin {
         deletedAt: current.deletedAt,
         isPinned: current.isPinned,
         tags: current.tags,
+      origin: current.origin,
       );
     });
   }
@@ -70,6 +71,7 @@ class NoteDao extends DatabaseAccessor<AppDatabase> with _$NoteDaoMixin {
         deletedAt: current.deletedAt,
         isPinned: isPinned,
         tags: current.tags,
+      origin: current.origin,
       );
     });
   }
@@ -92,6 +94,7 @@ class NoteDao extends DatabaseAccessor<AppDatabase> with _$NoteDaoMixin {
         deletedAt: current.deletedAt,
         isPinned: current.isPinned,
         tags: List.of(tags),
+        origin: current.origin,
       );
     });
   }
@@ -140,6 +143,7 @@ class NoteDao extends DatabaseAccessor<AppDatabase> with _$NoteDaoMixin {
       deletedAt: now,
       isPinned: current.isPinned,
       tags: current.tags,
+      origin: current.origin,
     );
     await update(notes).replace(trashed.toRow());
     return trashed;
@@ -168,6 +172,7 @@ class NoteDao extends DatabaseAccessor<AppDatabase> with _$NoteDaoMixin {
       deletedAt: null,
       isPinned: current.isPinned,
       tags: current.tags,
+      origin: current.origin,
     );
     await update(notes).replace(restored.toRow());
     return restored;

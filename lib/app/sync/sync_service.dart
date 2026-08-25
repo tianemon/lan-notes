@@ -573,6 +573,7 @@ class SyncService {
     _userDisabled = false; // 重新开启同步 → 清除用户手动关闭标记（task-17）
     _manuallyDisconnected.clear(); // 重新开启同步 → 自动重连（会话级标记重置）
     await _identity.ensureLoaded(); // 身份就绪后再对外发布（持久化 deviceId/设备名）
+    _repository.localDeviceId = deviceId; // task-32 v5：本地笔记 origin 标记用
     await _refreshTrustedCache(); // 信任列表缓存（同步页已配对设备列表/发现标记）
     await _loadAddressCache(); // 地址缓存（v4 直连优先，跨重启有效）
     await _server.start(port: port);
@@ -1512,7 +1513,8 @@ class SyncService {
       case NoteTrashedEvent(note: final note):
       case NoteRestoredEvent(note: final note):
         _pushToAllPeers(
-          NoteUpsertMessage(note: note, origin: deviceId).toJson(),
+          NoteUpsertMessage(note: note, origin: note.origin ?? deviceId)
+              .toJson(),
         );
       case NoteDeletedEvent(
         id: final id,
@@ -2693,6 +2695,20 @@ class _PeerSession {
       );
     }
     for (final note in notes) {
+      // task-32 v5：全量快照逐条按笔记 origin 过滤「从该设备同步」——
+      // origin 空（旧数据/本机）时回退按来源会话检查。A 关「从 C」后，
+      // B 全量里 origin=C 的笔记被 A 跳过。
+      final authorId = (note.origin != null && note.origin!.isNotEmpty)
+          ? note.origin!
+          : peerDeviceId;
+      if (authorId != null &&
+          (service._syncFromByPeerId[authorId] ?? true) == false) {
+        continue;
+      }
+      if (authorId != null &&
+          !service._originAllowsTo(authorId, service.deviceId)) {
+        continue;
+      }
       await service._repository.mergeRemoteNote(note);
       // 图片缺失检测（task-30）：全量对齐后对快照中的每条笔记检查附件，
       // 本地缺失 → 自动 file_request（重连/超时后重试路径依赖此检测）。
@@ -2704,7 +2720,12 @@ class _PeerSession {
     // 的笔记也能到达对端（F8 双向数据一致）。
     final localNotes = await service._repository.getAll();
     for (final note in localNotes) {
-      _send(NoteUpsertMessage(note: note, origin: service.deviceId).toJson());
+      // task-32 v5：回推 origin = 数据作者（note.origin；转发来的数据
+      // origin 不是本机，必须保留——否则对端按发送方过滤会漏）。
+      _send(NoteUpsertMessage(
+        note: note,
+        origin: note.origin ?? service.deviceId,
+      ).toJson());
     }
     final localTombstones = await service._repository.getAllTombstones();
     for (final tombstone in localTombstones) {
@@ -2720,9 +2741,12 @@ class _PeerSession {
 
   Future<void> _onNoteUpsert(Note note, String origin) async {
     if (!ready) return;
-    // task-32 v5：按原始作者检查「从该设备同步」——fan-out 转发的数据
-    // origin 是作者（来源会话可能是转发者），关闭作者的同步即丢弃。
-    final authorId = origin.isNotEmpty ? origin : peerDeviceId;
+    // task-32 v5：按原始作者检查「从该设备同步」——优先用笔记持久化的
+    // origin（数据作者；全量回推时消息 origin 可能被发送方覆盖），回退
+    // 消息 origin/来源会话。
+    final authorId = (note.origin != null && note.origin!.isNotEmpty)
+        ? note.origin!
+        : (origin.isNotEmpty ? origin : peerDeviceId);
     if (authorId != null &&
         (service._syncFromByPeerId[authorId] ?? true) == false) {
       return;

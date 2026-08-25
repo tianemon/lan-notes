@@ -29,6 +29,10 @@ class Note {
   final bool isPinned;
   final List<String> tags;
 
+  /// 最后修改者 deviceId（task-32 v5）：本机创建/修改 = 本机；合并远端
+  /// 采用 = 消息 origin。全量/增量均按此过滤「从该设备同步」开关。
+  final String? origin;
+
   const Note({
     required this.id,
     required this.title,
@@ -39,7 +43,21 @@ class Note {
     this.deletedAt,
     this.isPinned = false,
     this.tags = const [],
+    this.origin,
   });
+
+  Note copyWith({String? origin}) => Note(
+        id: id,
+        title: title,
+        content: content,
+        createdAt: createdAt,
+        updatedAt: updatedAt,
+        version: version,
+        deletedAt: deletedAt,
+        isPinned: isPinned,
+        tags: tags,
+        origin: origin ?? this.origin,
+      );
 
   /// 从 drift 行数据转换（数据库读取 → 领域对象）。
   factory Note.fromRow(NoteRow row) {
@@ -53,6 +71,7 @@ class Note {
       deletedAt: row.deletedAt,
       isPinned: row.isPinned,
       tags: _decodeTags(row.tags),
+      origin: row.origin,
     );
   }
 
@@ -68,6 +87,7 @@ class Note {
       deletedAt: deletedAt,
       isPinned: isPinned,
       tags: jsonEncode(tags),
+      origin: origin,
     );
   }
 
@@ -83,6 +103,7 @@ class Note {
       'deletedAt': deletedAt,
       'isPinned': isPinned,
       'tags': tags,
+      if (origin != null) 'origin': origin,
     };
   }
 
@@ -101,6 +122,7 @@ class Note {
       deletedAt: json['deletedAt'] as int?,
       isPinned: (json['isPinned'] as bool?) ?? false,
       tags: _decodeTagsJson(json['tags']),
+      origin: (json['origin'] as String?) ?? '',
     );
   }
 

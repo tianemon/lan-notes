@@ -109,6 +109,15 @@ class $NotesTable extends Notes with TableInfo<$NotesTable, NoteRow> {
     requiredDuringInsert: false,
     defaultValue: const Constant('[]'),
   );
+  static const VerificationMeta _originMeta = const VerificationMeta('origin');
+  @override
+  late final GeneratedColumn<String> origin = GeneratedColumn<String>(
+    'origin',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
   @override
   List<GeneratedColumn> get $columns => [
     id,
@@ -120,6 +129,7 @@ class $NotesTable extends Notes with TableInfo<$NotesTable, NoteRow> {
     deletedAt,
     isPinned,
     tags,
+    origin,
   ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -190,6 +200,12 @@ class $NotesTable extends Notes with TableInfo<$NotesTable, NoteRow> {
         tags.isAcceptableOrUnknown(data['tags']!, _tagsMeta),
       );
     }
+    if (data.containsKey('origin')) {
+      context.handle(
+        _originMeta,
+        origin.isAcceptableOrUnknown(data['origin']!, _originMeta),
+      );
+    }
     return context;
   }
 
@@ -235,6 +251,10 @@ class $NotesTable extends Notes with TableInfo<$NotesTable, NoteRow> {
         DriftSqlType.string,
         data['${effectivePrefix}tags'],
       )!,
+      origin: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}origin'],
+      ),
     );
   }
 
@@ -263,6 +283,10 @@ class NoteRow extends DataClass implements Insertable<NoteRow> {
   /// 标签 JSON 数组字符串（task-28）：存 `["标签1","标签2"]`，列表页顶部
   /// 标签栏聚合筛选；经 [NoteRepository.setTags] 变更，version+1 随同步。
   final String tags;
+
+  /// 最后修改者 deviceId（task-32 v10）：null=本机/旧数据；合并远端采用
+  /// 时记录消息 origin——全量/增量同步按此过滤「从该设备同步」开关。
+  final String? origin;
   const NoteRow({
     required this.id,
     required this.title,
@@ -273,6 +297,7 @@ class NoteRow extends DataClass implements Insertable<NoteRow> {
     this.deletedAt,
     required this.isPinned,
     required this.tags,
+    this.origin,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -288,6 +313,9 @@ class NoteRow extends DataClass implements Insertable<NoteRow> {
     }
     map['is_pinned'] = Variable<bool>(isPinned);
     map['tags'] = Variable<String>(tags);
+    if (!nullToAbsent || origin != null) {
+      map['origin'] = Variable<String>(origin);
+    }
     return map;
   }
 
@@ -304,6 +332,9 @@ class NoteRow extends DataClass implements Insertable<NoteRow> {
           : Value(deletedAt),
       isPinned: Value(isPinned),
       tags: Value(tags),
+      origin: origin == null && nullToAbsent
+          ? const Value.absent()
+          : Value(origin),
     );
   }
 
@@ -322,6 +353,7 @@ class NoteRow extends DataClass implements Insertable<NoteRow> {
       deletedAt: serializer.fromJson<int?>(json['deletedAt']),
       isPinned: serializer.fromJson<bool>(json['isPinned']),
       tags: serializer.fromJson<String>(json['tags']),
+      origin: serializer.fromJson<String?>(json['origin']),
     );
   }
   @override
@@ -337,6 +369,7 @@ class NoteRow extends DataClass implements Insertable<NoteRow> {
       'deletedAt': serializer.toJson<int?>(deletedAt),
       'isPinned': serializer.toJson<bool>(isPinned),
       'tags': serializer.toJson<String>(tags),
+      'origin': serializer.toJson<String?>(origin),
     };
   }
 
@@ -350,6 +383,7 @@ class NoteRow extends DataClass implements Insertable<NoteRow> {
     Value<int?> deletedAt = const Value.absent(),
     bool? isPinned,
     String? tags,
+    Value<String?> origin = const Value.absent(),
   }) => NoteRow(
     id: id ?? this.id,
     title: title ?? this.title,
@@ -360,6 +394,7 @@ class NoteRow extends DataClass implements Insertable<NoteRow> {
     deletedAt: deletedAt.present ? deletedAt.value : this.deletedAt,
     isPinned: isPinned ?? this.isPinned,
     tags: tags ?? this.tags,
+    origin: origin.present ? origin.value : this.origin,
   );
   NoteRow copyWithCompanion(NotesCompanion data) {
     return NoteRow(
@@ -372,6 +407,7 @@ class NoteRow extends DataClass implements Insertable<NoteRow> {
       deletedAt: data.deletedAt.present ? data.deletedAt.value : this.deletedAt,
       isPinned: data.isPinned.present ? data.isPinned.value : this.isPinned,
       tags: data.tags.present ? data.tags.value : this.tags,
+      origin: data.origin.present ? data.origin.value : this.origin,
     );
   }
 
@@ -386,7 +422,8 @@ class NoteRow extends DataClass implements Insertable<NoteRow> {
           ..write('version: $version, ')
           ..write('deletedAt: $deletedAt, ')
           ..write('isPinned: $isPinned, ')
-          ..write('tags: $tags')
+          ..write('tags: $tags, ')
+          ..write('origin: $origin')
           ..write(')'))
         .toString();
   }
@@ -402,6 +439,7 @@ class NoteRow extends DataClass implements Insertable<NoteRow> {
     deletedAt,
     isPinned,
     tags,
+    origin,
   );
   @override
   bool operator ==(Object other) =>
@@ -415,7 +453,8 @@ class NoteRow extends DataClass implements Insertable<NoteRow> {
           other.version == this.version &&
           other.deletedAt == this.deletedAt &&
           other.isPinned == this.isPinned &&
-          other.tags == this.tags);
+          other.tags == this.tags &&
+          other.origin == this.origin);
 }
 
 class NotesCompanion extends UpdateCompanion<NoteRow> {
@@ -428,6 +467,7 @@ class NotesCompanion extends UpdateCompanion<NoteRow> {
   final Value<int?> deletedAt;
   final Value<bool> isPinned;
   final Value<String> tags;
+  final Value<String?> origin;
   final Value<int> rowid;
   const NotesCompanion({
     this.id = const Value.absent(),
@@ -439,6 +479,7 @@ class NotesCompanion extends UpdateCompanion<NoteRow> {
     this.deletedAt = const Value.absent(),
     this.isPinned = const Value.absent(),
     this.tags = const Value.absent(),
+    this.origin = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   NotesCompanion.insert({
@@ -451,6 +492,7 @@ class NotesCompanion extends UpdateCompanion<NoteRow> {
     this.deletedAt = const Value.absent(),
     this.isPinned = const Value.absent(),
     this.tags = const Value.absent(),
+    this.origin = const Value.absent(),
     this.rowid = const Value.absent(),
   }) : id = Value(id),
        createdAt = Value(createdAt),
@@ -465,6 +507,7 @@ class NotesCompanion extends UpdateCompanion<NoteRow> {
     Expression<int>? deletedAt,
     Expression<bool>? isPinned,
     Expression<String>? tags,
+    Expression<String>? origin,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -477,6 +520,7 @@ class NotesCompanion extends UpdateCompanion<NoteRow> {
       if (deletedAt != null) 'deleted_at': deletedAt,
       if (isPinned != null) 'is_pinned': isPinned,
       if (tags != null) 'tags': tags,
+      if (origin != null) 'origin': origin,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -491,6 +535,7 @@ class NotesCompanion extends UpdateCompanion<NoteRow> {
     Value<int?>? deletedAt,
     Value<bool>? isPinned,
     Value<String>? tags,
+    Value<String?>? origin,
     Value<int>? rowid,
   }) {
     return NotesCompanion(
@@ -503,6 +548,7 @@ class NotesCompanion extends UpdateCompanion<NoteRow> {
       deletedAt: deletedAt ?? this.deletedAt,
       isPinned: isPinned ?? this.isPinned,
       tags: tags ?? this.tags,
+      origin: origin ?? this.origin,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -537,6 +583,9 @@ class NotesCompanion extends UpdateCompanion<NoteRow> {
     if (tags.present) {
       map['tags'] = Variable<String>(tags.value);
     }
+    if (origin.present) {
+      map['origin'] = Variable<String>(origin.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -555,6 +604,7 @@ class NotesCompanion extends UpdateCompanion<NoteRow> {
           ..write('deletedAt: $deletedAt, ')
           ..write('isPinned: $isPinned, ')
           ..write('tags: $tags, ')
+          ..write('origin: $origin, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -1568,6 +1618,7 @@ typedef $$NotesTableCreateCompanionBuilder =
       Value<int?> deletedAt,
       Value<bool> isPinned,
       Value<String> tags,
+      Value<String?> origin,
       Value<int> rowid,
     });
 typedef $$NotesTableUpdateCompanionBuilder =
@@ -1581,6 +1632,7 @@ typedef $$NotesTableUpdateCompanionBuilder =
       Value<int?> deletedAt,
       Value<bool> isPinned,
       Value<String> tags,
+      Value<String?> origin,
       Value<int> rowid,
     });
 
@@ -1634,6 +1686,11 @@ class $$NotesTableFilterComposer extends Composer<_$AppDatabase, $NotesTable> {
 
   ColumnFilters<String> get tags => $composableBuilder(
     column: $table.tags,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get origin => $composableBuilder(
+    column: $table.origin,
     builder: (column) => ColumnFilters(column),
   );
 }
@@ -1691,6 +1748,11 @@ class $$NotesTableOrderingComposer
     column: $table.tags,
     builder: (column) => ColumnOrderings(column),
   );
+
+  ColumnOrderings<String> get origin => $composableBuilder(
+    column: $table.origin,
+    builder: (column) => ColumnOrderings(column),
+  );
 }
 
 class $$NotesTableAnnotationComposer
@@ -1728,6 +1790,9 @@ class $$NotesTableAnnotationComposer
 
   GeneratedColumn<String> get tags =>
       $composableBuilder(column: $table.tags, builder: (column) => column);
+
+  GeneratedColumn<String> get origin =>
+      $composableBuilder(column: $table.origin, builder: (column) => column);
 }
 
 class $$NotesTableTableManager
@@ -1767,6 +1832,7 @@ class $$NotesTableTableManager
                 Value<int?> deletedAt = const Value.absent(),
                 Value<bool> isPinned = const Value.absent(),
                 Value<String> tags = const Value.absent(),
+                Value<String?> origin = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => NotesCompanion(
                 id: id,
@@ -1778,6 +1844,7 @@ class $$NotesTableTableManager
                 deletedAt: deletedAt,
                 isPinned: isPinned,
                 tags: tags,
+                origin: origin,
                 rowid: rowid,
               ),
           createCompanionCallback:
@@ -1791,6 +1858,7 @@ class $$NotesTableTableManager
                 Value<int?> deletedAt = const Value.absent(),
                 Value<bool> isPinned = const Value.absent(),
                 Value<String> tags = const Value.absent(),
+                Value<String?> origin = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => NotesCompanion.insert(
                 id: id,
@@ -1802,6 +1870,7 @@ class $$NotesTableTableManager
                 deletedAt: deletedAt,
                 isPinned: isPinned,
                 tags: tags,
+                origin: origin,
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0

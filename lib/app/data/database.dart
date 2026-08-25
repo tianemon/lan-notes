@@ -38,6 +38,10 @@ class Notes extends Table {
   /// 标签栏聚合筛选；经 [NoteRepository.setTags] 变更，version+1 随同步。
   TextColumn get tags => text().withDefault(const Constant('[]'))();
 
+  /// 最后修改者 deviceId（task-32 v10）：null=本机/旧数据；合并远端采用
+  /// 时记录消息 origin——全量/增量同步按此过滤「从该设备同步」开关。
+  TextColumn get origin => text().nullable()();
+
   @override
   Set<Column> get primaryKey => {id};
 }
@@ -130,7 +134,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase(super.executor);
 
   @override
-  int get schemaVersion => 9;
+  int get schemaVersion => 10;
 
   /// 迁移策略：v1（仅 Notes）→ v2（新增 DeviceSettings/TrustedDevices）
   /// → v3（TrustedDevices 加 autoConnect 列，task-16）→ v4（Notes 加
@@ -154,6 +158,8 @@ class AppDatabase extends _$AppDatabase {
   /// task-32（v9）：TrustedDevices 加 syncToPeer/syncFromPeer 列（默认 true，
   /// 存量已配对设备升级后双向同步保持开启）；连接策略简化为「永远自动
   /// 连接」+ 同步方向开关（autoConnect 列保留但不再控制连接）；
+  /// task-32（v10）：Notes 加 origin 列（最后修改者，可空——存量笔记
+  /// null=本机，全量同步按 origin 过滤「从该设备同步」开关）；
   /// 全新库走 onCreate 建全部表。
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -185,6 +191,9 @@ class AppDatabase extends _$AppDatabase {
           if (from < 9) {
             await m.addColumn(trustedDevices, trustedDevices.syncToPeer);
             await m.addColumn(trustedDevices, trustedDevices.syncFromPeer);
+          }
+          if (from < 10) {
+            await m.addColumn(notes, notes.origin);
           }
         },
       );

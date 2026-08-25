@@ -4,15 +4,6 @@ import 'dart:io';
 
 import 'package:web_socket_channel/io.dart';
 
-/// 心跳发送间隔：每 15s 发送 `{type: 'ping'}`。
-const Duration kHeartbeatInterval = Duration(seconds: 15);
-
-/// 心跳超时：45s 内未收到任何消息（含 pong 与业务消息）判定断连。
-const Duration kHeartbeatTimeout = Duration(seconds: 45);
-
-/// 自动重连最大次数：指数退避 1s/2s/4s/8s/16s，最多重试 5 次。
-const int kMaxReconnectAttempts = 5;
-
 /// WebSocket 连接状态。
 enum SyncConnectionState { disconnected, connecting, connected }
 
@@ -69,12 +60,7 @@ class SyncServerConnection {
       onDone: _handleClosed,
       cancelOnError: true,
     );
-    // 服务端心跳监控：客户端每 15s 发 ping，45s 无任何消息判定失活断开。
-    _heartbeatTimer = Timer.periodic(kHeartbeatInterval, (_) {
-      if (DateTime.now().difference(_lastMessageAt) > kHeartbeatTimeout) {
-        _handleClosed();
-      }
-    });
+    // 保活判定统一收编到会话层（SyncService 5s）：传输层不再自行判超时。
   }
 
   /// 连接唯一标识（服务端分配，如 client-1）。
@@ -89,8 +75,6 @@ class SyncServerConnection {
   final StreamController<Map<String, dynamic>> _messages =
       StreamController<Map<String, dynamic>>.broadcast();
   StreamSubscription<dynamic>? _subscription;
-  Timer? _heartbeatTimer;
-  DateTime _lastMessageAt = DateTime.now();
   bool _closed = false;
 
   /// 该客户端发来的业务消息流（心跳 ping/pong 已由传输层内部消化，
@@ -111,28 +95,18 @@ class SyncServerConnection {
   }
 
   void _onData(dynamic data) {
-    _lastMessageAt = DateTime.now();
     if (data is! String) return;
     final message = _tryDecodeJson(data);
     if (message == null) return;
-    if (message['type'] == 'ping') {
-      // 心跳请求：立即回 pong，不进入业务消息流。
-      try {
-        _channel.send(jsonEncode({'type': 'pong'}));
-      } catch (_) {}
-      return;
-    }
-    if (message['type'] == 'pong') {
-      return; // 心跳响应内部消化（对称保活时对端回应的 pong）
-    }
+    // 心跳消息不再在传输层消化：统一进入业务流，由会话层
+    // （SyncService._onMessage）刷新 _lastInbound 并回 pong——
+    // 「任何入站即保活证据」成立（含 ping/pong）。
     _messages.add(message);
   }
 
   void _handleClosed() {
     if (_closed) return;
     _closed = true;
-    _heartbeatTimer?.cancel();
-    _heartbeatTimer = null;
     _subscription?.cancel();
     _subscription = null;
     if (!_messages.isClosed) {
@@ -263,26 +237,14 @@ class SyncServer {
 
 /// WebSocket 客户端：连接、心跳保活、指数退避自动重连（最多 5 次）。
 class SyncClient {
-  SyncClient({
-    this.maxReconnectAttempts = kMaxReconnectAttempts,
-    this.reconnectBaseDelay = const Duration(seconds: 1),
-  });
-
-  /// 自动重连最大次数（可注入，测试用短链快速失败；生产默认 5 次）。
-  final int maxReconnectAttempts;
-
-  /// 重连退避基数（第 n 次等待 `base × 2^(n-1)`；可注入，测试用短间隔）。
-  final Duration reconnectBaseDelay;
+  SyncClient();
 
   _SyncChannel? _channel;
   StreamSubscription<dynamic>? _subscription;
-  Timer? _heartbeatTimer;
   Timer? _reconnectTimer;
-  DateTime _lastMessageAt = DateTime.now();
   SyncConnectionState _state = SyncConnectionState.disconnected;
   String? _host;
   int? _port;
-  int _reconnectAttempt = 0;
   bool _manualDisconnect = false;
 
   final StreamController<SyncConnectionState> _stateController =
@@ -296,7 +258,7 @@ class SyncClient {
   /// 连接状态变化流（disconnected/connecting/connected）。
   Stream<SyncConnectionState> get stateChanges => _stateController.stream;
 
-  /// 服务端发来的业务消息流（心跳 ping/pong 已由传输层内部消化）。
+  /// 服务端发来的业务消息流（含心跳 ping/pong，由会话层统一刷新计时）。
   Stream<Map<String, dynamic>> get messages => _messagesController.stream;
 
   /// 是否已连接。
@@ -338,14 +300,13 @@ class SyncClient {
 
   /// 连接指定主机。
   ///
-  /// 连接失败或连接中断后自动按指数退避重连（1s/2s/4s/8s/16s，
-  /// 最多 5 次，见 [kMaxReconnectAttempts]）；重连耗尽后状态回到
-  /// [SyncConnectionState.disconnected]，需再次调用 [connect] 重新发起。
+  /// 连接失败或连接中断后**不再自动重连**（架构决策：在线方不主动重连，
+  /// 断线只报 [SyncConnectionState.disconnected]，由上层决定——上线方/
+  /// 手动连接/前台恢复时才重新 [connect]）。
   Future<void> connect(String host, int port) async {
     _host = host;
     _port = port;
     _manualDisconnect = false;
-    _reconnectAttempt = 0;
     _reconnectTimer?.cancel();
     _reconnectTimer = null;
     _cleanupChannel();
@@ -363,14 +324,12 @@ class SyncClient {
 
   /// 更新连接目标（对端 IP/端口变化时由发现层调用，task-13 P2P）。
   ///
-  /// 仅更新目标地址；正在进行的重连退避会在下一次尝试时使用新地址。
-  /// 若当前处于空闲/重试耗尽（[SyncConnectionState.disconnected]）状态，
-  /// 则立即按新目标重新发起连接（mDNS 重新发现解析到的新地址）。
+  /// 仅更新目标地址。若当前处于空闲（[SyncConnectionState.disconnected]）
+  /// 状态，则立即按新目标重新发起连接（mDNS 重新发现解析到的新地址）。
   void updateTarget(String host, int port) {
     _host = host;
     _port = port;
     if (_state == SyncConnectionState.disconnected && !_manualDisconnect) {
-      _reconnectAttempt = 0;
       _reconnectTimer?.cancel();
       _reconnectTimer = null;
       unawaited(_connectOnce());
@@ -416,14 +375,11 @@ class SyncClient {
         return;
       }
       _channel = _SyncChannel.client(channel);
-      _reconnectAttempt = 0; // 连接成功：重置重连计数
-      _lastMessageAt = DateTime.now();
       _setState(SyncConnectionState.connected);
-      _startHeartbeat();
       _listen();
     } catch (_) {
-      // 连接失败（拒绝/超时/网络不可达）：进入自动重连。
-      _scheduleReconnect();
+      // 连接失败（拒绝/超时/网络不可达）：不再自动重连，直接报断开。
+      _handleDisconnected();
     }
   }
 
@@ -437,64 +393,21 @@ class SyncClient {
   }
 
   void _onData(dynamic data) {
-    _lastMessageAt = DateTime.now();
     if (data is! String) return;
     final message = _tryDecodeJson(data);
     if (message == null) return;
-    final type = message['type'];
-    if (type == 'pong') {
-      return; // 心跳响应内部消化
-    }
-    if (type == 'ping') {
-      // 对端主动心跳（对称保活）：回 pong。
-      try {
-        _channel?.send(jsonEncode({'type': 'pong'}));
-      } catch (_) {}
-      return;
-    }
+    // 心跳消息不再在传输层消化：统一进入业务流，由会话层
+    // （SyncService._onMessage）刷新 _lastInbound 并回 pong。
     _messagesController.add(message);
-  }
-
-  void _startHeartbeat() {
-    _heartbeatTimer?.cancel();
-    _heartbeatTimer = Timer.periodic(kHeartbeatInterval, (_) {
-      try {
-        _channel?.send(jsonEncode({'type': 'ping'}));
-      } catch (_) {}
-      // 45s 无任何消息（含 pong 与业务消息）→ 判定断连并触发自动重连。
-      if (DateTime.now().difference(_lastMessageAt) > kHeartbeatTimeout) {
-        _handleDisconnected();
-      }
-    });
   }
 
   void _handleDisconnected() {
     if (_manualDisconnect) return;
     _cleanupChannel();
-    _scheduleReconnect();
-  }
-
-  void _scheduleReconnect() {
-    if (_manualDisconnect) return;
-    if (_reconnectAttempt >= kMaxReconnectAttempts) {
-      _setState(SyncConnectionState.disconnected);
-      return;
-    }
-    _reconnectAttempt++;
-    _setState(SyncConnectionState.connecting);
-    _reconnectTimer?.cancel();
-    _reconnectTimer = Timer(
-      _reconnectDelay(_reconnectAttempt, reconnectBaseDelay),
-      () {
-        _reconnectTimer = null;
-        _connectOnce();
-      },
-    );
+    _setState(SyncConnectionState.disconnected);
   }
 
   void _cleanupChannel() {
-    _heartbeatTimer?.cancel();
-    _heartbeatTimer = null;
     _subscription?.cancel();
     _subscription = null;
     final channel = _channel;
@@ -512,10 +425,6 @@ class SyncClient {
     _stateController.add(next);
   }
 }
-
-/// 指数退避延迟：第 [attempt] 次重试等待 `base × 2^(attempt-1)`（默认 1/2/4/8/16）。
-Duration _reconnectDelay(int attempt, Duration base) =>
-    base * (1 << (attempt - 1));
 
 /// 解析 WebSocket 文本帧为 JSON 对象；非法 JSON 返回 null。
 Map<String, dynamic>? _tryDecodeJson(String data) {

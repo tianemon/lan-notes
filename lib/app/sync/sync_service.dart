@@ -219,11 +219,6 @@ class SyncService {
     this.directConnectGroups = 2,
     this.directConnectRetryDelay = const Duration(seconds: 5),
     this.directConnectAttemptTimeout = const Duration(seconds: 5),
-    this.backoffScanBase = const Duration(seconds: 5),
-    this.backoffScanIncrement = const Duration(seconds: 5),
-    this.backoffScanCap = const Duration(seconds: 60),
-    this.clientMaxReconnectAttempts = kMaxReconnectAttempts,
-    this.clientReconnectBaseDelay = const Duration(seconds: 1),
     this.heartbeatInterval = const Duration(seconds: 2),
     this.heartbeatTimeout = const Duration(seconds: 5),
   })  : _repository = repository,
@@ -255,27 +250,12 @@ class SyncService {
   /// 单次尝试被 SyncClient 内部指数退避拖满 31s）。
   final Duration directConnectAttemptTimeout;
 
-  /// 退避扫描起始间隔（默认 5s）：断开后首轮等待时长。
-  final Duration backoffScanBase;
-
-  /// 退避扫描间隔增量（默认 5s）：每轮 +5s。
-  final Duration backoffScanIncrement;
-
-  /// 退避扫描间隔封顶（默认 60s）：达到后持续低频扫描。
-  final Duration backoffScanCap;
-
-  /// 出站 SyncClient 自动重连最大次数（透传，默认 5 次）。
-  final int clientMaxReconnectAttempts;
-
   /// 心跳探活间隔（默认 2s）：连接内周期发 ping，超时判离线（v4 恢复）。
   final Duration heartbeatInterval;
 
   /// 心跳判离线超时（默认 5s）：超过该时长未收到对端任何消息（ping/pong
   /// 或业务消息）视为对端失联（强杀/断网无 close 帧），关闭会话触发重连。
   final Duration heartbeatTimeout;
-
-  /// 出站 SyncClient 重连退避基数（透传，默认 1s）。
-  final Duration clientReconnectBaseDelay;
 
   /// 附件请求超时（task-30）：发出 file_request 后对端 [fileRequestTimeout]
   /// 无响应（无此文件 / 大小不符 / 被忽略）→ 移除请求，后续合并可重试
@@ -407,13 +387,6 @@ class SyncService {
   /// 时清空）。
   final Set<String> _fileSizeRejected = {};
 
-  /// 退避扫描定时器（v4，已配对断开设备周期扫描；单全局定时器，所有
-  /// 断开对端共用一个扫描节奏）。
-  Timer? _backoffScanTimer;
-
-  /// 下一轮退避扫描等待时长（base → base+inc → … → cap）。
-  Duration _backoffScanDelay = const Duration(seconds: 5);
-
   final StreamController<List<DeviceInfo>> _devicesController =
       StreamController<List<DeviceInfo>>.broadcast();
   final StreamController<DateTime> _syncCompletedController =
@@ -516,7 +489,8 @@ class SyncService {
   /// （固定 [port]，默认 [kDefaultSyncPort]）+ 发布 UDP 广播通告（JSON 携带
   /// deviceId+设备名+端口，见 7.1）。**常态不主动扫描**：enable 后先对已配对
   /// 设备凭地址缓存直连（[directConnectAttempts]×[directConnectGroups] 次），
-  /// 失败/无缓存进入退避扫描；未配对设备仅手动「重新扫描」可见。
+  /// 失败静默结束（task-31：不自动退避扫描，等对方上线连本机或手动扫描）；
+  /// 未配对设备仅手动「扫描设备」可见。
   ///
   /// 幂等：已开启时无操作；并发调用去重（[_enableInFlight]——启动自动
   /// 同步与回前台恢复可能重叠，避免重复启动服务端）。
@@ -525,6 +499,9 @@ class SyncService {
   /// 后已配对设备恢复自动重连（与重启 App 同理，标记不持久化）。
   /// task-17：开启时清除「用户手动关闭」标记（重新开启后回前台可自动
   /// 恢复）。
+  /// task-31（互联手动化）：enable 不再持续广播——只开 WebSocket 服务端
+  /// 等待已配对设备凭缓存直连；向外广播由「可被发现」（[announceTemporarily]）
+  /// 手动触发。
   Future<void> enable({int port = kDefaultSyncPort}) {
     if (isEnabled) return Future.value();
     return _enableInFlight ??= _doEnable(port: port).whenComplete(() {
@@ -532,8 +509,50 @@ class SyncService {
     });
   }
 
+  /// 临时广播本机通告（task-31「可被发现」）：向外广播 [_announceTemporaryDuration]
+  /// （30s），每 [_announceTemporaryInterval]（5s）一次，到点自动停止（unpublish）。
+  ///
+  /// 用于让正在「扫描设备」的对端发现本机（新设备配对/身份重置后重新被发现）。
+  /// 幂等：同步未开启时不动作；已在广播时不重复启动（刷新剩余时长）。
+  Future<void> announceTemporarily() async {
+    if (!isEnabled) return;
+    await _identity.ensureLoaded();
+    _announceTemporaryTimer?.cancel();
+    await _discovery.publish(
+      deviceName: _safeDeviceName,
+      deviceId: deviceId,
+      port: _server.port!,
+      announceInterval: _announceTemporaryInterval,
+    );
+    _announceTemporaryTimer = Timer(_announceTemporaryDuration, () {
+      _announceTemporaryTimer = null;
+      unawaited(_discovery.unpublish());
+    });
+  }
+
+  /// 立即停止临时广播（task-31；disable/身份重置时清理）。
+  Future<void> stopAnnouncing() async {
+    _announceTemporaryTimer?.cancel();
+    _announceTemporaryTimer = null;
+    if (_discovery.isPublishing) {
+      await _discovery.unpublish();
+    }
+  }
+
   /// 正在进行的 enable 操作（并发去重；无论成功/失败均复位，允许重试）。
   Future<void>? _enableInFlight;
+
+  /// 临时广播定时器（task-31「可被发现」：广播 30s 后自动停止）。
+  Timer? _announceTemporaryTimer;
+
+  /// 临时广播时长（「可被发现」向外广播的持续时间）。
+  static const Duration _announceTemporaryDuration = Duration(seconds: 30);
+
+  /// 临时广播通告间隔（「可被发现」每 5s 广播一次）。
+  static const Duration _announceTemporaryInterval = Duration(seconds: 5);
+
+  /// 是否正在临时广播（「可被发现」进行中）。
+  bool get isAnnouncing => _discovery.isPublishing;
 
   Future<void> _doEnable({required int port}) async {
     _userDisabled = false; // 重新开启同步 → 清除用户手动关闭标记（task-17）
@@ -543,13 +562,12 @@ class SyncService {
     await _loadAddressCache(); // 地址缓存（v4 直连优先，跨重启有效）
     await _server.start(port: port);
     _attachServerListeners();
-    await _discovery.publish(
-      deviceName: _safeDeviceName,
-      deviceId: deviceId,
-      port: _server.port!,
-    );
+    // task-31（互联手动化）：enable 不再持续广播——本机只开 WebSocket 服务端
+    // 等待已配对设备凭缓存直连；向外广播（「可被发现」）与扫描（「扫描设备」）
+    // 由用户在同步页手动触发（场景少，基本自己的设备，手动最稳妥）。
     _emitPeers();
-    // v4：不启动周期发现；改为「直连优先 + 按需/退避扫描」。
+    // 开启后自动连接已配对的设备（凭缓存直连，用户确认）：本机刚上线时
+    // 主动连回已配对对端；对方未上线则直连失败静默结束（等对方上线连本机）。
     unawaited(_runDirectConnectPhase());
   }
 
@@ -569,7 +587,9 @@ class SyncService {
   /// 同步后自动重连。
   Future<void> disable() async {
     _manuallyDisconnected.clear(); // 重新开启同步 → 自动重连（会话级标记重置）
-    _stopBackoffScan();
+    _directFailAt.clear(); // 直连失败冷却重置（用户主动开关同步后重新尝试）
+    _announceTemporaryTimer?.cancel();
+    _announceTemporaryTimer = null;
     await _discovery.unpublish();
     _discovery.stopScan();
     await _server.stop();
@@ -594,15 +614,14 @@ class SyncService {
     _emitDevices();
   }
 
-  // ===== v4 连接策略：直连优先 + 退避扫描 + 手动扫描（task-27） =====
+  // ===== v4 连接策略：直连优先 + 手动扫描（task-27；task-31 互联手动化） =====
 
-  /// 手动扫描一次：UDP 收集 [backoffScanWindow]（默认 3s）后停止，
-  /// 设备列表定格（同步页「重新扫描」按钮调用）。
-  Future<void> scanOnce() => _discovery.scanOnce();
+  /// 手动扫描一次：UDP 收集窗口（[window] 参数优先，缺省 3s）后停止，
+  /// 设备列表定格（同步页「扫描设备」按钮调用，30s 持续监听）。
+  Future<void> scanOnce({Duration? window}) => _discovery.scanOnce(window: window);
 
-  /// 前台/解锁恢复重连（已启用但断开时调用）：凭缓存地址直连已配对设备，
-  /// 直连失败自动进退避扫描（UDP 发现）兜底。幂等：已启用且有就绪连接时
-  /// 不动作（避免锁屏/切回反复触发无谓重连）。
+  /// 前台/解锁恢复重连（已启用但断开时调用）：凭缓存地址直连已配对设备。
+  /// 幂等：已启用且有就绪连接时不动作（避免锁屏/切回反复触发无谓重连）。
   ///
   /// 解决：锁屏/切后台时 sync 服务仍 isEnabled=true（只是网络被系统挂起/
   /// 连接断开），原有的「仅未启用才 enable」逻辑整段跳过，导致回前台也
@@ -639,6 +658,13 @@ class SyncService {
       if (peer.deviceId == deviceId) continue;
       if (!peer.autoConnect) continue;
       if (_manuallyDisconnected.contains(peer.deviceId)) continue;
+      // 直连失败冷却（task-32）：离线对端 60s 内不反复自动重试——
+      // 回前台/解锁触发 retryConnections 时避免「频繁刷新转圈」。
+      final failAt = _directFailAt[peer.deviceId];
+      if (failAt != null &&
+          DateTime.now().difference(failAt) < _directRetryCooldown) {
+        continue;
+      }
       // 抢占式连接（迭代优化）：不再按 deviceId 大小分配发起权——刚
       // 活跃的一端对全部已配对对端凭地址缓存抢连（单人多设备场景时间差
       // 足够，基本不会撞车）；万一双方同时抢连，[_registerPeerId]/
@@ -647,29 +673,33 @@ class SyncService {
     }
   }
 
-  /// 对单个对端执行直连尝试循环；全部失败后启动退避扫描。
+  /// 对单个对端执行直连尝试循环；全部失败后静默结束（不自动扫描）。
+  ///
+  /// task-31（互联手动化）：直连失败不再自动退避扫描——对方未上线时
+  /// 等待其凭缓存地址主动连本机（本机 WebSocket 服务端在跑）；用户也可
+  /// 手动点「扫描设备」发现新地址后由 [_onDiscoveredDevices] 自动连接。
+  ///
+  /// task-32：直连只尝试一次，失败立即清理未就绪的出站会话——不再
+  /// 多轮重试（2 组×3 次×5s 超时≈55s，离线对端会一直显示「连接中」转圈）；
+  /// 重连责任在重新上线方，离线方上线后会凭缓存直连本机，无需本机重试。
   Future<void> _directConnectPeer(String peerId) async {
-    // 无缓存地址：无从直连，直接进入退避扫描（等扫描发现新地址后直连）。
-    if (_addressCache[peerId] == null) {
-      _startBackoffScan();
-      return;
+    // 无缓存地址：无从直连，静默结束（等对方连本机或手动扫描）。
+    if (_addressCache[peerId] == null) return;
+    if (!isEnabled) return; // 同步已关闭：中止直连
+    final sessionId = _sessionByPeerId[peerId];
+    final session = sessionId == null ? null : _sessions[sessionId];
+    if (session != null && session.ready) return; // 已连接：完成
+    final connected = await _connectFromCacheOnce(peerId);
+    if (connected) return;
+    // 直连失败：清理未就绪的出站会话——client 连接挂起时状态停在
+    // connecting，不清理会让 UI 一直显示「连接中」转圈（task-32）。
+    final cleanupId = _sessionByPeerId[peerId];
+    final cleanup = cleanupId == null ? null : _sessions[cleanupId];
+    if (cleanup != null && !cleanup.ready && cleanup.isInitiator) {
+      await _closeSession(cleanup);
     }
-    for (var group = 0; group < directConnectGroups; group++) {
-      for (var attempt = 0; attempt < directConnectAttempts; attempt++) {
-        if (!isEnabled) return; // 同步已关闭：中止直连
-        final sessionId = _sessionByPeerId[peerId];
-        final session = sessionId == null ? null : _sessions[sessionId];
-        if (session != null && session.ready) return; // 已连接：完成
-        if (group > 0 || attempt > 0) {
-          await Future<void>.delayed(directConnectRetryDelay);
-          if (!isEnabled) return;
-        }
-        final connected = await _connectFromCacheOnce(peerId);
-        if (connected) return;
-      }
-    }
-    // 直连失败 → 退避扫描：发现对端新地址后直连。
-    _startBackoffScan();
+    // 记录失败时间（冷却期内不再自动重试，防回前台频繁刷新）。
+    _directFailAt[peerId] = DateTime.now();
   }
 
   /// 凭缓存地址发起一次出站连接尝试（无会话则创建；已有出站会话则重新
@@ -688,10 +718,7 @@ class SyncService {
           .where((t) => t.deviceId == peerId)
           .map((t) => t.deviceName)
           .firstOrNull;
-      final client = SyncClient(
-        maxReconnectAttempts: clientMaxReconnectAttempts,
-        reconnectBaseDelay: clientReconnectBaseDelay,
-      );
+      final client = SyncClient();
       final newSession = _PeerSession(
         id: 'out-${++_outgoingSeq}',
         isInitiator: true,
@@ -712,66 +739,12 @@ class SyncService {
     return client.waitForTerminal(timeout: directConnectAttemptTimeout);
   }
 
-  /// 启动退避扫描（幂等）：已配对断开设备以 base→cap 递增间隔周期扫描
-  /// （5s→10s→…→60s 封顶，持续低频），扫描发现对端新地址后直连。
-  void _startBackoffScan() {
-    if (_backoffScanTimer != null) return;
-    _backoffScanDelay = backoffScanBase;
-    _scheduleBackoffScanRound();
-  }
+  /// 直连失败时间戳（task-32 冷却）：离线对端短时间不反复自动重试——
+  /// App 回前台/解锁触发 retryConnections 时避免「频繁刷新转圈」。
+  final Map<String, DateTime> _directFailAt = {};
 
-  void _scheduleBackoffScanRound() {
-    if (_backoffScanTimer != null) return;
-    _backoffScanTimer = Timer(_backoffScanDelay, () async {
-      _backoffScanTimer = null;
-      try {
-        await _discovery.scanOnce();
-      } catch (_) {
-        // 扫描失败（网络抖动）：跳过本轮，按节奏继续。
-      }
-      // 每轮 +increment，直到 cap 封顶（持续低频扫描）。
-      _backoffScanDelay = Duration(
-        milliseconds: math.min(
-          _backoffScanDelay.inMilliseconds + backoffScanIncrement.inMilliseconds,
-          backoffScanCap.inMilliseconds,
-        ),
-      );
-      if (_needsBackoffScan()) _scheduleBackoffScanRound();
-    });
-  }
-
-  /// 是否仍有需要退避扫描的已配对断开设备（同步开启中）。
-  bool _needsBackoffScan() {
-    if (!isEnabled) return false;
-    for (final trusted in _trustedCache) {
-      final peerId = trusted.deviceId;
-      if (peerId == deviceId) continue;
-      if (!trusted.autoConnect) continue;
-      if (_manuallyDisconnected.contains(peerId)) continue;
-      if (deviceId.compareTo(peerId) > 0) continue; // 仅小者主动连接
-      final sessionId = _sessionByPeerId[peerId];
-      final session = sessionId == null ? null : _sessions[sessionId];
-      if (session != null && session.ready) continue; // 已连接：无需扫描
-      return true;
-    }
-    return false;
-  }
-
-  /// 停止退避扫描（幂等：disable/全部重连后不再调度）。
-  void _stopBackoffScan() {
-    _backoffScanTimer?.cancel();
-    _backoffScanTimer = null;
-  }
-
-  /// 已配对会话断开后按条件触发退避扫描（仅小者主动连接的一侧扫描）。
-  void _maybeStartBackoffScanFor(String? peerId) {
-    if (peerId == null || peerId.isEmpty) return;
-    if (!isEnabled) return;
-    if (!_trustedIds.contains(peerId)) return; // 仅已配对设备
-    if (_manuallyDisconnected.contains(peerId)) return;
-    if (deviceId.compareTo(peerId) > 0) return; // 大者等待对端重连
-    _startBackoffScan();
-  }
+  /// 直连失败冷却期：冷却期内 [_runDirectConnectPhase] 跳过该设备。
+  static const Duration _directRetryCooldown = Duration(seconds: 60);
 
   /// 手动扫描后未连接的对端由 [_onDiscoveredDevices] 自动连接（扫描结果
   /// 流驱动）；无其他动作。
@@ -798,7 +771,8 @@ class SyncService {
     _emitDevices();
   }
 
-  /// 服务端连接断开：移除对应入站会话（幂等）；已配对设备触发退避扫描。
+  /// 服务端连接断开：移除对应入站会话（幂等）。
+  /// 在线方不主动重连：断开只标记移除，等待对端重新上线后主动连接。
   void _onClientDisconnected(SyncServerConnection connection) {
     final session = _sessions.remove(connection.id);
     if (session == null) return;
@@ -806,7 +780,6 @@ class SyncService {
     _clearFileTransfersForSession(session.id); // 附件传输随会话断开丢弃（task-30）
     _unregisterPeerId(session.peerDeviceId, session);
     _clearActivePairingSession(session);
-    _maybeStartBackoffScanFor(session.peerDeviceId);
     _emitDevices();
   }
 
@@ -825,6 +798,18 @@ class SyncService {
       _manuallyDisconnected.remove(peerId);
     }
     await _connectOutgoing(device);
+  }
+
+  /// 手动连接已配对设备（task-31「手动连接」开关开启时触发）：清除手动
+  /// 断开标记后凭地址缓存直连对端（无缓存则静默，可先「扫描设备」发现）。
+  ///
+  /// 与 [connectToPeer]（发现列表点击，未配对可发起配对）不同：本方法
+  /// 仅用于已配对设备的手动重连（设备行「手动连接」开关）。
+  Future<void> connectTrustedPeer(String peerId) async {
+    if (peerId.isEmpty || peerId == deviceId) return;
+    _manuallyDisconnected.remove(peerId);
+    if (!_trustedIds.contains(peerId)) return;
+    await _directConnectPeer(peerId);
   }
 
   /// 断开指定对端的连接（幂等）。
@@ -900,6 +885,19 @@ class SyncService {
     _emitDevices();
   }
 
+  /// 收到「自动连接被拒」通知（task-31 Q4）：对端（拒绝方）关闭了对本机
+  /// 的自动连接开关，拒绝本机发起的连接。
+  ///
+  /// 本机自动关闭对该拒绝方的自动连接开关（持久化到 TrustedDevices），
+  /// 刷新 UI——之后本机不再自动连对方，直到用户手动重新打开。
+  Future<void> _onAutoConnectRejected(String rejectingPeerId) async {
+    if (rejectingPeerId.isEmpty || rejectingPeerId == deviceId) return;
+    if (!_trustedIds.contains(rejectingPeerId)) return; // 未配对：无开关可关
+    if ((_autoConnectByPeerId[rejectingPeerId] ?? true) == false) return; // 已关
+    await setAutoConnect(rejectingPeerId, false);
+    _emitPeers();
+  }
+
   /// 手动触发全量同步：向所有已就绪会话发送 sync_request（双向对齐）。
   void syncNow() {
     for (final session in _sessions.values) {
@@ -910,9 +908,12 @@ class SyncService {
   }
 
   /// 设备名等身份信息变更后刷新 UDP 广播发布（已建立的连接不受影响）。
+  ///
+  /// task-31（互联手动化）：enable 不持续广播，仅「可被发现」临时广播期间
+  /// 需要刷新（身份变更对正在扫描的对端即时生效）；未在发布时为空操作。
   Future<void> refreshPublishedIdentity() async {
     await _identity.ensureLoaded();
-    if (isEnabled) {
+    if (_discovery.isPublishing) {
       await _discovery.publish(
         deviceName: _safeDeviceName,
         deviceId: deviceId,
@@ -962,10 +963,7 @@ class SyncService {
       }
       return;
     }
-    final client = SyncClient(
-      maxReconnectAttempts: clientMaxReconnectAttempts,
-      reconnectBaseDelay: clientReconnectBaseDelay,
-    );
+    final client = SyncClient();
     final session = _PeerSession(
       id: 'out-${++_outgoingSeq}',
       isInitiator: true,
@@ -1045,26 +1043,6 @@ class SyncService {
     _reportedDiscoveryConflicts.removeWhere((id) => !discoveredIds.contains(id));
   }
 
-  /// task-19：出站会话重连耗尽后，优先用地址缓存直接重连（不等 UDP 广播
-  /// 重新发现）——对端短暂掉线/通告未达时凭缓存地址即可恢复连接。
-  ///
-  /// 仅触发一轮（会话 [_PeerSession.cacheReconnectUsed] 标记）：连接成功
-  /// （connected）或 UDP 广播新发现（[updateTarget]）后恢复资格，防止对端
-  /// 永久离线时无限循环重连（耗尽后仍等待 UDP 广播/手动连接兜底）。
-  void _maybeReconnectFromCache(_PeerSession session) {
-    if (!session.isInitiator) return; // 仅出站会话主动重连
-    final peerId = session.peerDeviceId;
-    if (peerId == null || peerId.isEmpty) return;
-    if (session.cacheReconnectUsed) return;
-    final cached = _addressCache[peerId];
-    if (cached == null) return;
-    final link = session.link;
-    if (link is! _OutgoingLink) return;
-    if (link.client.state != SyncConnectionState.disconnected) return;
-    session.markCacheReconnectUsed();
-    unawaited(link.client.connect(cached.address, cached.port));
-  }
-
   /// 登记会话的对端身份（连接去重：每对设备仅保留一条会话）。
   ///
   /// 返回 false 表示本会话被判定为重复连接并已关闭，调用方应停止后续处理。
@@ -1119,9 +1097,8 @@ class SyncService {
   }
 
   /// 会话底层连接关闭（对端断开/消息流结束）：移除会话（幂等）；
-  /// 已配对设备触发退避扫描（v4）。
-  /// 心跳超时：对端强杀/断网（无 close 帧）判定失联——关闭会话，
-  /// 走 [_onSessionLinkClosed] 同一套清理（移除连接、触发重连/退避扫描）。
+  /// 心跳超时：对端强杀/断网（无 close 帧）判定失联——关闭会话并标记离线。
+  /// 在线方不主动重连（架构决策），等待对端重新上线后主动连接。
   void _onHeartbeatTimeout(_PeerSession session) {
     // ignore: avoid_print
     print('[心跳监控] onHeartbeatTimeout 关闭会话 peer=${session.peerDeviceId ?? 'null'}');
@@ -1141,7 +1118,6 @@ class SyncService {
     _clearFileTransfersForSession(session.id); // 附件传输随会话断开丢弃（task-30）
     _unregisterPeerId(session.peerDeviceId, session);
     _clearActivePairingSession(session);
-    _maybeStartBackoffScanFor(session.peerDeviceId);
     _emitDevices();
   }
 
@@ -1194,11 +1170,12 @@ class SyncService {
   ///
   /// 见 [DeviceIdentityStore.resetDeviceId] 与 docs/技术架构.md 7.3 节。
   /// task-16：一并清除会话级手动断开标记（新身份下旧标记无意义）。
-  /// task-27：停止退避扫描（旧身份的地址缓存随信任列表清空）。
+  /// task-27：清空地址缓存（旧身份的地址缓存随信任列表清空）。
+  /// task-31：重置身份后不主动广播——互联手动化，「可被发现」临时广播期间
+  /// 刷新新身份通告，否则等用户手动触发。
   Future<void> resetDeviceIdentity() async {
     await _identity.resetDeviceId();
     _manuallyDisconnected.clear();
-    _stopBackoffScan();
     _addressCache.clear();
     final sessions = _sessions.values.toList();
     for (final session in sessions) {
@@ -1209,7 +1186,7 @@ class SyncService {
     _pairingQueue.clear();
     _reportedDiscoveryConflicts.clear();
     await _refreshTrustedCache();
-    if (isEnabled) {
+    if (_discovery.isPublishing) {
       // 以新身份重新发布 UDP 广播通告（JSON 携带新 deviceId）。
       await _discovery.publish(
         deviceName: _safeDeviceName,
@@ -1269,9 +1246,19 @@ class SyncService {
       if (peerId == null || peerId.isEmpty || peerId == deviceId) continue;
       if (seen.contains(peerId)) continue;
       seen.add(peerId);
+      // 设备名多来源兜底（task-32）：信任列表名 → 会话名 → UDP 通告名，
+      // 避免对端上报空名（旧版/取主机名失败）导致显示 ID。
+      final trustedName = _trustedCache
+          .where((t) => t.deviceId == peerId)
+          .map((t) => t.deviceName)
+          .firstOrNull;
       peers.add(PeerDevice(
         deviceId: peerId,
-        deviceName: session.peerName ?? peerId,
+        deviceName: _peerDisplayName(
+          peerId,
+          trustedName: trustedName,
+          sessionName: session.peerName,
+        ),
         isTrusted: _trustedIds.contains(peerId),
         status: _sessionStatus(session),
         autoConnect: _autoConnectByPeerId[peerId] ?? true,
@@ -1284,7 +1271,10 @@ class SyncService {
       seen.add(trusted.deviceId);
       peers.add(PeerDevice(
         deviceId: trusted.deviceId,
-        deviceName: trusted.deviceName,
+        deviceName: _peerDisplayName(
+          trusted.deviceId,
+          trustedName: trusted.deviceName,
+        ),
         isTrusted: true,
         status: PeerStatus.disconnected,
         autoConnect: trusted.autoConnect,
@@ -1295,6 +1285,34 @@ class SyncService {
     if (!_peersController.isClosed) {
       _peersController.add(peers);
     }
+  }
+
+  /// 对端展示名（task-32）：优先信任列表名 → 会话名 → UDP 通告名 → ID。
+  ///
+  /// 信任列表/会话名可能存的是 ID（对端上报 deviceName 为空时 fallback，
+  /// 如旧版/Android 取主机名失败），此时从 UDP 通告（name 通常可靠）恢复
+  /// 真实设备名，避免已配对/已连接设备显示 ID。
+  String _peerDisplayName(
+    String peerId, {
+    String? trustedName,
+    String? sessionName,
+  }) {
+    String? pick(String? name) {
+      final t = name?.trim() ?? '';
+      return (t.isEmpty || t == peerId) ? null : t;
+    }
+
+    final fromTrusted = pick(trustedName);
+    if (fromTrusted != null) return fromTrusted;
+    final fromSession = pick(sessionName);
+    if (fromSession != null) return fromSession;
+    for (final d in _discovery.knownDevices) {
+      if (d.deviceId == peerId) {
+        final n = pick(d.deviceName);
+        if (n != null) return n;
+      }
+    }
+    return peerId;
   }
 
   /// 会话的连接状态（同步页展示）：就绪=已连接；出站传输层连接中/入站未就绪
@@ -1814,19 +1832,6 @@ class _PeerSession {
   /// 复位，使重新握手后就绪时可再次全量对齐。
   bool _fullSyncTriggered = false;
 
-  /// 是否已用地址缓存触发过重连（task-19）。
-  ///
-  /// 防止缓存重连无限循环：重连耗尽后仅凭缓存地址再连一轮（退避），
-  /// 连接成功（connected）或 UDP 广播新发现（[updateTarget]）后恢复资格，
-  /// 否则等待 UDP 广播/手动连接兜底。
-  bool _cacheReconnectUsed = false;
-
-  /// 地址缓存重连资格（task-19，见 [_cacheReconnectUsed]）。
-  bool get cacheReconnectUsed => _cacheReconnectUsed;
-
-  /// 标记已用地址缓存触发过一轮重连（task-19）。
-  void markCacheReconnectUsed() => _cacheReconnectUsed = true;
-
   bool _closed = false;
   StreamSubscription<Map<String, dynamic>>? _msgSub;
   StreamSubscription<SyncConnectionState>? _stateSub;
@@ -1852,17 +1857,13 @@ class _PeerSession {
 
   void _onOutgoingState(SyncConnectionState state) {
     if (state == SyncConnectionState.connected) {
-      // 连接成功 / 重连成功：重新握手（发送 hello、重置认证状态）。
-      _cacheReconnectUsed = false; // 连接成功：缓存有效，恢复缓存重连资格
+      // 连接成功：重新握手（发送 hello、重置认证状态）。
       _resetAuth();
       unawaited(_sendHello());
     } else if (state == SyncConnectionState.disconnected) {
-      // 重试耗尽进入空闲：先尝试用地址缓存直接重连（task-19），
-      // 再保持会话（等待退避扫描/手动连接按新地址更新目标）；
-      // 已配对设备由 SyncService 启动退避扫描（v4）。
+      // 断线：仅重置认证状态（等待对端重新上线后主动连接）。
+      // 架构决策：在线方不主动重连，重连责任在「重新上线的一方」。
       _resetAuth();
-      service._maybeReconnectFromCache(this);
-      service._maybeStartBackoffScanFor(peerDeviceId);
     }
   }
 
@@ -1885,8 +1886,7 @@ class _PeerSession {
           return;
         }
         final idle = DateTime.now().difference(_lastInbound);
-        // ignore: avoid_print
-        print('[心跳监控] tick peer=${peerDeviceId ?? 'null'} idle=${idle.inSeconds}s 阈值=${service.heartbeatTimeout.inSeconds}s');
+        // 周期 tick 不打日志（每秒多条刷屏）；仅在失联判定时输出。
         // 超时判定：超过 heartbeatTimeout 未收到对端任何消息 → 失联。
         if (idle > service.heartbeatTimeout) {
           // ignore: avoid_print
@@ -1913,9 +1913,9 @@ class _PeerSession {
   /// sync_request 才补齐信任（_peerTrustsMe=true）——此时若不补调本方法，
   /// 心跳永远不会启动（手机离线 mac 检测不到）。
   void _maybeStartHeartbeatIfReady() {
+    // ready 检查是周期路径（每次 sync_request 兜底触发）：静默，
+    // 状态变化由 _startHeartbeat 的「心跳启动」日志体现。
     if (ready) {
-      // ignore: avoid_print
-      print('[心跳监控] maybeStartHeartbeatIfReady peer=${peerDeviceId ?? 'null'} ready=$ready');
       _startHeartbeat();
     }
   }
@@ -1988,6 +1988,7 @@ class _PeerSession {
       deviceName: service._safeDeviceName,
       trusted: trusted,
       protocolVersion: kProtocolVersion,
+      port: service._server.port, // 对端入站缓存本机地址用（task-32）
     ).toJson());
   }
 
@@ -2005,13 +2006,9 @@ class _PeerSession {
 
   /// 更新出站连接目标（IP/端口变化时由发现层调用，task-19 改为
   /// 从地址缓存读取地址后调用）。
-  ///
-  /// 同时恢复缓存重连资格（新的 UDP 广播信息说明对端可达，允许再次使用
-  /// 地址缓存重连）。
   void updateTarget(String host, int port) {
     final outbound = link;
     if (outbound is _OutgoingLink) {
-      _cacheReconnectUsed = false;
       outbound.client.updateTarget(host, port);
     }
   }
@@ -2024,7 +2021,11 @@ class _PeerSession {
     final peerId = peerDeviceId;
     if (peerId == null) return;
     final secret = service.generateSecret();
-    final displayName = service._safePeerName(peerName, fallback: peerId);
+    // 展示名多来源兜底（task-32）：对端 hello 上报空名时从 UDP 通告恢复。
+    final displayName = service._peerDisplayName(
+      peerId,
+      sessionName: peerName,
+    );
     await service._identity.addTrusted(peerId, displayName, secret: secret);
     await service._refreshTrustedCache();
     _peerTrusted = true; // 用户同意即本机信任对端
@@ -2096,8 +2097,14 @@ class _PeerSession {
         deviceId: final peerId,
         deviceName: final peerName,
         protocolVersion: final protocolVersion,
+        port: final peerPort,
       ):
-        await _onPeerHello(peerId, peerName, protocolVersion);
+        await _onPeerHello(
+          peerId,
+          peerName,
+          protocolVersion,
+          peerPort: peerPort,
+        );
       case WelcomeMessage(
         deviceId: final peerId,
         hostName: final peerName,
@@ -2139,6 +2146,11 @@ class _PeerSession {
         // P2P：各端设备列表以本机连接表为准（devicesUpdates 由本机
         // 连接表变化驱动），对端广播仅作信息参考，本地忽略。
         break;
+      case AutoConnectRejectedMessage(deviceId: final rejectingPeerId):
+        // 对端关闭了对本机的自动连接：本机收到被拒通知 → 自动关闭对
+        // 该对端的自动连接开关（持久化），避免反复尝试自动连被拒（Q4）。
+        await service._onAutoConnectRejected(rejectingPeerId);
+        break;
       case PingMessage():
         // 收到 ping → 回 pong（对端心跳探活）。
         sendMessage(const PongMessage().toJson());
@@ -2178,8 +2190,19 @@ class _PeerSession {
   Future<void> _onPeerHello(
     String peerId,
     String peerName,
-    int protocolVersion,
-  ) async {
+    int protocolVersion, {
+    int? peerPort,
+  }) async {
+    // 入站缓存对端地址（task-32）：从连接对端 IP + hello 携带的监听端口
+    // 写入地址缓存——入站方（被连接方）重新上线时可凭缓存直连对方。
+    // 旧对端不带 port 时跳过（无法得知对端监听端口）。
+    final link = this.link;
+    if (link is _IncomingLink && peerPort != null && peerPort > 0) {
+      final address = link.connection.remoteAddress?.address;
+      if (address != null && address.isNotEmpty) {
+        service._cachePeerAddress(peerId, address, peerPort);
+      }
+    }
     // 设备 ID 冲突：对端 deviceId 与本机相同 → 拒绝该连接并断开（用户需求）。
     if (peerId == service.deviceId) {
       service._reportConflict(
@@ -2198,6 +2221,14 @@ class _PeerSession {
       return;
     }
     service._emitDevices();
+    // task-31 Q4：本机已配对该对端但关闭了自动连接开关 → 拒绝连接并通知
+    // 对端自动关闭其对本机的自动连接开关（在线方拒绝逻辑）。
+    if (service._trustedIds.contains(peerId) &&
+        (service._autoConnectByPeerId[peerId] ?? true) == false) {
+      _send(AutoConnectRejectedMessage(deviceId: service.deviceId).toJson());
+      unawaited(service._closeSession(this));
+      return;
+    }
     final secret = await service._identity.getTrustedSecret(peerId);
     if (secret != null && secret.isNotEmpty) {
       // 已配对且持有密钥：HMAC 挑战认证（防伪装 deviceId）。
@@ -2340,9 +2371,11 @@ class _PeerSession {
     // 信任写入用会话登记的 peerDeviceId（消息载荷可伪造，会话身份由握手
     // hello 登记并经连接去重确认，是权威来源）。
     final trustedPeerId = peerDeviceId!;
-    final trustedPeerName = service._safePeerName(
-      peerName.isNotEmpty ? peerName : this.peerName,
-      fallback: trustedPeerId,
+    // 展示名多来源兜底（task-32）：pairing_accept 上报空名时回退会话名/通告名。
+    final trustedPeerName = service._peerDisplayName(
+      trustedPeerId,
+      trustedName: peerName.isNotEmpty ? peerName : null,
+      sessionName: this.peerName,
     );
     switch (_pairingRole) {
       case _PairingRole.requester:

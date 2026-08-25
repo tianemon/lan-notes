@@ -518,6 +518,29 @@
       "passes": false,
       "evaluated": false,
       "status": "done"
+    },
+    {
+      "id": "task-31",
+      "title": "同步页重构 + 互联手动化（开关容器/设备双开关/发现区按钮/UI 优化）",
+      "description": "同步页整体重构：同步开关与状态合并容器、已配对设备行双开关（自动连接+手动连接）垂直排列、发现区改「可被发现/扫描设备」按钮、enable 不再持续广播、删除退避扫描、Q4 自动连接拒绝逻辑、整体 UI 优化（精致 Switch + hover 修复）",
+      "steps": [
+        "协议层：新增 AutoConnectRejectedMessage（type=auto_connect_rejected，载荷 deviceId）——在线方拒绝连接时通知对端关闭自动连接开关",
+        "discovery_service.dart：publish 加可选 announceInterval 参数、scanOnce 加可选 window 参数（供临时广播 5s×30s、扫描 30s 使用）",
+        "sync_service.dart：_doEnable 删 _discovery.publish（enable 不再持续广播，只开 WebSocket 服务端 + 凭缓存直连已配对设备）",
+        "sync_service.dart：新增 announceTemporarily()（临时广播 30s 每 5s 一次，到点自动 unpublish）与 scanOnce 转发窗口参数（UI 扫描 30s）",
+        "sync_service.dart：Q4 拒绝逻辑——_onPeerHello/_onPeerWelcome 检查本机对端 autoConnect=false 时发 AutoConnectRejectedMessage 并断开；收到该消息 → setAutoConnect(发送方,false) 持久化 + 刷新 UI",
+        "sync_service.dart：删除退避扫描（_startBackoffScan/_scheduleBackoffScanRound/_needsBackoffScan/_stopBackoffScan + _backoffScanTimer 字段 + backoffScan* 构造参数 + 调用点）——直连失败不再自动扫描，等对方上线连本机",
+        "sync_page.dart R1：同步开关容器合并——GlassCard 首行「同步」+ 精致 Switch，开启展开显示「已开启WebSocket服务端，端口58888 换行 已连接n台设备」，关闭缩成一行（AnimatedSize/AnimatedCrossFade）",
+        "sync_page.dart R2：已配对设备行——断开显示「已断开」；只显示设备名（去 ID）；两个 Switch 垂直排列（手动连接在上/自动连接在下）；保留取消配对菜单",
+        "sync_page.dart R5：发现区改两个按钮「可被发现」（调 announceTemporarily）与「扫描设备」（调 scanOnce 30s），各自显示剩余时间/进行中状态",
+        "theme.dart/glass_style.dart：精致 Switch 组件（小尺寸、圆润、丝滑动画）+ 列表按钮 hover 圆角修复（取消配对按钮不留直角）",
+        "同步更新 temp/drafts/verify_sync.dart 的退避扫描相关用例（改为手动 scanOnce 驱动或移除）",
+        "flutter analyze 0 issues；verify_sync.dart 基线不回归（退避扫描相关场景按新架构调整）；更新 docs/技术架构.md（同步页布局/互联手动化/退避扫描删除）、docs/开发进度.md、README"
+      ],
+      "reference": "用户确认（task-31）：同步开关容器合并、设备双开关垂直排列、发现区按钮化、enable 不广播、互联手动化、精致 Switch + hover 修复；docs/需求文档.md 需求变更记录",
+      "passes": false,
+      "evaluated": false,
+      "status": "building"
     }
   ]
 }

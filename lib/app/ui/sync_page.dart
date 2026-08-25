@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -62,6 +63,15 @@ class _SyncPageState extends ConsumerState<SyncPage> {
   StreamSubscription<DeviceIdConflictEvent>? _conflictSub;
   Timer? _syncTimeout;
 
+  /// 临时广播进行中（task-31「可被发现」按钮：30s 内显示「广播中…」）。
+  bool _announcing = false;
+
+  /// 「可被发现」广播倒计时（30s 后复位 [_announcing]）。
+  Timer? _announceTimer;
+
+  /// 端口输入框控制器（task-32：改端口后重启同步服务）。
+  late final TextEditingController _portController;
+
   /// 顶部同步总开关状态（与 [SyncService.isEnabled] 保持一致）。
   bool _syncEnabled = false;
 
@@ -77,9 +87,6 @@ class _SyncPageState extends ConsumerState<SyncPage> {
   /// 设备 ID 冲突提示（非空时置顶展示横幅，可手动关闭）。
   String? _conflictMessage;
 
-  /// 最近一次同步完成时间（来自 [SyncService.syncCompleted]）。
-  DateTime? _lastSyncTime;
-
   /// 同步进行中（连接握手全量同步 / 手动「立即同步」期间为 true）。
   bool _syncing = false;
 
@@ -88,11 +95,13 @@ class _SyncPageState extends ConsumerState<SyncPage> {
     super.initState();
     _service = ref.read(syncServiceProvider);
     _syncEnabled = _service.isEnabled;
-    _lastSyncTime = _service.lastSyncTime;
+    _portController = TextEditingController(
+      text: '${_service.port ?? kDefaultSyncPort}',
+    );
 
     _syncSub = _service.syncCompleted.listen((time) {
       _setSyncing(false);
-      if (mounted) setState(() => _lastSyncTime = time);
+      if (mounted) setState(() {});
     });
     // 本机连接表变化（连接/断开/登记）：触发重建，列表读 service.connectedDevices。
     _devicesSub = _service.devicesUpdates.listen((_) {
@@ -119,6 +128,8 @@ class _SyncPageState extends ConsumerState<SyncPage> {
   @override
   void dispose() {
     _syncTimeout?.cancel();
+    _announceTimer?.cancel();
+    _portController.dispose();
     _syncSub?.cancel();
     _devicesSub?.cancel();
     _peersSub?.cancel();
@@ -153,6 +164,11 @@ class _SyncPageState extends ConsumerState<SyncPage> {
           });
         }
       }
+    } on SocketException {
+      if (mounted) {
+        setState(() => _syncEnabled = _service.isEnabled);
+        _showSnack('端口被占用，请在「端口」处修改后点重启');
+      }
     } catch (_) {
       if (mounted) {
         setState(() => _syncEnabled = _service.isEnabled);
@@ -175,13 +191,16 @@ class _SyncPageState extends ConsumerState<SyncPage> {
     }
   }
 
-  /// 断开指定对端连接（task-16，WiFi 式断开）：断开 + 会话级手动断开
-  /// 标记——当下发现轮询不自动重连；重新开启同步/重启 App 后自动重连
-  /// 恢复；手动连接该设备时清除标记。
-  Future<void> _disconnectPeer(PeerDevice peer) async {
-    await _service.disconnectPeer(peer.deviceId);
-    if (mounted) {
-      _showSnack('已断开 ${peer.deviceName}（手动断开后不自动重连，可重新开启同步恢复）');
+  /// 切换某设备的「手动连接」开关（task-31）：
+  /// - 打开：手动连接该已配对设备（清除手动断开标记 + 凭缓存直连）；
+  /// - 关闭：断开连接（会话级手动断开标记，当下不自动重连）。
+  Future<void> _onManualConnectChanged(PeerDevice peer, bool value) async {
+    if (value) {
+      await _service.connectTrustedPeer(peer.deviceId);
+      if (mounted) _showSnack('正在连接 ${peer.deviceName}…');
+    } else {
+      await _service.disconnectPeer(peer.deviceId);
+      if (mounted) _showSnack('已断开 ${peer.deviceName}');
     }
   }
 
@@ -227,13 +246,6 @@ class _SyncPageState extends ConsumerState<SyncPage> {
     if (mounted) _showSnack('已取消与「${peer.deviceName}」的配对');
   }
 
-  /// 「立即同步」：向所有已连接对端发送 sync_request 触发全量对齐。
-  void _syncNow() {
-    if (!_service.isConnected) return;
-    _setSyncing(true);
-    _service.syncNow();
-  }
-
   /// 设置「同步中」标记；超时兜底（防止对端无响应时一直转圈）。
   void _setSyncing(bool value) {
     _syncTimeout?.cancel();
@@ -264,27 +276,7 @@ class _SyncPageState extends ConsumerState<SyncPage> {
 
   // ---------- 状态文案 ----------
 
-  /// 状态栏主文案：同步开关状态 + 已连接设备数。
-  String get _statusLabel {
-    if (!_syncEnabled) return '未开启同步';
-    return '已开启 · ${_service.connectedPeerCount} 台设备已连接';
-  }
-
-  /// 状态栏详情文案。
-  String get _statusDetail {
-    if (!_syncEnabled) {
-      return '开启后本机发布 UDP 广播通告并监听固定端口，自动发现并连接局域网内已配对设备';
-    }
-    if (_syncing) return '正在与对端同步数据…';
-    final portLabel = '本机监听端口 ${_service.port ?? '-'}';
-    if (_service.connectedPeerCount == 0) {
-      return '正在等待其他设备…（$portLabel）';
-    }
-    return '已连接 ${_service.connectedPeerCount} 台设备（$portLabel）';
-  }
-
-  /// 已配对设备行文案由顶层函数 [_peerStatusLabel] 提供（_PeerTile 复用），
-  /// 语义见该函数注释。
+  /// 已配对设备行：设备名 + 手动连接开关（状态即连接状态）+ 自动连接开关。
 
   // ---------- UI ----------
 
@@ -309,16 +301,12 @@ class _SyncPageState extends ConsumerState<SyncPage> {
             const SizedBox(height: 12),
           ],
           _buildSwitchCard(context),
-          const SizedBox(height: 12),
-          _buildStatusCard(context),
           if (_syncEnabled) ...[
             const SizedBox(height: 12),
             _buildTrustedDevicesCard(context),
             const SizedBox(height: 12),
             _buildDiscoveryCard(context),
           ],
-          const SizedBox(height: 20),
-          _buildSyncNowButton(context),
         ],
       ),
     );
@@ -354,62 +342,34 @@ class _SyncPageState extends ConsumerState<SyncPage> {
       ),
     );
   }
-
-  /// 顶部同步总开关 + 状态说明（本机设备名、固定端口）。
+  /// 顶部同步总开关（task-31/32 去文案）+ 端口行（task-32）：
+  /// 单行「同步」标题 + 精致开关；下方端口输入框 + 重启按钮。
   Widget _buildSwitchCard(BuildContext context) {
     final theme = Theme.of(context);
-    return GlassCard(
-      padding: EdgeInsets.zero,
-      child: SwitchListTile(
-        secondary: Icon(
-          _syncEnabled ? Icons.sync : Icons.sync_disabled,
-          color: _syncEnabled
-              ? theme.colorScheme.primary
-              : theme.colorScheme.onSurfaceVariant,
-        ),
-        title: const Text('同步'),
-        subtitle: Text(
-          _syncEnabled
-              ? '本机「${_service.deviceName}」正在发布服务（端口 ${_service.port ?? '-'}）并自动连接已配对设备'
-              : '开启后本机「${_service.deviceName}」发布 UDP 广播通告并监听固定端口 '
-                    '$kDefaultSyncPort，自动发现并连接局域网内已配对设备',
-          style: theme.textTheme.bodySmall?.copyWith(
-            color: theme.colorScheme.onSurfaceVariant,
-          ),
-        ),
-        value: _syncEnabled,
-        onChanged: _busy ? null : _onSyncSwitchChanged,
-      ),
-    );
-  }
-
-  /// SyncStatusBar：同步状态、最近同步时间、同步进行中指示。
-  ///
-  /// 动效（task-25）：同步中图标旋转（_SyncStatusIcon 内 RotationTransition）；
-  /// 连接成功图标轻微弹跳（easeOutBack scale，仅状态翻转时一次）。
-  Widget _buildStatusCard(BuildContext context) {
-    final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
-    final connected = _service.isConnected;
-    final Color iconColor = !_syncEnabled || !connected
-        ? colorScheme.onSurfaceVariant
-        : colorScheme.primary;
 
     return GlassCard(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.fromLTRB(16, 12, 12, 12),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              _SyncStatusIcon(
-                syncing: _syncing,
-                connected: _syncEnabled && connected,
-                color: iconColor,
+              Icon(
+                _syncEnabled ? Icons.sync : Icons.sync_disabled,
+                size: 22,
+                color: _syncEnabled
+                    ? colorScheme.primary
+                    : colorScheme.onSurfaceVariant,
               ),
               const SizedBox(width: 10),
               Expanded(
-                child: Text(_statusLabel, style: theme.textTheme.titleMedium),
+                child: Text(
+                  '同步',
+                  style: theme.textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
               ),
               if (_syncing) ...[
                 SizedBox(
@@ -422,25 +382,81 @@ class _SyncPageState extends ConsumerState<SyncPage> {
                 ),
                 const SizedBox(width: 8),
               ],
+              SlimSwitch(
+                value: _syncEnabled,
+                onChanged: _busy ? null : _onSyncSwitchChanged,
+              ),
             ],
           ),
-          const SizedBox(height: 8),
-          Text(
-            _statusDetail,
-            style: theme.textTheme.bodySmall?.copyWith(
-              color: colorScheme.onSurfaceVariant,
-            ),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            '最近同步：${_formatSyncTime(_lastSyncTime)}',
-            style: theme.textTheme.bodySmall?.copyWith(
-              color: colorScheme.onSurfaceVariant,
-            ),
+          const SizedBox(height: 10),
+          // 端口行：修改端口后点「重启」重新开启同步服务。
+          Row(
+            children: [
+              Text(
+                '端口',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: colorScheme.onSurfaceVariant,
+                ),
+              ),
+              const SizedBox(width: 8),
+              SizedBox(
+                width: 90,
+                child: TextField(
+                  controller: _portController,
+                  keyboardType: TextInputType.number,
+                  enabled: !_busy,
+                  decoration: const InputDecoration(
+                    isDense: true,
+                    border: OutlineInputBorder(),
+                    contentPadding:
+                        EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              TextButton(
+                onPressed: _busy ? null : _restartSyncWithPort,
+                child: const Text('重启'),
+              ),
+            ],
           ),
         ],
       ),
     );
+  }
+
+  /// 改端口后重启同步服务：校验端口 → 关闭 → 以新端口开启 → 临时广播
+  /// 新端口（对端凭旧端口直连失败后，扫描/广播可发现新地址）。
+  Future<void> _restartSyncWithPort() async {
+    final port = int.tryParse(_portController.text.trim());
+    if (port == null || port < 1 || port > 65535) {
+      _showSnack('端口无效（1-65535）');
+      return;
+    }
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      await _service.disable();
+      await _service.enable(port: port);
+      // 广播新端口 30s（互联手动化：对端凭旧缓存直连失败后靠扫描发现）。
+      unawaited(_service.announceTemporarily());
+      if (mounted) {
+        setState(() => _syncEnabled = _service.isEnabled);
+        _showSnack('已重启同步（端口 $port）');
+      }
+    } on SocketException {
+      if (mounted) {
+        setState(() => _syncEnabled = _service.isEnabled);
+        _showSnack('端口 $port 被占用，请换一个端口');
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() => _syncEnabled = _service.isEnabled);
+        _showSnack('重启失败，请重试');
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
   /// 已配对设备列表（信任列表 + 连接状态，task-14；task-16 加每设备
@@ -479,35 +495,14 @@ class _SyncPageState extends ConsumerState<SyncPage> {
               ],
             ),
           ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-            child: Text(
-              '自动连接开关类似 WiFi「自动加入」：关闭后保持配对但不自动连，手动可连',
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: colorScheme.onSurfaceVariant,
-              ),
-            ),
-          ),
           if (peers.isEmpty)
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-              child: Row(
-                children: [
-                  Icon(
-                    Icons.info_outline,
-                    size: 18,
-                    color: colorScheme.outline,
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Text(
-                      '暂无已配对设备 — 在下方「发现的设备」点击设备，对方同意后完成首次配对',
-                      style: theme.textTheme.bodyMedium?.copyWith(
-                        color: colorScheme.onSurfaceVariant,
-                      ),
-                    ),
-                  ),
-                ],
+              child: Text(
+                '暂无已配对设备',
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: colorScheme.onSurfaceVariant,
+                ),
               ),
             )
           else
@@ -515,9 +510,10 @@ class _SyncPageState extends ConsumerState<SyncPage> {
               _PeerTile(
                 peer: peers[i],
                 statusColor: _peerStatusColor(peers[i]),
-                onDisconnect: peers[i].status == PeerStatus.connected
-                    ? () => _disconnectPeer(peers[i])
-                    : null,
+                isConnected: peers[i].status == PeerStatus.connected,
+                isConnecting: peers[i].status == PeerStatus.connecting,
+                onManualConnectChanged: (value) =>
+                    _onManualConnectChanged(peers[i], value),
                 onAutoConnectChanged: (value) =>
                     _setAutoConnect(peers[i], value),
                 onUnpair: () => _confirmUnpairPeer(peers[i]),
@@ -564,47 +560,62 @@ class _SyncPageState extends ConsumerState<SyncPage> {
         children: [
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-            child: Row(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Icon(Icons.wifi_find, size: 20, color: colorScheme.primary),
-                const SizedBox(width: 8),
-                Text('发现的设备', style: theme.textTheme.titleMedium),
-                const Spacer(),
-                // v4 手动扫描：「重新扫描」触发一次 3s 收集窗口，列表定格。
-                IconButton(
-                  tooltip: '重新扫描',
-                  icon: _scanning
-                      ? const SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.refresh),
-                  onPressed: _scanning || !_syncEnabled ? null : _rescan,
+                Row(
+                  children: [
+                    Icon(
+                      Icons.wifi_find,
+                      size: 20,
+                      color: colorScheme.primary,
+                    ),
+                    const SizedBox(width: 8),
+                    Text('发现的设备', style: theme.textTheme.titleMedium),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                // task-31 互联手动化：两个手动按钮（可被发现 / 扫描设备）
+                Row(
+                  children: [
+                    _buildActionButton(
+                      context: context,
+                      label: _announcing ? '广播中…' : '可被发现',
+                      icon: _announcing
+                          ? const SizedBox(
+                              width: 14,
+                              height: 14,
+                              child:
+                                  CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.wifi_tethering, size: 18),
+                      onPressed: _announcing || !_syncEnabled
+                          ? null
+                          : _announceNow,
+                    ),
+                    const SizedBox(width: 8),
+                    _buildActionButton(
+                      context: context,
+                      label: _scanning ? '扫描中…' : '扫描设备',
+                      icon: _scanning
+                          ? const SizedBox(
+                              width: 14,
+                              height: 14,
+                              child:
+                                  CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.search, size: 18),
+                      onPressed: _scanning || !_syncEnabled
+                          ? null
+                          : _rescan,
+                    ),
+                  ],
                 ),
               ],
             ),
           ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
-            child: Text(
-              '常态不自动扫描：点「重新扫描」搜索局域网设备（约 3 秒）；'
-              '已配对设备断线后自动低频扫描重连',
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: colorScheme.onSurfaceVariant,
-              ),
-            ),
-          ),
           if (!_syncEnabled)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
-              child: Text(
-                '开启同步后手动扫描局域网内的设备',
-                style: theme.textTheme.bodyMedium?.copyWith(
-                  color: colorScheme.onSurfaceVariant,
-                ),
-              ),
-            )
+            const SizedBox(height: 8)
           else if (_scanning)
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
@@ -615,29 +626,14 @@ class _SyncPageState extends ConsumerState<SyncPage> {
                     height: 14,
                     child: CircularProgressIndicator(
                       strokeWidth: 2,
-                      color: colorScheme.outline,
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Text(
-                    '正在搜索设备…',
-                    style: theme.textTheme.bodyMedium?.copyWith(
-                      color: colorScheme.onSurfaceVariant,
+                      color: Theme.of(context).colorScheme.outline,
                     ),
                   ),
                 ],
               ),
             )
           else if (devices.isEmpty)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
-              child: Text(
-                '未发现设备 — 点击右上角「重新扫描」搜索同一局域网内的设备',
-                style: theme.textTheme.bodyMedium?.copyWith(
-                  color: colorScheme.onSurfaceVariant,
-                ),
-              ),
-            )
+            const SizedBox(height: 8)
           else
             for (final device in devices)
               _DeviceTile(
@@ -654,11 +650,12 @@ class _SyncPageState extends ConsumerState<SyncPage> {
     );
   }
 
-  /// 手动「重新扫描」：触发一次扫描（3s 收集窗口），完成后列表定格。
+  /// 「扫描设备」（task-31）：触发一次 30s 扫描窗口，期间收集设备列表。
+  /// （常态不自动扫描，互联手动化。）
   Future<void> _rescan() async {
     setState(() => _scanning = true);
     try {
-      await _service.scanOnce();
+      await _service.scanOnce(window: const Duration(seconds: 30));
     } catch (_) {
       if (mounted) _showSnack('扫描失败，请重试');
     } finally {
@@ -666,36 +663,39 @@ class _SyncPageState extends ConsumerState<SyncPage> {
     }
   }
 
-  /// 「立即同步」按钮：有已连接对端时可触发全量对齐。
-  Widget _buildSyncNowButton(BuildContext context) {
-    final theme = Theme.of(context);
-    final enabled = _service.isConnected && !_busy;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        FilledButton.icon(
-          onPressed: enabled ? _syncNow : null,
-          icon: _syncing
-              ? const SizedBox(
-                  width: 16,
-                  height: 16,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                )
-              : const Icon(Icons.sync),
-          label: Text(_syncing ? '同步中…' : '立即同步'),
-          style: FilledButton.styleFrom(
-            minimumSize: const Size.fromHeight(48),
-          ),
-        ),
-        const SizedBox(height: 8),
-        Text(
-          '对所有已连接设备触发一次全量同步',
-          textAlign: TextAlign.center,
-          style: theme.textTheme.bodySmall?.copyWith(
-            color: theme.colorScheme.onSurfaceVariant,
-          ),
-        ),
-      ],
+  /// 「可被发现」（task-31）：向外广播 30s（每 5s 一次），UI 同步倒计时。
+  Future<void> _announceNow() async {
+    setState(() => _announcing = true);
+    try {
+      await _service.announceTemporarily();
+      _announceTimer?.cancel();
+      _announceTimer = Timer(const Duration(seconds: 30), () {
+        if (mounted) setState(() => _announcing = false);
+      });
+    } catch (_) {
+      if (mounted) {
+        setState(() => _announcing = false);
+        _showSnack('广播失败，请重试');
+      }
+    }
+  }
+
+  /// 发现区操作按钮（可被发现 / 扫描设备）：紧凑小按钮。
+  Widget _buildActionButton({
+    required BuildContext context,
+    required String label,
+    required Widget icon,
+    required VoidCallback? onPressed,
+  }) {
+    return OutlinedButton.icon(
+      onPressed: onPressed,
+      icon: icon,
+      label: Text(label),
+      style: OutlinedButton.styleFrom(
+        visualDensity: VisualDensity.compact,
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        textStyle: Theme.of(context).textTheme.labelMedium,
+      ),
     );
   }
 }
@@ -916,8 +916,7 @@ class _DeviceTile extends StatelessWidget {
         leading: _StatusDot(color: dotColor),
         title: Text(name, maxLines: 1, overflow: TextOverflow.ellipsis),
         subtitle: Text(
-          '${device.address.address}:${device.port}'
-          '${device.deviceId != null ? ' · ID ${_shortId(device.deviceId!)}' : ''}',
+          '${device.address.address}:${device.port}',
           style: theme.textTheme.bodySmall?.copyWith(
             color: colorScheme.onSurfaceVariant,
           ),
@@ -967,120 +966,6 @@ class _StatusBadge extends StatelessWidget {
 /// 设备 ID 缩写（展示用：前 8 位 + …）。
 String _shortId(String id) =>
     id.length <= 8 ? id : '${id.substring(0, 8)}…';
-
-/// 已配对设备的连接状态文案（task-16，WiFi 式断开 + 每设备自动连接配置）：
-/// - 未配对 →「未配对」；
-/// - 已配对 + 手动断开 →「已断开（手动）」（会话级，不自动重连）；
-/// - 已配对 + autoConnect=false 且未连接 →「已保存（不自动连接）」；
-/// - 已配对 + 正常 →「自动连接中 / 连接中 / 已连接」。
-///
-/// 顶层函数（供 [_PeerTile] 与状态栏复用，_PeerTile 在 _SyncPageState 外）。
-String _peerStatusLabel(PeerDevice peer) {
-  if (!peer.isTrusted) return '未配对';
-  if (peer.manuallyDisconnected) return '已断开（手动）';
-  return switch (peer.status) {
-    PeerStatus.connected => '已连接',
-    PeerStatus.connecting => '连接中',
-    PeerStatus.disconnected =>
-      peer.autoConnect ? '自动连接中' : '已保存（不自动连接）',
-  };
-}
-
-/// 最近同步时间文案：今天显示「今天 HH:mm」，更早显示「MM-dd HH:mm」。
-String _formatSyncTime(DateTime? time) {
-  if (time == null) return '从未同步';
-  final local = time.toLocal();
-  final now = DateTime.now();
-  String two(int n) => n.toString().padLeft(2, '0');
-  final hm = '${two(local.hour)}:${two(local.minute)}';
-  final isToday =
-      local.year == now.year &&
-      local.month == now.month &&
-      local.day == now.day;
-  return isToday ? '今天 $hm' : '${two(local.month)}-${two(local.day)} $hm';
-}
-
-// ============================================================
-// task-25 新增组件（同步页动效 / 卡片化 / 分组设置）
-// ============================================================
-
-/// 同步状态图标：同步中旋转（RotationTransition 循环）；
-/// 连接成功轻微弹跳（easeOutBack scale，仅断开→连接翻转时一次）。
-class _SyncStatusIcon extends StatefulWidget {
-  const _SyncStatusIcon({
-    required this.syncing,
-    required this.connected,
-    required this.color,
-  });
-
-  final bool syncing;
-  final bool connected;
-  final Color color;
-
-  @override
-  State<_SyncStatusIcon> createState() => _SyncStatusIconState();
-}
-
-class _SyncStatusIconState extends State<_SyncStatusIcon>
-    with TickerProviderStateMixin {
-  /// 同步中旋转动画（循环）。
-  late final AnimationController _spin = AnimationController(
-    vsync: this,
-    duration: const Duration(milliseconds: 1200),
-  );
-
-  /// 连接成功弹跳动画（一次）。
-  late final AnimationController _bounce = AnimationController(
-    vsync: this,
-    duration: const Duration(milliseconds: 500),
-  );
-
-  @override
-  void initState() {
-    super.initState();
-    if (widget.syncing) _spin.repeat();
-  }
-
-  @override
-  void didUpdateWidget(_SyncStatusIcon oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (widget.syncing && !oldWidget.syncing) _spin.repeat();
-    if (!widget.syncing && oldWidget.syncing) _spin.stop();
-    if (widget.connected && !oldWidget.connected) {
-      _bounce.forward(from: 0);
-    }
-  }
-
-  @override
-  void dispose() {
-    _spin.dispose();
-    _bounce.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final IconData icon = widget.syncing
-        ? Icons.sync
-        : (widget.connected ? Icons.cloud_done : Icons.cloud_queue);
-
-    Widget child = Icon(icon, size: 22, color: widget.color);
-    // 连接成功弹跳：scale 1 → 1.12 → 1（easeOutBack，轻微回弹）
-    child = AnimatedBuilder(
-      animation: _bounce,
-      builder: (context, c) => Transform.scale(
-        scale: 1 + 0.12 * Curves.easeOutBack.transform(_bounce.value),
-        child: c,
-      ),
-      child: child,
-    );
-    // 同步中旋转
-    if (widget.syncing) {
-      child = RotationTransition(turns: _spin, child: child);
-    }
-    return child;
-  }
-}
 
 /// 彩色状态圆点：已连接绿 / 连接中橙（呼吸动画）/ 未连接灰。
 ///
@@ -1157,22 +1042,35 @@ class _StatusDotState extends State<_StatusDot>
   }
 }
 
-/// 已配对设备行：彩色状态点 + 设备名/状态 + 操作（断开/自动连接开关/更多）。
+/// 已配对设备行（task-31 重构）：状态彩色圆点 + 设备名/状态（去 ID 展示）
+/// + 右侧两个垂直精致开关（手动连接在上 / 自动连接在下）+ 更多菜单
+/// （取消配对）。
 ///
-/// 卡片化布局对齐列表卡片风格（圆角 16 卡内分隔行，见
-/// _buildTrustedDevicesCard）。
+/// - 手动连接开关：值 = 是否连接中/连接意愿（[manualConnectValue]）；
+///   打开 → 手动连接该设备；关闭 → 断开（当下不自动重连）；
+/// - 自动连接开关：开=上线自动连；关=不自动连 + 拒绝对方连（Q4）；
+/// - 取消配对菜单 hover 圆角修复（[ClipRRect] + 圆形 IconButton 样式，
+///   不再留背景容器直角）。
 class _PeerTile extends StatelessWidget {
   const _PeerTile({
     required this.peer,
     required this.statusColor,
+    required this.isConnected,
+    required this.isConnecting,
+    required this.onManualConnectChanged,
     required this.onAutoConnectChanged,
     required this.onUnpair,
-    this.onDisconnect,
   });
 
   final PeerDevice peer;
   final Color statusColor;
-  final VoidCallback? onDisconnect;
+
+  /// 是否已连接（手动连接 Switch 的开=已连接、关=已断开）。
+  final bool isConnected;
+
+  /// 是否连接中（Switch 禁用 + 转圈指示，避免「connecting 被当已连接」）。
+  final bool isConnecting;
+  final ValueChanged<bool> onManualConnectChanged;
   final ValueChanged<bool> onAutoConnectChanged;
   final VoidCallback onUnpair;
 
@@ -1180,16 +1078,13 @@ class _PeerTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
-    final connecting =
-        peer.status == PeerStatus.connecting ||
-        (peer.status == PeerStatus.disconnected && peer.autoConnect);
 
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
+      padding: const EdgeInsets.fromLTRB(16, 10, 4, 10),
       child: Row(
         children: [
           // 状态彩色圆点：已连接绿 / 连接中橙（呼吸）/ 未连接灰
-          _StatusDot(color: statusColor, pulse: connecting),
+          _StatusDot(color: statusColor, pulse: isConnecting),
           const SizedBox(width: 12),
           Expanded(
             child: Column(
@@ -1204,47 +1099,102 @@ class _PeerTile extends StatelessWidget {
                     fontWeight: FontWeight.w600,
                   ),
                 ),
-                const SizedBox(height: 2),
-                Text(
-                  '${_peerStatusLabel(peer)} · ID ${_shortId(peer.deviceId)}',
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: colorScheme.onSurfaceVariant,
-                  ),
+                const SizedBox(height: 8),
+                // 设备名底下：手动连接 Switch（开关状态=连接状态）。
+                // 开=已连接 / 关=已断开 / 转圈禁用=连接中。
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (isConnecting) ...[
+                      const SizedBox(
+                        width: 12,
+                        height: 12,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                      const SizedBox(width: 6),
+                    ],
+                    SlimSwitch(
+                      value: isConnected,
+                      onChanged: isConnecting
+                          ? null
+                          : onManualConnectChanged,
+                    ),
+                  ],
                 ),
               ],
             ),
           ),
-          if (onDisconnect != null)
-            IconButton(
-              tooltip: '断开（手动断开后不自动重连）',
-              icon: const Icon(Icons.link_off),
-              color: colorScheme.error,
-              onPressed: onDisconnect,
-            ),
-          Tooltip(
-            message: peer.autoConnect
-                ? '自动连接已开启'
-                : '自动连接已关闭（保持配对，手动可连）',
-            child: Switch(
-              value: peer.autoConnect,
-              onChanged: onAutoConnectChanged,
-            ),
+          // 右侧：「自动连接」开关（保留标签区分）
+          _buildSwitchRow(
+            context: context,
+            label: '自动连接',
+            value: peer.autoConnect,
+            onChanged: onAutoConnectChanged,
+            colorScheme: colorScheme,
           ),
-          PopupMenuButton<String>(
-            tooltip: '更多操作',
-            icon: const Icon(Icons.more_vert),
-            onSelected: (value) {
-              if (value == 'unpair') onUnpair();
-            },
-            itemBuilder: (_) => const [
-              PopupMenuItem(
-                value: 'unpair',
-                child: Text('取消配对'),
+          // 更多菜单（取消配对）：hover 圆角适配容器（task-32）——
+          // 按钮 hover 圆角矩形；菜单 MenuAnchor + MenuItemButton（hover
+          // 圆角，单选项时正好填满圆角菜单容器，不留直角/缝隙）。
+          MenuAnchor(
+            style: MenuStyle(
+              shape: WidgetStatePropertyAll(
+                RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+              ),
+              backgroundColor: WidgetStatePropertyAll(colorScheme.surface),
+              padding: const WidgetStatePropertyAll(EdgeInsets.all(4)),
+            ),
+            builder: (context, controller, _) => IconButton(
+              tooltip: '更多操作',
+              icon: const Icon(Icons.more_vert),
+              style: IconButton.styleFrom(
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10),
+                ),
+              ),
+              onPressed: () => controller.open(),
+            ),
+            menuChildren: [
+              MenuItemButton(
+                onPressed: onUnpair,
+                style: MenuItemButton.styleFrom(
+                  minimumSize: const Size(120, 40),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                ),
+                child: const Text('取消配对'),
               ),
             ],
           ),
         ],
       ),
+    );
+  }
+
+  /// 开关行：左侧小标签 + 右侧 [SlimSwitch]（紧凑行）。
+  Widget _buildSwitchRow({
+    required BuildContext context,
+    required String label,
+    required bool value,
+    required ValueChanged<bool> onChanged,
+    required ColorScheme colorScheme,
+  }) {
+    final theme = Theme.of(context);
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          label,
+          style: theme.textTheme.bodySmall?.copyWith(
+            fontSize: 12,
+            color: colorScheme.onSurfaceVariant,
+          ),
+        ),
+        const SizedBox(width: 6),
+        SlimSwitch(value: value, onChanged: onChanged),
+      ],
     );
   }
 }

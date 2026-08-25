@@ -275,3 +275,134 @@ Future<T?> showGlassDialog<T>({
     ),
   );
 }
+
+// ============================================================
+// 精致开关（task-31：全站替换默认 Switch——更小、圆润、丝滑）
+// ============================================================
+
+/// 精致滑动开关：比默认 Switch 更紧凑（track 36×20、thumb 16），圆润造型
+/// （track 全圆角、thumb 圆形），开关动画丝滑（AnimatedAlign easeOutCubic），
+/// 支持亮暗色与禁用态。
+///
+/// 替代项目里默认 Switch（「有点胖」反馈，task-31），同步页设备行两个
+/// 开关（手动连接/自动连接）垂直排列时也用它保持视觉统一。
+class SlimSwitch extends StatefulWidget {
+  const SlimSwitch({
+    super.key,
+    required this.value,
+    required this.onChanged,
+    this.activeColor,
+    this.inactiveColor,
+  });
+
+  /// 当前开关状态。
+  final bool value;
+
+  /// 状态变更回调（null 时禁用交互）。
+  final ValueChanged<bool>? onChanged;
+
+  /// 开启时的轨道颜色（缺省用主题 primary）。
+  final Color? activeColor;
+
+  /// 关闭时的轨道颜色（缺省用主题 outlineVariant）。
+  final Color? inactiveColor;
+
+  @override
+  State<SlimSwitch> createState() => _SlimSwitchState();
+}
+
+class _SlimSwitchState extends State<SlimSwitch>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 220),
+    value: widget.value ? 1 : 0,
+  );
+
+  late final Animation<double> _anim = CurvedAnimation(
+    parent: _controller,
+    curve: Curves.easeOutCubic,
+    reverseCurve: Curves.easeInCubic,
+  );
+
+  @override
+  void didUpdateWidget(SlimSwitch oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.value != widget.value) {
+      if (widget.value) {
+        _controller.forward();
+      } else {
+        _controller.reverse();
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final active = widget.activeColor ?? scheme.primary;
+    final inactive = widget.inactiveColor ?? scheme.outlineVariant;
+    final enabled = widget.onChanged != null;
+
+    return Semantics(
+      toggled: widget.value,
+      enabled: enabled,
+      label: '开关',
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: enabled ? () => widget.onChanged!(!widget.value) : null,
+        child: AnimatedBuilder(
+          animation: _anim,
+          builder: (context, _) {
+            final trackColor = Color.lerp(inactive, active, _anim.value)!;
+            final offset = _anim.value; // 0=左 1=右
+            return Container(
+              width: 36,
+              height: 20,
+              padding: const EdgeInsets.all(2),
+              decoration: BoxDecoration(
+                color: enabled ? trackColor : trackColor.withValues(alpha: 0.4),
+                borderRadius: BorderRadius.circular(10),
+                boxShadow: enabled
+                    ? [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.12),
+                          blurRadius: 4,
+                          offset: const Offset(0, 1),
+                        ),
+                      ]
+                    : null,
+              ),
+              child: Align(
+                alignment: Alignment(offset * 2 - 1, 0),
+                child: Container(
+                  width: 16,
+                  height: 16,
+                  decoration: BoxDecoration(
+                    color: enabled
+                        ? Colors.white
+                        : Colors.white.withValues(alpha: 0.8),
+                    shape: BoxShape.circle,
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.2),
+                        blurRadius: 2,
+                        offset: const Offset(0, 1),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          },
+        ),
+      ),
+    );
+  }
+}

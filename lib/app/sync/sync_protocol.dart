@@ -45,6 +45,7 @@ sealed class SyncMessage {
         'note_upsert' => NoteUpsertMessage.fromJson(json),
         'note_delete' => NoteDeleteMessage.fromJson(json),
         'devices_update' => DevicesUpdateMessage.fromJson(json),
+        'auto_connect_rejected' => AutoConnectRejectedMessage.fromJson(json),
         'file_request' => FileRequestMessage.fromJson(json),
         'file_chunk' => FileChunkMessage.fromJson(json),
         'file_complete' => FileCompleteMessage.fromJson(json),
@@ -70,6 +71,7 @@ class HelloMessage extends SyncMessage {
     required this.deviceName,
     this.trusted = false,
     this.protocolVersion = kProtocolVersion,
+    this.port,
   });
 
   /// 客户端设备 ID。
@@ -84,6 +86,10 @@ class HelloMessage extends SyncMessage {
   /// 协议版本（缺省 [kProtocolVersion]；旧对端不带该字段 → 1）。
   final int protocolVersion;
 
+  /// 发送方 WebSocket 监听端口（task-32：入站方收到 hello 后缓存对端
+  /// ip:port，重新上线时凭缓存直连；旧对端不带该字段 → null）。
+  final int? port;
+
   @override
   String get type => 'hello';
 
@@ -94,6 +100,7 @@ class HelloMessage extends SyncMessage {
     'deviceName': deviceName,
     'trusted': trusted,
     'protocolVersion': protocolVersion,
+    if (port != null) 'port': port,
   };
 
   factory HelloMessage.fromJson(Map<String, dynamic> json) => HelloMessage(
@@ -101,6 +108,7 @@ class HelloMessage extends SyncMessage {
     deviceName: (json['deviceName'] as String?) ?? '',
     trusted: (json['trusted'] as bool?) ?? false,
     protocolVersion: (json['protocolVersion'] as int?) ?? 1,
+    port: (json['port'] as num?)?.toInt(),
   );
 }
 
@@ -613,6 +621,31 @@ class DevicesUpdateMessage extends SyncMessage {
     }
     return DevicesUpdateMessage(devices: devices);
   }
+}
+
+/// 自动连接被拒通知（v5，task-31）：在线方对某设备 autoConnect=false 时，
+/// 拒绝该设备发起的连接并发送本消息——对端收到后自动关闭对本机的
+/// 自动连接开关（持久化），避免反复尝试自动连被拒（Q4）。
+///
+/// 载荷为发送方（拒绝方/在线方）自身 deviceId；接收方将其作为「被拒方」
+/// 对本机执行 setAutoConnect(发送方, false) + 刷新 UI。
+///
+/// 与 [PairingFailMessage] 区分：pairing_fail 表示配对被拒（未配对场景）；
+/// 本消息表示已配对但自动连接被关闭（连接被拒）。
+class AutoConnectRejectedMessage extends SyncMessage {
+  const AutoConnectRejectedMessage({required this.deviceId});
+
+  /// 拒绝方（在线方）设备 ID。
+  final String deviceId;
+
+  @override
+  String get type => 'auto_connect_rejected';
+
+  @override
+  Map<String, dynamic> toJson() => {'type': type, 'deviceId': deviceId};
+
+  factory AutoConnectRejectedMessage.fromJson(Map<String, dynamic> json) =>
+      AutoConnectRejectedMessage(deviceId: (json['deviceId'] as String?) ?? '');
 }
 
 /// 心跳探活 ping（离线检测，v4 恢复）：连接内周期发送，对端回 pong。

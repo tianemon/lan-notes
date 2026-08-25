@@ -57,6 +57,10 @@ class _EditorPageState extends ConsumerState<EditorPage> {
   /// 内容变更到触发保存的防抖时长。
   static const Duration _debounceDuration = Duration(seconds: 1);
 
+  /// 持续输入强制保存的最大间隔（idle 防抖之外的上限）：
+  /// 防止一直输入导致防抖反复重置、长期不落盘。
+  static const Duration _maxSaveInterval = Duration(seconds: 5);
+
   final TextEditingController _titleController = TextEditingController();
   final FocusNode _titleFocusNode = FocusNode();
 
@@ -281,6 +285,14 @@ class _EditorPageState extends ConsumerState<EditorPage> {
   /// 防抖定时器。
   Timer? _debounce;
 
+  /// 持续输入强制保存定时器：从「本轮未保存变更的起点」开始计时，
+  /// 到点无论是否仍在输入都触发一次保存。
+  Timer? _maxIntervalTimer;
+
+  /// 字数统计缓存：避免每个字符 setState 重建时整页 build 反复
+  /// 全量 toPlainText()。仅在变更回调中刷新。
+  int _wordCountCache = 0;
+
   /// 编辑态单条笔记流订阅（initState 中经 [ref.listenManual] 建立，
   /// dispose 时关闭；Riverpod 2.x 的 ref.listen 仅限 build 内使用）。
   ProviderSubscription<AsyncValue<Note?>>? _noteSub;
@@ -319,6 +331,7 @@ class _EditorPageState extends ConsumerState<EditorPage> {
   void dispose() {
     _noteSub?.close();
     _debounce?.cancel();
+    _maxIntervalTimer?.cancel();
     _docSub?.cancel();
     _titleController.dispose();
     _titleFocusNode.dispose();
@@ -391,6 +404,7 @@ class _EditorPageState extends ConsumerState<EditorPage> {
     // 取消待保存：pending 防抖基于被覆盖前的输入，不应再写库（否则被
     // 丢弃的输入会以更高 version 复活，违反「最后保存者赢」）。
     _debounce?.cancel();
+    _maxIntervalTimer?.cancel();
     _suppressChanges = true;
     _titleController.text = note.title;
     _contentController.document = _documentFromStored(note.content);
@@ -401,6 +415,9 @@ class _EditorPageState extends ConsumerState<EditorPage> {
     _savedContent = note.content;
     _dirty = false;
     _setStatus(_SaveStatus.saved);
+    // 刷新字数统计缓存（首次填充 + 远端覆盖均走此路径）。
+    _wordCountCache = _titleController.text.length +
+        _contentController.document.toPlainText().length;
     _syncTags(note.tags);
     if (!_initialized) {
       setState(() => _initialized = true);
@@ -460,55 +477,39 @@ class _EditorPageState extends ConsumerState<EditorPage> {
   String get _contentDelta =>
       jsonEncode(_contentController.document.toDelta().toJson());
 
-  /// 正文是否实际有内容（delta 非空文档，或纯文本非空白）。
+  /// 标题/正文任一变更：置脏并调度保存（保存逻辑统一读取 controller）。
   ///
-  /// 空文档序列化为 `[]`；用户输入后清空可能残留单换行
-  /// `[{"insert":"\n"}]`——按纯文本 trim 判断，避免残留换行被当成内容。
-  bool get _isContentEmpty =>
-      _contentDelta == '[]' ||
-      _contentController.document.toPlainText().trim().isEmpty;
-
-  /// 当前输入相对已持久化状态是否有变化。
-  bool get _hasChanges {
-    final title = _titleController.text;
-    final content = _contentDelta;
-    if (_noteId == null) {
-      // 新建模式：尚无笔记，只有存在内容才需要创建。
-      return title.isNotEmpty || !_isContentEmpty;
-    }
-    return title != _savedTitle || content != _savedContent;
-  }
-
-  /// 无待保存变更时应显示的状态：新建且无内容时不显示，其余显示已保存。
-  _SaveStatus? get _idleStatus => _noteId == null ? null : _SaveStatus.saved;
-
-  /// 标题/正文任一变更：置脏并防抖调度保存（保存逻辑统一读取 controller）。
+  /// 触发即视为待保存（_dirty = true），不逐字符序列化比较——「撤销回到
+  /// 已保存内容」的边界情况由 _performSave 写库前的相等检查兜底跳过。
+  /// 每次变更刷新字数统计缓存 + setState（task-28）。
   ///
-  /// 每次变更后 setState 刷新底部字数统计（task-28）。正文变更经文档流
-  /// [StreamSubscription] 回调进入本方法（_attachDocListener）；标题走
-  /// TextField.onChanged。
+  /// 保存调度双保险：
+  /// - idle 防抖 1s：停手即存；
+  /// - max interval 5s：持续输入时强制落盘一次，避免长期不落盘、闪退丢稿。
+  ///
+  /// 状态语义：变更瞬间不亮「保存中」（此前每字符都 saving，观感卡死）；
+  /// 「保存中」仅在 _performSave 真正写库期间显示，写库间隙回到「已保存」。
   void _onChanged() {
     if (_suppressChanges) return;
-    _dirty = _hasChanges;
-    if (!_dirty) {
-      // 内容回到与已保存一致（或新建为空）：取消待保存。
-      _debounce?.cancel();
-      _setStatus(_idleStatus);
-      setState(() {}); // 字数统计实时刷新
-      return;
-    }
-    _setStatus(_SaveStatus.saving);
+    _dirty = true;
+    _wordCountCache = _titleController.text.length +
+        _contentController.document.toPlainText().length;
+    // idle 防抖重置。
     _debounce?.cancel();
     _debounce = Timer(_debounceDuration, () {
+      _enqueueSave();
+    });
+    // max-interval 从本轮未保存变更的起点计时（只启动一次，
+    // 保存成功后由 _performSave 取消）。
+    _maxIntervalTimer ??= Timer(_maxSaveInterval, () {
       _enqueueSave();
     });
     setState(() {}); // 字数统计实时刷新
   }
 
   /// 标题+正文合计字数（中英文按字符计；正文按 delta 纯文本提取，task-29）。
-  int get _wordCount =>
-      _titleController.text.length +
-      _contentController.document.toPlainText().length;
+  /// 走缓存：仅在变更回调中全量提取，build 反复调用不再重复计算。
+  int get _wordCount => _wordCountCache;
 
   /// 把一次保存追加到串行队列并返回其完成时机。
   Future<void> _enqueueSave() {
@@ -527,14 +528,17 @@ class _EditorPageState extends ConsumerState<EditorPage> {
     if (!_dirty) return;
     final title = _titleController.text;
     final content = _contentDelta;
-    // 撤销后回到已保存内容：无需写库（不递增 version）。
+    // 撤销后回到已保存内容：无需写库（不递增 version），并取消强存定时器。
     if (_noteId != null && title == _savedTitle && content == _savedContent) {
       _dirty = false;
+      _maxIntervalTimer?.cancel();
+      _maxIntervalTimer = null;
       _setStatus(_SaveStatus.saved);
       return;
     }
     final noteId = _noteId;
     if (noteId == null) return; // 防御：路由恒带 id，正常不会走到。
+    // 真正写库开始：才亮「保存中」。
     _setStatus(_SaveStatus.saving);
     try {
       final updated = await ref
@@ -547,17 +551,20 @@ class _EditorPageState extends ConsumerState<EditorPage> {
           _contentDelta != content;
       _dirty = changedDuringSave;
       if (changedDuringSave) {
-        // 保存期间又有新输入：保持“保存中”，链上后续保存会再次执行。
+        // 保存期间又有新输入：保持「保存中」，链上后续保存会再次执行。
         _setStatus(_SaveStatus.saving);
         // 正常输入场景下 _onChanged 已调度新的防抖；若没有 pending 防抖
         // （保存期间被远端覆盖取消，见 _applyRemoteNote），补一次防抖保存，
-        // 避免停留在“保存中”且已保存快照过期。
+        // 避免停留在「保存中」且已保存快照过期。
         if (_debounce == null || !_debounce!.isActive) {
           _debounce = Timer(_debounceDuration, () {
             _enqueueSave();
           });
         }
       } else {
+        // 本轮未保存变更已全部落盘：取消强存定时器（下轮变更重新计时）。
+        _maxIntervalTimer?.cancel();
+        _maxIntervalTimer = null;
         _setStatus(_SaveStatus.saved);
       }
     } catch (_) {
@@ -582,6 +589,7 @@ class _EditorPageState extends ConsumerState<EditorPage> {
     if (_popInProgress) return;
     _popInProgress = true;
     _debounce?.cancel();
+    _maxIntervalTimer?.cancel();
     final noteId = _noteId;
     if (noteId == null) {
       if (mounted) context.pop();
@@ -663,6 +671,7 @@ class _EditorPageState extends ConsumerState<EditorPage> {
     if (confirmed != true || !mounted) return;
     // 取消待保存，避免删除后残留定时器把笔记写回。
     _debounce?.cancel();
+    _maxIntervalTimer?.cancel();
     _dirty = false;
     await ref.read(noteRepositoryProvider).softDeleteNote(noteId);
     if (mounted) context.pop();
@@ -841,7 +850,11 @@ class _EditorPageState extends ConsumerState<EditorPage> {
                 onPressed: () => setState(() => _toolbarCollapsed = false),
               ),
               const Spacer(),
-              _WordCountBar(count: _wordCount),
+              // 右缘留 12px：原贴边太靠右，与展开态对齐（见下）。
+              Padding(
+                padding: const EdgeInsets.only(right: 12),
+                child: _WordCountBar(count: _wordCount),
+              ),
             ],
           ),
         ),
@@ -860,7 +873,8 @@ class _EditorPageState extends ConsumerState<EditorPage> {
           ),
         ),
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          // 右缘 12px 与收起态对齐（字数统计两种状态下位置一致）。
+          padding: const EdgeInsets.fromLTRB(8, 4, 12, 4),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [

@@ -191,6 +191,10 @@ class DiscoveryService {
   /// 列表定格期间不推送）。
   Stream<List<DiscoveredDevice>> get devices => _devicesController.stream;
 
+  /// 当前已知设备快照（task-32：对端展示名恢复用，从 UDP 通告取真实名）。
+  List<DiscoveredDevice> get knownDevices =>
+      _devices.values.map((entry) => entry.device).toList();
+
   /// 当前是否正在发布（[publish] 后为 true，[unpublish] 后为 false）。
   bool get isPublishing => _publishing;
 
@@ -206,12 +210,16 @@ class DiscoveryService {
   /// WebSocket 服务端监听端口（写入通告 JSON `port` 字段）。
   ///
   /// 发布后立即按 [_initialAnnounceDelays] 三连发（上线宣告，LocalSend 式），
-  /// 随后按 [_announceInterval] 周期通告；unpublish 后停止通告（对端凭
-  /// [_deviceExpiry] 离线判定移除，无显式 goodbye）。
+  /// 随后按周期通告（[announceInterval] 参数优先，缺省 [_announceInterval]）；
+  /// unpublish 后停止通告（对端凭 [_deviceExpiry] 离线判定移除，无显式 goodbye）。
+  ///
+  /// [announceInterval]：可选覆盖周期通告间隔（task-31「可被发现」临时广播
+  /// 用 5s 快速宣告；未传则用构造参数默认 30s）。
   Future<void> publish({
     required String deviceName,
     required int port,
     String? deviceId,
+    Duration? announceInterval,
   }) async {
     await unpublish();
     _publishing = true;
@@ -223,8 +231,9 @@ class DiscoveryService {
     _localPort = port;
     await _ensureSendSocket();
     _scheduleInitialAnnouncements();
+    final interval = announceInterval ?? _announceInterval;
     _announceTimer = Timer.periodic(
-      _announceInterval,
+      interval,
       (_) => unawaited(_announceOnce()),
     );
   }
@@ -246,11 +255,12 @@ class DiscoveryService {
   // ===== 发现侧：按需扫描（task-27 v4） =====
 
   /// 手动扫描一次：绑定 UDP [kDiscoveryPort]（reuseAddress + macOS/Linux
-  /// reusePort 同机共存）接收广播通告，收集 [_scanWindow]（默认 3s）后停止
-  /// ——设备列表**定格**（保留本次扫描结果，不再自动更新，等待下一次扫描）。
+  /// reusePort 同机共存）接收广播通告，收集窗口（[window] 参数优先，缺省
+  /// [_scanWindow]，默认 3s）后停止——设备列表**定格**（保留本次扫描结果，
+  /// 不再自动更新，等待下一次扫描）。
   ///
   /// 返回的 Future 在**收集窗口结束后**完成：调用方 `await scanOnce()` 即
-  /// 表示一次完整扫描已结束（SyncService 退避扫描/同步页「重新扫描」用）。
+  /// 表示一次完整扫描已结束（SyncService 手动扫描/同步页「扫描设备」用）。
   ///
   /// - 扫描窗口内收到通告 → 更新设备表 + 推送列表（新设备立即回播自己的
   ///   通告，LocalSend 式互相知晓）；
@@ -260,7 +270,9 @@ class DiscoveryService {
   /// - 设备表跨扫描保留（列表定格语义：两次扫描之间的列表不变化）。
   ///
   /// 幂等：已有扫描进行中时立即返回（不重复扫描）。
-  Future<void> scanOnce() {
+  ///
+  /// [window]：可选覆盖收集窗口（task-31「扫描设备」用 30s 持续监听）。
+  Future<void> scanOnce({Duration? window}) {
     if (_scanning) return Future.value();
     _scanning = true;
     _scanCompleter = Completer<void>();
@@ -269,8 +281,9 @@ class DiscoveryService {
     if (_publishing) {
       unawaited(_announceOnce());
     }
+    final effectiveWindow = window ?? _scanWindow;
     _scanTimer?.cancel();
-    _scanTimer = Timer(_scanWindow, _finishScan);
+    _scanTimer = Timer(effectiveWindow, _finishScan);
     return _scanCompleter!.future;
   }
 

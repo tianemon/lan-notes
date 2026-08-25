@@ -89,6 +89,9 @@ class _SyncPageState extends ConsumerState<SyncPage> {
   /// 手动「重新扫描」进行中（v4：3s 收集窗口内显示「正在搜索设备…」）。
   bool _scanning = false;
 
+  /// 扫描次数（task-32）：每次点击扫描 +1，用于重置转圈动画（KeyedSubtree）。
+  int _scanSeq = 0;
+
   /// 设备 ID 冲突提示（非空时置顶展示横幅，可手动关闭）。
   String? _conflictMessage;
 
@@ -437,8 +440,12 @@ class _SyncPageState extends ConsumerState<SyncPage> {
                 ),
               ),
               const SizedBox(width: 8),
-              TextButton(
+              OutlinedButton(
                 onPressed: _busy ? null : _restartSyncWithPort,
+                style: OutlinedButton.styleFrom(
+                  visualDensity: VisualDensity.compact,
+                  padding: const EdgeInsets.symmetric(horizontal: 14),
+                ),
                 child: const Text('重启'),
               ),
             ],
@@ -584,7 +591,13 @@ class _SyncPageState extends ConsumerState<SyncPage> {
   Widget _buildDiscoveryCard(BuildContext context) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
-    final devices = _discoveredDevices.where((d) => !d.isSelf).toList();
+    // 设备列表：过滤本机 + 已配对（已配对在「已配对设备」卡展示，task-32）。
+    final devices = _discoveredDevices
+        .where((d) =>
+            !d.isSelf &&
+            !(d.deviceId != null &&
+                _service.trustedDeviceIds.contains(d.deviceId)))
+        .toList();
 
     return GlassCard(
       padding: EdgeInsets.zero,
@@ -592,87 +605,74 @@ class _SyncPageState extends ConsumerState<SyncPage> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+            padding: const EdgeInsets.fromLTRB(16, 14, 12, 6),
+            child: Row(
               children: [
+                Icon(Icons.wifi_find, size: 20, color: colorScheme.primary),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text('设备列表', style: theme.textTheme.titleMedium),
+                ),
+                // 扫描按钮：按钮样式；转圈独立在按钮右侧（每次点击重置
+                // 动画——KeyedSubtree 按 _scanSeq 重建）；可重复点击。
                 Row(
+                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    Icon(
-                      Icons.wifi_find,
-                      size: 20,
-                      color: colorScheme.primary,
+                    OutlinedButton(
+                      onPressed: _syncEnabled ? _rescan : null,
+                      style: OutlinedButton.styleFrom(
+                        visualDensity: VisualDensity.compact,
+                        padding: const EdgeInsets.symmetric(horizontal: 14),
+                      ),
+                      child: const Text('扫描'),
                     ),
-                    const SizedBox(width: 8),
-                    Text('发现的设备', style: theme.textTheme.titleMedium),
+                    const SizedBox(width: 6),
+                    if (_scanning)
+                      KeyedSubtree(
+                        key: ValueKey(_scanSeq),
+                        child: const SizedBox(
+                          width: 14,
+                          height: 14,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                      ),
                   ],
                 ),
-                const SizedBox(height: 10),
-                // task-31 互联手动化：两个手动按钮（可被发现 / 扫描设备）
-                Row(
-                  children: [
-                    _buildActionButton(
-                      context: context,
-                      label: _announcing ? '广播中…' : '可被发现',
-                      icon: _announcing
-                          ? const SizedBox(
-                              width: 14,
-                              height: 14,
-                              child:
-                                  CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : const Icon(Icons.wifi_tethering, size: 18),
-                      onPressed: _announcing || !_syncEnabled
-                          ? null
-                          : _announceNow,
+              ],
+            ),
+          ),
+          // 可被发现：Switch 开关，打开广播 30s 后自动关闭（策略不变）。
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    '可被发现（30秒自动关闭）',
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: colorScheme.onSurfaceVariant,
                     ),
-                    const SizedBox(width: 8),
-                    _buildActionButton(
-                      context: context,
-                      label: _scanning ? '扫描中…' : '扫描设备',
-                      icon: _scanning
-                          ? const SizedBox(
-                              width: 14,
-                              height: 14,
-                              child:
-                                  CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : const Icon(Icons.search, size: 18),
-                      onPressed: _scanning || !_syncEnabled
-                          ? null
-                          : _rescan,
-                    ),
-                  ],
+                  ),
+                ),
+                SlimSwitch(
+                  value: _announcing,
+                  onChanged: _syncEnabled
+                      ? (value) =>
+                          value ? _announceNow() : _stopAnnouncing()
+                      : null,
                 ),
               ],
             ),
           ),
           if (!_syncEnabled)
             const SizedBox(height: 8)
-          else if (_scanning)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
-              child: Row(
-                children: [
-                  SizedBox(
-                    width: 14,
-                    height: 14,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: Theme.of(context).colorScheme.outline,
-                    ),
-                  ),
-                ],
-              ),
-            )
           else if (devices.isEmpty)
             const SizedBox(height: 8)
           else
             for (final device in devices)
               _DeviceTile(
                 device: device,
-                isPaired: device.deviceId != null &&
-                    _service.trustedDeviceIds.contains(device.deviceId),
+                isPaired: false, // 已配对已过滤，此处恒未配对
                 isConflict: device.deviceId == _service.deviceId,
                 onTap: device.deviceId == _service.deviceId
                     ? null // 同 ID 冲突：不连接
@@ -685,10 +685,15 @@ class _SyncPageState extends ConsumerState<SyncPage> {
 
   /// 「扫描设备」（task-31）：触发一次 30s 扫描窗口，期间收集设备列表。
   /// （常态不自动扫描，互联手动化。）
+  /// 「扫描」（task-31/32）：触发 30s 扫描窗口，期间列表实时更新；
+  /// 可重复点击——扫描中再点 = 结束当前窗口重新扫描（重置 30s）。
   Future<void> _rescan() async {
-    setState(() => _scanning = true);
+    setState(() {
+      _scanning = true;
+      _scanSeq++; // 重置转圈动画
+    });
     try {
-      await _service.scanOnce(window: const Duration(seconds: 30));
+      await _service.scanOnce(window: const Duration(seconds: 30), restart: true);
     } catch (_) {
       if (mounted) _showSnack('扫描失败，请重试');
     } finally {
@@ -713,24 +718,13 @@ class _SyncPageState extends ConsumerState<SyncPage> {
     }
   }
 
-  /// 发现区操作按钮（可被发现 / 扫描设备）：紧凑小按钮。
-  Widget _buildActionButton({
-    required BuildContext context,
-    required String label,
-    required Widget icon,
-    required VoidCallback? onPressed,
-  }) {
-    return OutlinedButton.icon(
-      onPressed: onPressed,
-      icon: icon,
-      label: Text(label),
-      style: OutlinedButton.styleFrom(
-        visualDensity: VisualDensity.compact,
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        textStyle: Theme.of(context).textTheme.labelMedium,
-      ),
-    );
+  /// 「可被发现」开关关闭：立即停止临时广播。
+  Future<void> _stopAnnouncing() async {
+    _announceTimer?.cancel();
+    await _service.stopAnnouncing();
+    if (mounted) setState(() => _announcing = false);
   }
+
 }
 
 /// 单个发现设备的列表项：设备名 + IP:端口（+ 设备 ID 前缀）+ 配对状态标记。
@@ -898,7 +892,7 @@ class _StatusDotState extends State<_StatusDot>
 /// 连接策略已简化为「配对成功永远自动连接」——设备行不再有连接开关，
 /// 只控制同步方向：向对端同步（本机推送）/ 从对端同步（本机接收），
 /// 两端各自独立、不同步。连接状态由状态圆点显示。
-class _PeerTile extends StatelessWidget {
+class _PeerTile extends StatefulWidget {
   const _PeerTile({
     required this.peer,
     required this.statusColor,
@@ -910,9 +904,6 @@ class _PeerTile extends StatelessWidget {
   final PeerDevice peer;
   final Color statusColor;
 
-  /// 是否连接中（状态点呼吸动画）。
-  bool get _isConnecting => peer.status == PeerStatus.connecting;
-
   /// 向对端同步开关回调。
   final ValueChanged<bool> onSyncToChanged;
 
@@ -921,20 +912,70 @@ class _PeerTile extends StatelessWidget {
   final VoidCallback onUnpair;
 
   @override
+  State<_PeerTile> createState() => _PeerTileState();
+}
+
+class _PeerTileState extends State<_PeerTile> {
+  /// 连接中黄点是否已显示（延迟 800ms：快速握手不闪黄，直接灰→绿）。
+  bool _connectingShown = false;
+  Timer? _connectingTimer;
+
+  /// 当前是否连接中。
+  bool get _isConnecting => widget.peer.status == PeerStatus.connecting;
+
+  /// 同步连接中状态：connecting 持续超过 800ms 才显示黄点（呼吸）。
+  void _syncConnecting() {
+    if (_isConnecting && !_connectingShown) {
+      _connectingTimer?.cancel();
+      _connectingTimer = Timer(const Duration(milliseconds: 800), () {
+        if (mounted && _isConnecting) {
+          setState(() => _connectingShown = true);
+        }
+      });
+    } else if (!_isConnecting && _connectingShown) {
+      _connectingTimer?.cancel();
+      _connectingShown = false;
+    }
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _syncConnecting();
+  }
+
+  @override
+  void didUpdateWidget(covariant _PeerTile oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _syncConnecting();
+  }
+
+  @override
+  void dispose() {
+    _connectingTimer?.cancel();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
+    // 黄点只在连接中持续 800ms 后才显示（避免设备上线瞬间闪黄）。
+    final showConnecting = _isConnecting && _connectingShown;
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 10, 4, 10),
       child: Row(
         children: [
-          // 状态彩色圆点：已连接绿 / 连接中橙（呼吸）/ 未连接灰
-          _StatusDot(color: statusColor, pulse: _isConnecting),
+          // 状态彩色圆点：已连接绿 / 连接中橙（呼吸，延迟显示）/ 未连接灰
+          _StatusDot(
+            color: showConnecting ? kStatusConnecting : widget.statusColor,
+            pulse: showConnecting,
+          ),
           const SizedBox(width: 12),
           Expanded(
             child: Text(
-              peer.deviceName,
+              widget.peer.deviceName,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(
@@ -953,16 +994,16 @@ class _PeerTile extends StatelessWidget {
               _buildSwitchRow(
                 context: context,
                 label: '向此设备同步',
-                value: peer.syncToPeer,
-                onChanged: onSyncToChanged,
+                value: widget.peer.syncToPeer,
+                onChanged: widget.onSyncToChanged,
                 colorScheme: colorScheme,
               ),
               const SizedBox(height: 6),
               _buildSwitchRow(
                 context: context,
                 label: '从此设备同步',
-                value: peer.syncFromPeer,
-                onChanged: onSyncFromChanged,
+                value: widget.peer.syncFromPeer,
+                onChanged: widget.onSyncFromChanged,
                 colorScheme: colorScheme,
               ),
             ],
@@ -991,7 +1032,7 @@ class _PeerTile extends StatelessWidget {
             ),
             menuChildren: [
               MenuItemButton(
-                onPressed: onUnpair,
+                onPressed: widget.onUnpair,
                 style: MenuItemButton.styleFrom(
                   // 宽度适配文字：padding 决定按钮大小；圆角与容器一致，
                   // 单选项时 hover 高亮正好覆盖整个下拉容器。

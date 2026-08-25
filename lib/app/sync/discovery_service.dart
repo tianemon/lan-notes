@@ -272,8 +272,12 @@ class DiscoveryService {
   /// 幂等：已有扫描进行中时立即返回（不重复扫描）。
   ///
   /// [window]：可选覆盖收集窗口（task-31「扫描设备」用 30s 持续监听）。
-  Future<void> scanOnce({Duration? window}) {
-    if (_scanning) return Future.value();
+  Future<void> scanOnce({Duration? window, bool restart = false}) {
+    if (_scanning) {
+      if (!restart) return Future.value();
+      // task-32：可重复点击——结束当前窗口，重新开始（重置定时器/重绑 socket）。
+      _finishScan();
+    }
     _scanning = true;
     _scanCompleter = Completer<void>();
     unawaited(_bindScanSocket());

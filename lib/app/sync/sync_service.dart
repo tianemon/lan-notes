@@ -632,7 +632,8 @@ class SyncService {
 
   /// 手动扫描一次：UDP 收集窗口（[window] 参数优先，缺省 3s）后停止，
   /// 设备列表定格（同步页「扫描设备」按钮调用，30s 持续监听）。
-  Future<void> scanOnce({Duration? window}) => _discovery.scanOnce(window: window);
+  Future<void> scanOnce({Duration? window, bool restart = false}) =>
+      _discovery.scanOnce(window: window, restart: restart);
 
   /// 前台/解锁恢复重连（已启用但断开时调用）：凭缓存地址直连已配对设备。
   /// 幂等：已启用且有就绪连接时不动作（避免锁屏/切回反复触发无谓重连）。

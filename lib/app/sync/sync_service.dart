@@ -144,6 +144,8 @@ class PeerDevice {
     required this.status,
     this.autoConnect = true,
     this.manuallyDisconnected = false,
+    this.syncToPeer = true,
+    this.syncFromPeer = true,
   });
 
   /// 对端设备 ID。
@@ -163,6 +165,12 @@ class PeerDevice {
 
   /// 会话级手动断开标记（task-16）：手动断开后当下不自动重连。
   final bool manuallyDisconnected;
+
+  /// 向对端同步（task-32）：本机是否把变更推送给该设备。
+  final bool syncToPeer;
+
+  /// 从对端同步（task-32）：本机是否接收该设备推送的变更。
+  final bool syncFromPeer;
 }
 
 /// 同步编排服务（P2P 对等，task-13，docs/技术架构.md 7.1/7.3 节）。
@@ -338,6 +346,11 @@ class SyncService {
   /// 与 [_trustedCache] 同步刷新；autoConnect=false 的已配对设备保持配对
   /// 但不自动连接（WiFi 式，手动点击仍可连）。
   Map<String, bool> _autoConnectByPeerId = const {};
+
+  /// 同步方向缓存（deviceId → 开关，task-32）：向对端同步 / 从对端同步。
+  /// 与 [_trustedCache] 同步刷新；控制推送/接收，不影响连接（永远自动连）。
+  Map<String, bool> _syncToByPeerId = const {};
+  Map<String, bool> _syncFromByPeerId = const {};
 
   /// 会话级手动断开标记（task-16，WiFi 式断开）：按对端 deviceId 记录。
   ///
@@ -588,6 +601,7 @@ class SyncService {
   Future<void> disable() async {
     _manuallyDisconnected.clear(); // 重新开启同步 → 自动重连（会话级标记重置）
     _directFailAt.clear(); // 直连失败冷却重置（用户主动开关同步后重新尝试）
+    _autoConnectBlocked.clear(); // 被拒内存标记重置（重新开启同步重新尝试）
     _announceTemporaryTimer?.cancel();
     _announceTemporaryTimer = null;
     await _discovery.unpublish();
@@ -656,8 +670,11 @@ class SyncService {
     final peers = await _identity.getTrustedDevices();
     for (final peer in peers) {
       if (peer.deviceId == deviceId) continue;
-      if (!peer.autoConnect) continue;
+      // task-32：配对成功永远自动连接（不再检查 autoConnect——连接策略
+      // 简化为「永远自动连 + 离线判定」，同步方向由 syncTo/syncFrom 控制）。
       if (_manuallyDisconnected.contains(peer.deviceId)) continue;
+      // 被对端拒绝过（对方对本机关了自动连接）：本次运行不再自动尝试。
+      if (_autoConnectBlocked.contains(peer.deviceId)) continue;
       // 直连失败冷却（task-32）：离线对端 60s 内不反复自动重试——
       // 回前台/解锁触发 retryConnections 时避免「频繁刷新转圈」。
       final failAt = _directFailAt[peer.deviceId];
@@ -683,15 +700,28 @@ class SyncService {
   /// 多轮重试（2 组×3 次×5s 超时≈55s，离线对端会一直显示「连接中」转圈）；
   /// 重连责任在重新上线方，离线方上线后会凭缓存直连本机，无需本机重试。
   /// 返回是否连接成功（手动连接开关/UI 提示用）。
-  Future<bool> _directConnectPeer(String peerId) async {
+  Future<bool> _directConnectPeer(String peerId, {bool manual = false}) async {
     // 无缓存地址：无从直连，静默结束（等对方连本机或手动扫描）。
     if (_addressCache[peerId] == null) return false;
     if (!isEnabled) return false; // 同步已关闭：中止直连
     final sessionId = _sessionByPeerId[peerId];
     final session = sessionId == null ? null : _sessions[sessionId];
     if (session != null && session.ready) return true; // 已连接：完成
-    final connected = await _connectFromCacheOnce(peerId);
-    if (connected) return true;
+    final connected = await _connectFromCacheOnce(peerId, manual: manual);
+    if (connected) {
+      // TCP 已连上：等握手就绪（ready）——对端拒绝（自动连接被拒）时
+      // 会话会被关闭，ready 永不成立，返回失败（task-32：修复「提示
+      // 连接成功但实际没连」）。
+      final deadline = DateTime.now().add(const Duration(seconds: 6));
+      while (DateTime.now().isBefore(deadline)) {
+        final sid = _sessionByPeerId[peerId];
+        final s = sid == null ? null : _sessions[sid];
+        if (s == null) return false; // 会话被关闭（对端拒绝/异常）
+        if (s.ready) return true;
+        await Future<void>.delayed(const Duration(milliseconds: 200));
+      }
+      return false; // 握手超时未就绪
+    }
     // 直连失败：清理未就绪的出站会话——client 连接挂起时状态停在
     // connecting，不清理会让 UI 一直显示「连接中」转圈（task-32）。
     final cleanupId = _sessionByPeerId[peerId];
@@ -708,7 +738,7 @@ class SyncService {
   /// 发起）。等待终端状态（connected/disconnected，超时 [directConnectAttemptTimeout]）。
   ///
   /// 返回是否已连接；无缓存/参数非法返回 false（调用方转入退避扫描）。
-  Future<bool> _connectFromCacheOnce(String peerId) async {
+  Future<bool> _connectFromCacheOnce(String peerId, {bool manual = false}) async {
     final cached = _addressCache[peerId];
     if (cached == null) return false;
     var sessionId = _sessionByPeerId[peerId];
@@ -728,7 +758,8 @@ class SyncService {
         service: this,
       )
         ..peerDeviceId = peerId
-        ..peerName = _safePeerName(name, fallback: peerId);
+        ..peerName = _safePeerName(name, fallback: peerId)
+        ..manualConnect = manual;
       _sessions[newSession.id] = newSession;
       _sessionByPeerId[peerId] = newSession.id;
       newSession.attach();
@@ -740,6 +771,11 @@ class SyncService {
     await client.connect(cached.address, cached.port);
     return client.waitForTerminal(timeout: directConnectAttemptTimeout);
   }
+
+  /// 被自动连接拒绝的内存标记（task-32）：对端因本机 autoConnect=false
+  /// 拒绝自动连接后记录，本次运行不再自动尝试连该设备；手动连接清除。
+  /// 不持久化（重启后跟随 autoConnect 重新尝试）。
+  final Set<String> _autoConnectBlocked = {};
 
   /// 直连失败时间戳（task-32 冷却）：离线对端短时间不反复自动重试——
   /// App 回前台/解锁触发 retryConnections 时避免「频繁刷新转圈」。
@@ -813,7 +849,9 @@ class SyncService {
     if (peerId.isEmpty || peerId == deviceId) return false;
     _manuallyDisconnected.remove(peerId);
     if (!_trustedIds.contains(peerId)) return false;
-    return _directConnectPeer(peerId);
+    // 手动连接：无条件（对方不因 autoConnect 拒绝）+ 清除被拒内存标记。
+    _autoConnectBlocked.remove(peerId);
+    return _directConnectPeer(peerId, manual: true);
   }
 
   /// 断开指定对端的连接（幂等）。
@@ -851,8 +889,27 @@ class SyncService {
   ///
   /// 关闭后保持配对（信任列表不删除）但不自动连接；手动点击仍可连
   /// （不改变配置）。已建立的连接不受影响。
+  /// task-32 起 autoConnect 不再控制连接（永远自动连接），保留兼容。
   Future<void> setAutoConnect(String deviceId, bool value) async {
     await _identity.setAutoConnect(deviceId, value);
+    await _refreshTrustedCache();
+    _emitPeers();
+  }
+
+  /// 设置某已配对设备的同步方向（task-32）：向对端同步 / 从对端同步。
+  ///
+  /// 只控制数据推送/接收，不影响连接（配对成功永远自动连接）；两端开关
+  /// 独立、不同步——关闭最多导致对方收不到/本机不收，无冲突。
+  Future<void> setSyncDirections(
+    String deviceId, {
+    required bool syncToPeer,
+    required bool syncFromPeer,
+  }) async {
+    await _identity.setSyncDirections(
+      deviceId,
+      syncToPeer: syncToPeer,
+      syncFromPeer: syncFromPeer,
+    );
     await _refreshTrustedCache();
     _emitPeers();
   }
@@ -904,9 +961,11 @@ class SyncService {
   /// 刷新 UI——之后本机不再自动连对方，直到用户手动重新打开。
   Future<void> _onAutoConnectRejected(String rejectingPeerId) async {
     if (rejectingPeerId.isEmpty || rejectingPeerId == deviceId) return;
-    if (!_trustedIds.contains(rejectingPeerId)) return; // 未配对：无开关可关
-    if ((_autoConnectByPeerId[rejectingPeerId] ?? true) == false) return; // 已关
-    await setAutoConnect(rejectingPeerId, false);
+    if (!_trustedIds.contains(rejectingPeerId)) return;
+    // task-32：不持久化关闭对方视角的自动连接开关（两端状态独立、不同步），
+    // 仅记内存标记——本次运行不再自动尝试连该设备；手动连接不受限
+    // （connectTrustedPeer 清除标记）；重启后跟随 autoConnect 重新尝试。
+    _autoConnectBlocked.add(rejectingPeerId);
     _emitPeers();
   }
 
@@ -1029,8 +1088,7 @@ class SyncService {
       // _registerPeerId/_shouldReplace 会话去重兜底（每对仅保留一条）。
       // 未配对设备不自动连（等待用户操作）。
       if (!await _identity.isTrusted(peerId)) continue;
-      // 每设备自动连接配置（task-16）：关闭自动连接 → 保持配对但不自动连。
-      if (!(_autoConnectByPeerId[peerId] ?? true)) continue;
+      // task-32：配对成功永远自动连接（扫描发现即连，不再检查 autoConnect）。
       // 会话级手动断开标记（task-16）：手动断开后当下不自动重连。
       if (_manuallyDisconnected.contains(peerId)) continue;
       // task-19：发现即刷新地址缓存（重连时优先用缓存地址，见
@@ -1222,6 +1280,12 @@ class SyncService {
     _autoConnectByPeerId = {
       for (final t in trusted) t.deviceId: t.autoConnect,
     };
+    _syncToByPeerId = {
+      for (final t in trusted) t.deviceId: t.syncToPeer,
+    };
+    _syncFromByPeerId = {
+      for (final t in trusted) t.deviceId: t.syncFromPeer,
+    };
   }
 
   /// 上报设备 ID 冲突（握手/手动连接每次上报；发现列表按 deviceId 去重）。
@@ -1275,6 +1339,8 @@ class SyncService {
         status: _sessionStatus(session),
         autoConnect: _autoConnectByPeerId[peerId] ?? true,
         manuallyDisconnected: _manuallyDisconnected.contains(peerId),
+        syncToPeer: _syncToByPeerId[peerId] ?? true,
+        syncFromPeer: _syncFromByPeerId[peerId] ?? true,
       ));
     }
     for (final trusted in _trustedCache) {
@@ -1291,6 +1357,8 @@ class SyncService {
         status: PeerStatus.disconnected,
         autoConnect: trusted.autoConnect,
         manuallyDisconnected: _manuallyDisconnected.contains(trusted.deviceId),
+        syncToPeer: trusted.syncToPeer,
+        syncFromPeer: trusted.syncFromPeer,
       ));
     }
     _lastPeers = peers;
@@ -1348,7 +1416,7 @@ class SyncService {
   /// 把消息转发给除 [except] 外的所有**已就绪**会话（多向广播 fan-out）。
   void _fanOutToOthers(Map<String, dynamic> message, _PeerSession except) {
     for (final session in _sessions.values) {
-      if (session != except && session.ready) {
+      if (session != except && session.ready && _canPushTo(session)) {
         session.sendMessage(message);
       }
     }
@@ -1357,10 +1425,17 @@ class SyncService {
   /// 向所有已就绪对端推送（本地变更 → note_upsert / note_delete）。
   void _pushToAllPeers(Map<String, dynamic> message) {
     for (final session in _sessions.values) {
-      if (session.ready) {
+      if (session.ready && _canPushTo(session)) {
         session.sendMessage(message);
       }
     }
+  }
+
+  /// 是否允许向该对端推送（task-32）：本机「向对端同步」开关开启才推。
+  bool _canPushTo(_PeerSession session) {
+    final peerId = session.peerDeviceId;
+    if (peerId == null) return false;
+    return _syncToByPeerId[peerId] ?? true;
   }
 
   /// 本地变更 → 推送：软删除/恢复与新增/修改同走 note_upsert（deletedAt
@@ -1809,6 +1884,10 @@ class _PeerSession {
   /// 是否为本机主动发起的出站会话（连接去重规范判断依据）。
   final bool isInitiator;
 
+  /// 是否手动发起的连接（task-32：手动连接无条件，hello 携带 manual 标志，
+  /// 对端不因 autoConnect 关闭而拒绝）。
+  bool manualConnect = false;
+
   final _PeerLink link;
   final SyncService service;
 
@@ -1858,6 +1937,11 @@ class _PeerSession {
           )
         : (link as _OutgoingLink).client.messages.listen(
             (raw) => unawaited(_onMessage(raw)),
+            onDone: () {
+              // ignore: avoid_print
+              print('[连接监控] 出站消息流 onDone peer=${peerDeviceId ?? 'null'}');
+              service._onSessionLinkClosed(this);
+            },
             cancelOnError: true,
           );
     if (link is _OutgoingLink) {
@@ -1868,14 +1952,20 @@ class _PeerSession {
   }
 
   void _onOutgoingState(SyncConnectionState state) {
+    // ignore: avoid_print
+    print('[连接监控] 出站状态变化 peer=${peerDeviceId ?? 'null'} -> $state');
     if (state == SyncConnectionState.connected) {
       // 连接成功：重新握手（发送 hello、重置认证状态）。
       _resetAuth();
       unawaited(_sendHello());
     } else if (state == SyncConnectionState.disconnected) {
-      // 断线：仅重置认证状态（等待对端重新上线后主动连接）。
+      // 断线：重置认证状态 + 立即清理会话并刷新 UI（task-32）。
       // 架构决策：在线方不主动重连，重连责任在「重新上线的一方」。
+      // 此前只 _resetAuth()：心跳被 _stopHeartbeat 停掉、会话残留在
+      // _sessions（出站消息流不 close，onDone 不触发）、UI 不刷新——
+      // 导致「手机杀后台后 mac 一直显示已连接」。socket 断开即感知。
       _resetAuth();
+      service._onSessionLinkClosed(this);
     }
   }
 
@@ -2001,6 +2091,7 @@ class _PeerSession {
       trusted: trusted,
       protocolVersion: kProtocolVersion,
       port: service._server.port, // 对端入站缓存本机地址用（task-32）
+      manual: manualConnect, // 手动连接标志（对端据此不拒绝，task-32）
     ).toJson());
   }
 
@@ -2104,18 +2195,33 @@ class _PeerSession {
     _lastInbound = DateTime.now(); // 任何对端消息都刷新（心跳判离线依据）
     final message = SyncMessage.fromJson(raw);
     if (message == null) return;
+    // task-32：本机关闭「从对端同步」时，丢弃对端的同步数据
+    // （note_upsert/note_delete/sync_data/sync_request）——连接/心跳/配对
+    // 消息不受影响（连接永远维持，同步方向各自控制）。
+    final peerId = peerDeviceId;
+    if (peerId != null && (service._syncFromByPeerId[peerId] ?? true) == false) {
+      switch (message) {
+        case NoteUpsertMessage() || NoteDeleteMessage() ||
+            SyncDataMessage() || SyncRequestMessage():
+          return; // 同步数据丢弃
+        default:
+          break;
+      }
+    }
     switch (message) {
       case HelloMessage(
         deviceId: final peerId,
         deviceName: final peerName,
         protocolVersion: final protocolVersion,
         port: final peerPort,
+        manual: final manualHello,
       ):
         await _onPeerHello(
           peerId,
           peerName,
           protocolVersion,
           peerPort: peerPort,
+          manualHello: manualHello,
         );
       case WelcomeMessage(
         deviceId: final peerId,
@@ -2215,6 +2321,9 @@ class _PeerSession {
     String peerName,
     int protocolVersion, {
     int? peerPort,
+    // manual 标志保留（协议兼容旧包）；task-32 起 autoConnect 只管本机
+    // 是否自动发起连接，不控制是否接受对方——已配对连接无条件接受。
+    bool manualHello = false,
   }) async {
     // 入站缓存对端地址（task-32）：从连接对端 IP + hello 携带的监听端口
     // 写入地址缓存——入站方（被连接方）重新上线时可凭缓存直连对方。
@@ -2244,14 +2353,6 @@ class _PeerSession {
       return;
     }
     service._emitDevices();
-    // task-31 Q4：本机已配对该对端但关闭了自动连接开关 → 拒绝连接并通知
-    // 对端自动关闭其对本机的自动连接开关（在线方拒绝逻辑）。
-    if (service._trustedIds.contains(peerId) &&
-        (service._autoConnectByPeerId[peerId] ?? true) == false) {
-      _send(AutoConnectRejectedMessage(deviceId: service.deviceId).toJson());
-      unawaited(service._closeSession(this));
-      return;
-    }
     final secret = await service._identity.getTrustedSecret(peerId);
     if (secret != null && secret.isNotEmpty) {
       // 已配对且持有密钥：HMAC 挑战认证（防伪装 deviceId）。

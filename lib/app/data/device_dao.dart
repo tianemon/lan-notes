@@ -88,9 +88,23 @@ class DeviceDao extends DatabaseAccessor<AppDatabase> with _$DeviceDaoMixin {
   /// 设置某已配对设备的「自动连接」开关（task-16，WiFi 式）。
   ///
   /// 关闭后保持配对（信任列表不删除）但不自动连接；手动点击仍可连。
+  /// task-32 起 autoConnect 不再控制连接（永远自动连接），该方法保留兼容。
   Future<void> setAutoConnect(String deviceId, bool value) async {
     await (update(trustedDevices)..where((t) => t.deviceId.equals(deviceId)))
         .write(TrustedDevicesCompanion(autoConnect: Value(value)));
+  }
+
+  /// 设置某已配对设备的同步方向（task-32）：向对端同步 / 从对端同步。
+  Future<void> setSyncDirections(
+    String deviceId, {
+    required bool syncToPeer,
+    required bool syncFromPeer,
+  }) async {
+    await (update(trustedDevices)..where((t) => t.deviceId.equals(deviceId)))
+        .write(TrustedDevicesCompanion(
+      syncToPeer: Value(syncToPeer),
+      syncFromPeer: Value(syncFromPeer),
+    ));
   }
 
   /// 全部已配对设备（按配对时间倒序）。

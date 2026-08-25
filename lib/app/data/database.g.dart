@@ -1089,6 +1089,36 @@ class $TrustedDevicesTable extends TrustedDevices
     ),
     defaultValue: const Constant(true),
   );
+  static const VerificationMeta _syncToPeerMeta = const VerificationMeta(
+    'syncToPeer',
+  );
+  @override
+  late final GeneratedColumn<bool> syncToPeer = GeneratedColumn<bool>(
+    'sync_to_peer',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("sync_to_peer" IN (0, 1))',
+    ),
+    defaultValue: const Constant(true),
+  );
+  static const VerificationMeta _syncFromPeerMeta = const VerificationMeta(
+    'syncFromPeer',
+  );
+  @override
+  late final GeneratedColumn<bool> syncFromPeer = GeneratedColumn<bool>(
+    'sync_from_peer',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("sync_from_peer" IN (0, 1))',
+    ),
+    defaultValue: const Constant(true),
+  );
   static const VerificationMeta _secretMeta = const VerificationMeta('secret');
   @override
   late final GeneratedColumn<String> secret = GeneratedColumn<String>(
@@ -1104,6 +1134,8 @@ class $TrustedDevicesTable extends TrustedDevices
     deviceName,
     pairedAt,
     autoConnect,
+    syncToPeer,
+    syncFromPeer,
     secret,
   ];
   @override
@@ -1151,6 +1183,24 @@ class $TrustedDevicesTable extends TrustedDevices
         ),
       );
     }
+    if (data.containsKey('sync_to_peer')) {
+      context.handle(
+        _syncToPeerMeta,
+        syncToPeer.isAcceptableOrUnknown(
+          data['sync_to_peer']!,
+          _syncToPeerMeta,
+        ),
+      );
+    }
+    if (data.containsKey('sync_from_peer')) {
+      context.handle(
+        _syncFromPeerMeta,
+        syncFromPeer.isAcceptableOrUnknown(
+          data['sync_from_peer']!,
+          _syncFromPeerMeta,
+        ),
+      );
+    }
     if (data.containsKey('secret')) {
       context.handle(
         _secretMeta,
@@ -1182,6 +1232,14 @@ class $TrustedDevicesTable extends TrustedDevices
         DriftSqlType.bool,
         data['${effectivePrefix}auto_connect'],
       )!,
+      syncToPeer: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}sync_to_peer'],
+      )!,
+      syncFromPeer: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}sync_from_peer'],
+      )!,
       secret: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}secret'],
@@ -1203,6 +1261,12 @@ class TrustedDevice extends DataClass implements Insertable<TrustedDevice> {
   /// 是否自动连接该已配对设备（默认开；关闭 = 仅保存配对，不自动连）。
   final bool autoConnect;
 
+  /// 向对端同步（task-32）：本机是否把变更/全量推送给该设备（默认开）。
+  final bool syncToPeer;
+
+  /// 从对端同步（task-32）：本机是否接收该设备推送的变更/全量（默认开）。
+  final bool syncFromPeer;
+
   /// HMAC 挑战认证密钥（32 字节随机 hex，nullable——旧配对升级后为 null）。
   final String? secret;
   const TrustedDevice({
@@ -1210,6 +1274,8 @@ class TrustedDevice extends DataClass implements Insertable<TrustedDevice> {
     required this.deviceName,
     required this.pairedAt,
     required this.autoConnect,
+    required this.syncToPeer,
+    required this.syncFromPeer,
     this.secret,
   });
   @override
@@ -1219,6 +1285,8 @@ class TrustedDevice extends DataClass implements Insertable<TrustedDevice> {
     map['device_name'] = Variable<String>(deviceName);
     map['paired_at'] = Variable<int>(pairedAt);
     map['auto_connect'] = Variable<bool>(autoConnect);
+    map['sync_to_peer'] = Variable<bool>(syncToPeer);
+    map['sync_from_peer'] = Variable<bool>(syncFromPeer);
     if (!nullToAbsent || secret != null) {
       map['secret'] = Variable<String>(secret);
     }
@@ -1231,6 +1299,8 @@ class TrustedDevice extends DataClass implements Insertable<TrustedDevice> {
       deviceName: Value(deviceName),
       pairedAt: Value(pairedAt),
       autoConnect: Value(autoConnect),
+      syncToPeer: Value(syncToPeer),
+      syncFromPeer: Value(syncFromPeer),
       secret: secret == null && nullToAbsent
           ? const Value.absent()
           : Value(secret),
@@ -1247,6 +1317,8 @@ class TrustedDevice extends DataClass implements Insertable<TrustedDevice> {
       deviceName: serializer.fromJson<String>(json['deviceName']),
       pairedAt: serializer.fromJson<int>(json['pairedAt']),
       autoConnect: serializer.fromJson<bool>(json['autoConnect']),
+      syncToPeer: serializer.fromJson<bool>(json['syncToPeer']),
+      syncFromPeer: serializer.fromJson<bool>(json['syncFromPeer']),
       secret: serializer.fromJson<String?>(json['secret']),
     );
   }
@@ -1258,6 +1330,8 @@ class TrustedDevice extends DataClass implements Insertable<TrustedDevice> {
       'deviceName': serializer.toJson<String>(deviceName),
       'pairedAt': serializer.toJson<int>(pairedAt),
       'autoConnect': serializer.toJson<bool>(autoConnect),
+      'syncToPeer': serializer.toJson<bool>(syncToPeer),
+      'syncFromPeer': serializer.toJson<bool>(syncFromPeer),
       'secret': serializer.toJson<String?>(secret),
     };
   }
@@ -1267,12 +1341,16 @@ class TrustedDevice extends DataClass implements Insertable<TrustedDevice> {
     String? deviceName,
     int? pairedAt,
     bool? autoConnect,
+    bool? syncToPeer,
+    bool? syncFromPeer,
     Value<String?> secret = const Value.absent(),
   }) => TrustedDevice(
     deviceId: deviceId ?? this.deviceId,
     deviceName: deviceName ?? this.deviceName,
     pairedAt: pairedAt ?? this.pairedAt,
     autoConnect: autoConnect ?? this.autoConnect,
+    syncToPeer: syncToPeer ?? this.syncToPeer,
+    syncFromPeer: syncFromPeer ?? this.syncFromPeer,
     secret: secret.present ? secret.value : this.secret,
   );
   TrustedDevice copyWithCompanion(TrustedDevicesCompanion data) {
@@ -1285,6 +1363,12 @@ class TrustedDevice extends DataClass implements Insertable<TrustedDevice> {
       autoConnect: data.autoConnect.present
           ? data.autoConnect.value
           : this.autoConnect,
+      syncToPeer: data.syncToPeer.present
+          ? data.syncToPeer.value
+          : this.syncToPeer,
+      syncFromPeer: data.syncFromPeer.present
+          ? data.syncFromPeer.value
+          : this.syncFromPeer,
       secret: data.secret.present ? data.secret.value : this.secret,
     );
   }
@@ -1296,14 +1380,23 @@ class TrustedDevice extends DataClass implements Insertable<TrustedDevice> {
           ..write('deviceName: $deviceName, ')
           ..write('pairedAt: $pairedAt, ')
           ..write('autoConnect: $autoConnect, ')
+          ..write('syncToPeer: $syncToPeer, ')
+          ..write('syncFromPeer: $syncFromPeer, ')
           ..write('secret: $secret')
           ..write(')'))
         .toString();
   }
 
   @override
-  int get hashCode =>
-      Object.hash(deviceId, deviceName, pairedAt, autoConnect, secret);
+  int get hashCode => Object.hash(
+    deviceId,
+    deviceName,
+    pairedAt,
+    autoConnect,
+    syncToPeer,
+    syncFromPeer,
+    secret,
+  );
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
@@ -1312,6 +1405,8 @@ class TrustedDevice extends DataClass implements Insertable<TrustedDevice> {
           other.deviceName == this.deviceName &&
           other.pairedAt == this.pairedAt &&
           other.autoConnect == this.autoConnect &&
+          other.syncToPeer == this.syncToPeer &&
+          other.syncFromPeer == this.syncFromPeer &&
           other.secret == this.secret);
 }
 
@@ -1320,6 +1415,8 @@ class TrustedDevicesCompanion extends UpdateCompanion<TrustedDevice> {
   final Value<String> deviceName;
   final Value<int> pairedAt;
   final Value<bool> autoConnect;
+  final Value<bool> syncToPeer;
+  final Value<bool> syncFromPeer;
   final Value<String?> secret;
   final Value<int> rowid;
   const TrustedDevicesCompanion({
@@ -1327,6 +1424,8 @@ class TrustedDevicesCompanion extends UpdateCompanion<TrustedDevice> {
     this.deviceName = const Value.absent(),
     this.pairedAt = const Value.absent(),
     this.autoConnect = const Value.absent(),
+    this.syncToPeer = const Value.absent(),
+    this.syncFromPeer = const Value.absent(),
     this.secret = const Value.absent(),
     this.rowid = const Value.absent(),
   });
@@ -1335,6 +1434,8 @@ class TrustedDevicesCompanion extends UpdateCompanion<TrustedDevice> {
     required String deviceName,
     required int pairedAt,
     this.autoConnect = const Value.absent(),
+    this.syncToPeer = const Value.absent(),
+    this.syncFromPeer = const Value.absent(),
     this.secret = const Value.absent(),
     this.rowid = const Value.absent(),
   }) : deviceId = Value(deviceId),
@@ -1345,6 +1446,8 @@ class TrustedDevicesCompanion extends UpdateCompanion<TrustedDevice> {
     Expression<String>? deviceName,
     Expression<int>? pairedAt,
     Expression<bool>? autoConnect,
+    Expression<bool>? syncToPeer,
+    Expression<bool>? syncFromPeer,
     Expression<String>? secret,
     Expression<int>? rowid,
   }) {
@@ -1353,6 +1456,8 @@ class TrustedDevicesCompanion extends UpdateCompanion<TrustedDevice> {
       if (deviceName != null) 'device_name': deviceName,
       if (pairedAt != null) 'paired_at': pairedAt,
       if (autoConnect != null) 'auto_connect': autoConnect,
+      if (syncToPeer != null) 'sync_to_peer': syncToPeer,
+      if (syncFromPeer != null) 'sync_from_peer': syncFromPeer,
       if (secret != null) 'secret': secret,
       if (rowid != null) 'rowid': rowid,
     });
@@ -1363,6 +1468,8 @@ class TrustedDevicesCompanion extends UpdateCompanion<TrustedDevice> {
     Value<String>? deviceName,
     Value<int>? pairedAt,
     Value<bool>? autoConnect,
+    Value<bool>? syncToPeer,
+    Value<bool>? syncFromPeer,
     Value<String?>? secret,
     Value<int>? rowid,
   }) {
@@ -1371,6 +1478,8 @@ class TrustedDevicesCompanion extends UpdateCompanion<TrustedDevice> {
       deviceName: deviceName ?? this.deviceName,
       pairedAt: pairedAt ?? this.pairedAt,
       autoConnect: autoConnect ?? this.autoConnect,
+      syncToPeer: syncToPeer ?? this.syncToPeer,
+      syncFromPeer: syncFromPeer ?? this.syncFromPeer,
       secret: secret ?? this.secret,
       rowid: rowid ?? this.rowid,
     );
@@ -1391,6 +1500,12 @@ class TrustedDevicesCompanion extends UpdateCompanion<TrustedDevice> {
     if (autoConnect.present) {
       map['auto_connect'] = Variable<bool>(autoConnect.value);
     }
+    if (syncToPeer.present) {
+      map['sync_to_peer'] = Variable<bool>(syncToPeer.value);
+    }
+    if (syncFromPeer.present) {
+      map['sync_from_peer'] = Variable<bool>(syncFromPeer.value);
+    }
     if (secret.present) {
       map['secret'] = Variable<String>(secret.value);
     }
@@ -1407,6 +1522,8 @@ class TrustedDevicesCompanion extends UpdateCompanion<TrustedDevice> {
           ..write('deviceName: $deviceName, ')
           ..write('pairedAt: $pairedAt, ')
           ..write('autoConnect: $autoConnect, ')
+          ..write('syncToPeer: $syncToPeer, ')
+          ..write('syncFromPeer: $syncFromPeer, ')
           ..write('secret: $secret, ')
           ..write('rowid: $rowid')
           ..write(')'))
@@ -2016,6 +2133,8 @@ typedef $$TrustedDevicesTableCreateCompanionBuilder =
       required String deviceName,
       required int pairedAt,
       Value<bool> autoConnect,
+      Value<bool> syncToPeer,
+      Value<bool> syncFromPeer,
       Value<String?> secret,
       Value<int> rowid,
     });
@@ -2025,6 +2144,8 @@ typedef $$TrustedDevicesTableUpdateCompanionBuilder =
       Value<String> deviceName,
       Value<int> pairedAt,
       Value<bool> autoConnect,
+      Value<bool> syncToPeer,
+      Value<bool> syncFromPeer,
       Value<String?> secret,
       Value<int> rowid,
     });
@@ -2055,6 +2176,16 @@ class $$TrustedDevicesTableFilterComposer
 
   ColumnFilters<bool> get autoConnect => $composableBuilder(
     column: $table.autoConnect,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get syncToPeer => $composableBuilder(
+    column: $table.syncToPeer,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get syncFromPeer => $composableBuilder(
+    column: $table.syncFromPeer,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -2093,6 +2224,16 @@ class $$TrustedDevicesTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<bool> get syncToPeer => $composableBuilder(
+    column: $table.syncToPeer,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<bool> get syncFromPeer => $composableBuilder(
+    column: $table.syncFromPeer,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<String> get secret => $composableBuilder(
     column: $table.secret,
     builder: (column) => ColumnOrderings(column),
@@ -2121,6 +2262,16 @@ class $$TrustedDevicesTableAnnotationComposer
 
   GeneratedColumn<bool> get autoConnect => $composableBuilder(
     column: $table.autoConnect,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<bool> get syncToPeer => $composableBuilder(
+    column: $table.syncToPeer,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<bool> get syncFromPeer => $composableBuilder(
+    column: $table.syncFromPeer,
     builder: (column) => column,
   );
 
@@ -2165,6 +2316,8 @@ class $$TrustedDevicesTableTableManager
                 Value<String> deviceName = const Value.absent(),
                 Value<int> pairedAt = const Value.absent(),
                 Value<bool> autoConnect = const Value.absent(),
+                Value<bool> syncToPeer = const Value.absent(),
+                Value<bool> syncFromPeer = const Value.absent(),
                 Value<String?> secret = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => TrustedDevicesCompanion(
@@ -2172,6 +2325,8 @@ class $$TrustedDevicesTableTableManager
                 deviceName: deviceName,
                 pairedAt: pairedAt,
                 autoConnect: autoConnect,
+                syncToPeer: syncToPeer,
+                syncFromPeer: syncFromPeer,
                 secret: secret,
                 rowid: rowid,
               ),
@@ -2181,6 +2336,8 @@ class $$TrustedDevicesTableTableManager
                 required String deviceName,
                 required int pairedAt,
                 Value<bool> autoConnect = const Value.absent(),
+                Value<bool> syncToPeer = const Value.absent(),
+                Value<bool> syncFromPeer = const Value.absent(),
                 Value<String?> secret = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => TrustedDevicesCompanion.insert(
@@ -2188,6 +2345,8 @@ class $$TrustedDevicesTableTableManager
                 deviceName: deviceName,
                 pairedAt: pairedAt,
                 autoConnect: autoConnect,
+                syncToPeer: syncToPeer,
+                syncFromPeer: syncFromPeer,
                 secret: secret,
                 rowid: rowid,
               ),

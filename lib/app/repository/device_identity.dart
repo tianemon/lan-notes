@@ -132,6 +132,8 @@ class DeviceIdentityStore {
         pairedAt: DateTime.now().millisecondsSinceEpoch,
         autoConnect: true,
         secret: secret,
+        syncToPeer: true,
+        syncFromPeer: true,
       ),
     );
   }
@@ -148,6 +150,18 @@ class DeviceIdentityStore {
   /// 关闭后保持配对（信任列表不删除）但不自动连接；手动点击仍可连。
   Future<void> setAutoConnect(String deviceId, bool value) =>
       _dao.setAutoConnect(deviceId, value);
+
+  /// 设置同步方向（task-32）：向对端同步 / 从对端同步。
+  Future<void> setSyncDirections(
+    String deviceId, {
+    required bool syncToPeer,
+    required bool syncFromPeer,
+  }) =>
+      _dao.setSyncDirections(
+        deviceId,
+        syncToPeer: syncToPeer,
+        syncFromPeer: syncFromPeer,
+      );
 
   /// 全部已配对设备（按配对时间倒序）。
   Future<List<TrustedDevice>> getTrustedDevices() => _dao.getAllTrusted();

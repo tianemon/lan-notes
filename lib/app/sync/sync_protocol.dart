@@ -73,6 +73,7 @@ class HelloMessage extends SyncMessage {
     this.trusted = false,
     this.protocolVersion = kProtocolVersion,
     this.port,
+    this.manual = false,
   });
 
   /// 客户端设备 ID。
@@ -91,6 +92,10 @@ class HelloMessage extends SyncMessage {
   /// ip:port，重新上线时凭缓存直连；旧对端不带该字段 → null）。
   final int? port;
 
+  /// 是否手动发起的连接（task-32：手动连接无条件，对端不因 autoConnect
+  /// 关闭而拒绝；自动连接受对方 autoConnect 控制）。
+  final bool manual;
+
   @override
   String get type => 'hello';
 
@@ -102,6 +107,7 @@ class HelloMessage extends SyncMessage {
     'trusted': trusted,
     'protocolVersion': protocolVersion,
     if (port != null) 'port': port,
+    if (manual) 'manual': true,
   };
 
   factory HelloMessage.fromJson(Map<String, dynamic> json) => HelloMessage(
@@ -110,6 +116,7 @@ class HelloMessage extends SyncMessage {
     trusted: (json['trusted'] as bool?) ?? false,
     protocolVersion: (json['protocolVersion'] as int?) ?? 1,
     port: (json['port'] as num?)?.toInt(),
+    manual: (json['manual'] as bool?) ?? false,
   );
 }
 

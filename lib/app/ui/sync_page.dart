@@ -199,40 +199,23 @@ class _SyncPageState extends ConsumerState<SyncPage> {
     }
   }
 
-  /// 切换某设备的「手动连接」开关（task-31）：
-  /// - 打开：手动连接该已配对设备（清除手动断开标记 + 凭缓存直连）；
-  ///   失败（不在线/无缓存地址）提示，不再误报「正在连接」；
-  /// - 关闭：断开连接（会话级手动断开标记，当下不自动重连）。
-  Future<void> _onManualConnectChanged(PeerDevice peer, bool value) async {
-    if (value) {
-      // 设备离线（已断开）：不主动连——架构设计是离线设备上线后自己
-      // 凭缓存直连本机（task-32），本机只等它连回来。
-      if (peer.status == PeerStatus.disconnected) {
-        if (mounted) _showSnack('${peer.deviceName} 离线，上线后会自动连接');
-        return;
-      }
-      final ok = await _service.connectTrustedPeer(peer.deviceId);
-      if (mounted) {
-        _showSnack(ok
-            ? '已连接 ${peer.deviceName}'
-            : '无法连接 ${peer.deviceName}（设备可能不在线，可先「扫描设备」）');
-      }
-    } else {
-      await _service.disconnectPeer(peer.deviceId);
-      if (mounted) _showSnack('已断开 ${peer.deviceName}');
-    }
-  }
 
-  /// 切换某已配对设备的「自动连接」开关（task-16，WiFi 式）。
+
+  /// 切换某已配对设备的同步方向（task-32）：向对端同步 / 从对端同步。
   ///
-  /// 关闭后保持配对（信任列表不删除）但不自动连接；手动点击仍可连
-  /// （不改变配置）。已建立的连接不受影响。
-  Future<void> _setAutoConnect(PeerDevice peer, bool value) async {
-    await _service.setAutoConnect(peer.deviceId, value);
+  /// 只控制数据推送/接收，不影响连接（配对成功永远自动连接）。
+  Future<void> _setSyncDirections(
+    PeerDevice peer, {
+    bool? syncToPeer,
+    bool? syncFromPeer,
+  }) async {
+    await _service.setSyncDirections(
+      peer.deviceId,
+      syncToPeer: syncToPeer ?? peer.syncToPeer,
+      syncFromPeer: syncFromPeer ?? peer.syncFromPeer,
+    );
     if (mounted) {
-      _showSnack(value
-          ? '已开启「${peer.deviceName}」的自动连接'
-          : '已关闭「${peer.deviceName}」的自动连接（保持配对，手动可连）');
+      _showSnack('已更新「${peer.deviceName}」的同步方向');
     }
   }
 
@@ -562,12 +545,10 @@ class _SyncPageState extends ConsumerState<SyncPage> {
               _PeerTile(
                 peer: peers[i],
                 statusColor: _peerStatusColor(peers[i]),
-                isConnected: peers[i].status == PeerStatus.connected,
-                isConnecting: peers[i].status == PeerStatus.connecting,
-                onManualConnectChanged: (value) =>
-                    _onManualConnectChanged(peers[i], value),
-                onAutoConnectChanged: (value) =>
-                    _setAutoConnect(peers[i], value),
+                onSyncToChanged: (value) =>
+                    _setSyncDirections(peers[i], syncToPeer: value),
+                onSyncFromChanged: (value) =>
+                    _setSyncDirections(peers[i], syncFromPeer: value),
                 onUnpair: () => _confirmUnpairPeer(peers[i]),
               ),
               if (i < peers.length - 1)
@@ -911,36 +892,32 @@ class _StatusDotState extends State<_StatusDot>
   }
 }
 
-/// 已配对设备行（task-31 重构）：状态彩色圆点 + 设备名/状态（去 ID 展示）
-/// + 右侧两个垂直精致开关（手动连接在上 / 自动连接在下）+ 更多菜单
-/// （取消配对）。
+/// 已配对设备行（task-32）：状态彩色圆点 + 设备名 + 两个同步方向开关
+/// （向 B 同步 / 从 B 同步，上下排列）+ 更多菜单（取消配对）。
 ///
-/// - 手动连接开关：值 = 是否连接中/连接意愿（[manualConnectValue]）；
-///   打开 → 手动连接该设备；关闭 → 断开（当下不自动重连）；
-/// - 自动连接开关：开=上线自动连；关=不自动连 + 拒绝对方连（Q4）；
-/// - 取消配对菜单 hover 圆角修复（[ClipRRect] + 圆形 IconButton 样式，
-///   不再留背景容器直角）。
+/// 连接策略已简化为「配对成功永远自动连接」——设备行不再有连接开关，
+/// 只控制同步方向：向对端同步（本机推送）/ 从对端同步（本机接收），
+/// 两端各自独立、不同步。连接状态由状态圆点显示。
 class _PeerTile extends StatelessWidget {
   const _PeerTile({
     required this.peer,
     required this.statusColor,
-    required this.isConnected,
-    required this.isConnecting,
-    required this.onManualConnectChanged,
-    required this.onAutoConnectChanged,
+    required this.onSyncToChanged,
+    required this.onSyncFromChanged,
     required this.onUnpair,
   });
 
   final PeerDevice peer;
   final Color statusColor;
 
-  /// 是否已连接（手动连接 Switch 的开=已连接、关=已断开）。
-  final bool isConnected;
+  /// 是否连接中（状态点呼吸动画）。
+  bool get _isConnecting => peer.status == PeerStatus.connecting;
 
-  /// 是否连接中（Switch 禁用 + 转圈指示，避免「connecting 被当已连接」）。
-  final bool isConnecting;
-  final ValueChanged<bool> onManualConnectChanged;
-  final ValueChanged<bool> onAutoConnectChanged;
+  /// 向对端同步开关回调。
+  final ValueChanged<bool> onSyncToChanged;
+
+  /// 从对端同步开关回调。
+  final ValueChanged<bool> onSyncFromChanged;
   final VoidCallback onUnpair;
 
   @override
@@ -953,53 +930,42 @@ class _PeerTile extends StatelessWidget {
       child: Row(
         children: [
           // 状态彩色圆点：已连接绿 / 连接中橙（呼吸）/ 未连接灰
-          _StatusDot(color: statusColor, pulse: isConnecting),
+          _StatusDot(color: statusColor, pulse: _isConnecting),
           const SizedBox(width: 12),
           Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  peer.deviceName,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                // 设备名底下：手动连接 Switch（开关状态=连接状态）。
-                // 开=已连接 / 关=已断开 / 转圈禁用=连接中。
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    if (isConnecting) ...[
-                      const SizedBox(
-                        width: 12,
-                        height: 12,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      ),
-                      const SizedBox(width: 6),
-                    ],
-                    SlimSwitch(
-                      value: isConnected,
-                      onChanged: isConnecting
-                          ? null
-                          : onManualConnectChanged,
-                    ),
-                  ],
-                ),
-              ],
+            child: Text(
+              peer.deviceName,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                fontSize: 15,
+                fontWeight: FontWeight.w600,
+              ),
             ),
           ),
-          // 右侧：「自动连接」开关（保留标签区分）
-          _buildSwitchRow(
-            context: context,
-            label: '自动连接',
-            value: peer.autoConnect,
-            onChanged: onAutoConnectChanged,
-            colorScheme: colorScheme,
+          // 右侧：两个同步方向开关（上下排列）——
+          // 向此设备同步 = 本机是否推送变更给它；
+          // 从此设备同步 = 本机是否接收它的变更。
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _buildSwitchRow(
+                context: context,
+                label: '向此设备同步',
+                value: peer.syncToPeer,
+                onChanged: onSyncToChanged,
+                colorScheme: colorScheme,
+              ),
+              const SizedBox(height: 6),
+              _buildSwitchRow(
+                context: context,
+                label: '从此设备同步',
+                value: peer.syncFromPeer,
+                onChanged: onSyncFromChanged,
+                colorScheme: colorScheme,
+              ),
+            ],
           ),
           // 更多菜单（取消配对）：单选项时 hover 覆盖整个下拉容器——
           // 容器 padding 归零（容器=按钮大小），圆角与按钮一致（task-32）。
@@ -1046,7 +1012,7 @@ class _PeerTile extends StatelessWidget {
     );
   }
 
-  /// 开关行：左侧小标签 + 右侧 [SlimSwitch]（紧凑行）。
+/// 开关行：左侧小标签 + 右侧 [SlimSwitch]（紧凑行）。
   Widget _buildSwitchRow({
     required BuildContext context,
     required String label,

@@ -99,6 +99,12 @@ class TrustedDevices extends Table {
   /// 是否自动连接该已配对设备（默认开；关闭 = 仅保存配对，不自动连）。
   BoolColumn get autoConnect => boolean().withDefault(const Constant(true))();
 
+  /// 向对端同步（task-32）：本机是否把变更/全量推送给该设备（默认开）。
+  BoolColumn get syncToPeer => boolean().withDefault(const Constant(true))();
+
+  /// 从对端同步（task-32）：本机是否接收该设备推送的变更/全量（默认开）。
+  BoolColumn get syncFromPeer => boolean().withDefault(const Constant(true))();
+
   /// HMAC 挑战认证密钥（32 字节随机 hex，nullable——旧配对升级后为 null）。
   TextColumn get secret => text().nullable()();
 
@@ -124,7 +130,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase(super.executor);
 
   @override
-  int get schemaVersion => 8;
+  int get schemaVersion => 9;
 
   /// 迁移策略：v1（仅 Notes）→ v2（新增 DeviceSettings/TrustedDevices）
   /// → v3（TrustedDevices 加 autoConnect 列，task-16）→ v4（Notes 加
@@ -145,6 +151,9 @@ class AppDatabase extends _$AppDatabase {
   /// 与标签列（TEXT 默认 '[]'，存量笔记升级后无标签）；
   /// task-29（v8）不新增列：content 存储格式从纯文本改为 delta JSON，
   /// 逐行转换存量数据（已是 delta 的跳过，见 [_contentToDeltaV8]）；
+  /// task-32（v9）：TrustedDevices 加 syncToPeer/syncFromPeer 列（默认 true，
+  /// 存量已配对设备升级后双向同步保持开启）；连接策略简化为「永远自动
+  /// 连接」+ 同步方向开关（autoConnect 列保留但不再控制连接）；
   /// 全新库走 onCreate 建全部表。
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -172,6 +181,10 @@ class AppDatabase extends _$AppDatabase {
           }
           if (from < 8) {
             await _migrateContentToDeltaV8();
+          }
+          if (from < 9) {
+            await m.addColumn(trustedDevices, trustedDevices.syncToPeer);
+            await m.addColumn(trustedDevices, trustedDevices.syncFromPeer);
           }
         },
       );

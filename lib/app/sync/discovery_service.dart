@@ -18,7 +18,11 @@ const int kAnnounceVersion = 4;
 
 /// 默认扫描窗口：一次 [DiscoveryService.scanOnce] 的收集时长（3s）。
 /// 窗口结束后停止监听，设备列表定格（不再自动更新，等待下一次扫描）。
-const Duration kDefaultScanWindow = Duration(seconds: 3);
+/// 默认扫描窗口（task-32：30s；手动扫描与临时广播窗口统一）。
+const Duration kDefaultScanWindow = Duration(seconds: 30);
+
+/// 互联窗口统一时长（task-32）：临时广播/扫描/UI 状态计时共用。
+const Duration kDiscoveryWindow = Duration(seconds: 30);
 
 /// 发现的可用主机（UDP 广播解析结果）。
 class DiscoveredDevice {
@@ -114,7 +118,6 @@ class DiscoveryService {
     Duration replyCooldown = const Duration(seconds: 30),
     List<InternetAddress>? broadcastAddresses,
   })  : _announceInterval = announceInterval,
-        _deviceExpiry = deviceExpiry,
         _scanWindow = scanWindow,
         _localDeviceId = deviceId,
         _localDeviceName = deviceName ?? '',
@@ -126,7 +129,6 @@ class DiscoveryService {
   final Duration _announceInterval;
 
   /// 设备离线判定窗口：超过该时长无通告即判定离线移除（默认 90s）。
-  final Duration _deviceExpiry;
 
   /// 一次 [scanOnce] 的收集窗口（默认 3s；可配置，测试用短窗口）。
   final Duration _scanWindow;
@@ -172,12 +174,22 @@ class DiscoveryService {
   /// 扫描窗口结束定时器（scanOnce 调度）。
   Timer? _scanTimer;
 
+  /// 扫描期间周期清理定时器（task-32：下线设备从列表移除）。
+  Timer? _pruneTimer;
+
+  /// 扫描期间清理周期（task-32：1s 检查一次，下线设备及时移除）。
+  static const Duration _scanPruneInterval = Duration(seconds: 1);
+
+  /// 设备停止广播视为下线的阈值（新版可被发现广播周期 5s，错过一次
+  /// 广播 + 1s 余量即判下线；task-32 由 12s → 8s → 6s）。
+  static const Duration _scanInactiveThreshold = Duration(seconds: 6);
+
   /// 当前扫描的完成信号：窗口结束（或 [stopScan] 提前定格）时完成，
   /// 使 [scanOnce] 的调用方可 `await` 整个收集窗口。
   Completer<void>? _scanCompleter;
 
   /// 设备表（按 deviceId 去重），含最后可见时间（离线判定依据）。
-  /// 跨扫描保留（列表定格）；扫描结束按 [_deviceExpiry] 清理过期条目。
+  /// 跨扫描保留（列表定格）；扫描期间按 [_scanInactiveThreshold] 清理下线设备（task-32）。
   final Map<String, _DeviceEntry> _devices = {};
 
   /// 最近回播时间（deviceId → 时间）：收到新设备通告回播后记录，
@@ -211,7 +223,7 @@ class DiscoveryService {
   ///
   /// 发布后立即按 [_initialAnnounceDelays] 三连发（上线宣告，LocalSend 式），
   /// 随后按周期通告（[announceInterval] 参数优先，缺省 [_announceInterval]）；
-  /// unpublish 后停止通告（对端凭 [_deviceExpiry] 离线判定移除，无显式 goodbye）。
+  /// unpublish 后停止通告（对端凭扫描窗口内无广播判定移除，无显式 goodbye）。
   ///
   /// [announceInterval]：可选覆盖周期通告间隔（task-31「可被发现」临时广播
   /// 用 5s 快速宣告；未传则用构造参数默认 30s）。
@@ -256,7 +268,7 @@ class DiscoveryService {
 
   /// 手动扫描一次：绑定 UDP [kDiscoveryPort]（reuseAddress + macOS/Linux
   /// reusePort 同机共存）接收广播通告，收集窗口（[window] 参数优先，缺省
-  /// [_scanWindow]，默认 3s）后停止——设备列表**定格**（保留本次扫描结果，
+  /// [_scanWindow]，默认 30s）后停止——设备列表**定格**（保留本次扫描结果，
   /// 不再自动更新，等待下一次扫描）。
   ///
   /// 返回的 Future 在**收集窗口结束后**完成：调用方 `await scanOnce()` 即
@@ -265,7 +277,7 @@ class DiscoveryService {
   /// - 扫描窗口内收到通告 → 更新设备表 + 推送列表（新设备立即回播自己的
   ///   通告，LocalSend 式互相知晓）；
   /// - 扫描开始时若正在发布，立即补发一次通告（帮助正在扫描的对端发现本机）；
-  /// - 窗口结束 → 关闭接收 socket + 按 [_deviceExpiry] 清理过期设备 + 推送
+  /// - 窗口结束 → 关闭接收 socket + 推送最终列表
   ///   最终列表；
   /// - 设备表跨扫描保留（列表定格语义：两次扫描之间的列表不变化）。
   ///
@@ -279,6 +291,9 @@ class DiscoveryService {
       _finishScan();
     }
     _scanning = true;
+    // task-32：点击扫描清空旧列表并立即推送（UI 立即清空，不等新广播）。
+    _devices.clear();
+    _pushMerged();
     _scanCompleter = Completer<void>();
     unawaited(_bindScanSocket());
     // 扫描开始补发一次通告：让正在扫描的对端及时收到本机（配合回播机制）。
@@ -288,6 +303,18 @@ class DiscoveryService {
     final effectiveWindow = window ?? _scanWindow;
     _scanTimer?.cancel();
     _scanTimer = Timer(effectiveWindow, _finishScan);
+    // task-32：扫描期间周期清理不再广播的设备（下线即从列表移除）。
+    _pruneTimer?.cancel();
+    _pruneTimer = Timer.periodic(_scanPruneInterval, (_) {
+      if (!_scanning) return;
+      final now = DateTime.now();
+      final before = _devices.length;
+      _devices.removeWhere(
+        (_, entry) =>
+            now.difference(entry.lastSeen) > _scanInactiveThreshold,
+      );
+      if (_devices.length != before) _pushMerged();
+    });
     return _scanCompleter!.future;
   }
 
@@ -326,9 +353,13 @@ class DiscoveryService {
   /// 注意：必须在置 [_scanning] 为 false **之前**推送最终列表（[_pushMerged]
   /// 仅在扫描中时推送——扫描结束的定格列表也要下发）。
   void _finishScan() {
+    _pruneTimer?.cancel();
+    _pruneTimer = null;
     _receiveSocket?.close();
     _receiveSocket = null;
-    _pruneExpired();
+    // task-32：扫描结束清空列表——不再定格旧设备（广播已停的设备
+    // 不再显示；下次扫描重新收集）。
+    _devices.clear();
     _pushMerged();
     _scanning = false;
     final completer = _scanCompleter;
@@ -560,18 +591,6 @@ class DiscoveryService {
     );
   }
 
-  /// 离线清理：移除超过 [_deviceExpiry] 无通告的设备（按 deviceId lastSeen）。
-  void _pruneExpired() {
-    if (_devices.isEmpty) return;
-    final now = DateTime.now();
-    final before = _devices.length;
-    _devices.removeWhere(
-      (_, entry) => now.difference(entry.lastSeen) > _deviceExpiry,
-    );
-    if (_devices.length != before) {
-      _pushMerged();
-    }
-  }
 }
 
 /// 一条 UDP 通告（解析后的结构化表示）。

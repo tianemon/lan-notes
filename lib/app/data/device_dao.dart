@@ -73,6 +73,12 @@ class DeviceDao extends DatabaseAccessor<AppDatabase> with _$DeviceDaoMixin {
     );
   }
 
+  /// 更新某已配对设备的设备名（task-32：存量条目存了 ID 时握手刷新）。
+  Future<void> updateTrustedName(String deviceId, String deviceName) async {
+    await (update(trustedDevices)..where((t) => t.deviceId.equals(deviceId)))
+        .write(TrustedDevicesCompanion(deviceName: Value(deviceName)));
+  }
+
   /// 更新某已配对设备的认证密钥（重新配对/确认回发时刷新）。
   Future<void> setSecret(String deviceId, String secret) async {
     await (update(trustedDevices)..where((t) => t.deviceId.equals(deviceId)))

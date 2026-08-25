@@ -590,11 +590,11 @@ class _SyncPageState extends ConsumerState<SyncPage> {
 
   /// 连接状态颜色：已连接=绿；连接中/自动连接中=橙；未连接=灰
   /// （task-25 状态彩色圆点规范）。
+  /// 状态色（task-32：只留在线绿/离线灰，连接中按离线显示——不再闪黄）。
   Color _peerStatusColor(PeerDevice peer) {
     return switch (peer.status) {
       PeerStatus.connected => kStatusConnected,
-      PeerStatus.connecting => kStatusConnecting,
-      PeerStatus.disconnected => kStatusDisconnected,
+      PeerStatus.connecting || PeerStatus.disconnected => kStatusDisconnected,
     };
   }
 
@@ -723,9 +723,9 @@ class _SyncPageState extends ConsumerState<SyncPage> {
       _scanSeq++; // 重置转圈动画（KeyedSubtree key 变化强制重建）
     });
     unawaited(
-      _service.scanOnce(window: const Duration(seconds: 30), restart: true),
+      _service.scanOnce(window: kDiscoveryWindow, restart: true),
     );
-    _scanUiTimer = Timer(const Duration(seconds: 30), () {
+    _scanUiTimer = Timer(kDiscoveryWindow, () {
       if (mounted) setState(() => _scanning = false);
     });
   }
@@ -736,7 +736,7 @@ class _SyncPageState extends ConsumerState<SyncPage> {
     try {
       await _service.announceTemporarily();
       _announceTimer?.cancel();
-      _announceTimer = Timer(const Duration(seconds: 30), () {
+      _announceTimer = Timer(kDiscoveryWindow, () {
         if (mounted) setState(() => _announcing = false);
       });
     } catch (_) {
@@ -782,15 +782,16 @@ class _DeviceTile extends StatelessWidget {
     final name = device.deviceName.trim().isEmpty
         ? device.instanceName
         : device.deviceName.trim();
-    final dotColor = isConflict
-        ? colorScheme.error
-        : (isPaired ? kStatusConnected : kStatusConnecting);
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 6, 8, 6),
       child: ListTile(
-        contentPadding: EdgeInsets.zero,
-        leading: _StatusDot(color: dotColor),
+        // task-32：内容与 hover 边缘留间距（leading/trailing 不贴边）。
+        contentPadding: const EdgeInsets.symmetric(horizontal: 8),
+        // 设备图标（按名称猜类型）；猜不到显示绿点（在线色）。
+        leading: isConflict
+            ? Icon(Icons.error_outline, color: colorScheme.error, size: 20)
+            : _deviceLeading(name),
         title: Text(name, maxLines: 1, overflow: TextOverflow.ellipsis),
         subtitle: Text(
           '${device.address.address}:${device.port}',
@@ -803,6 +804,48 @@ class _DeviceTile extends StatelessWidget {
       ),
     );
   }
+}
+
+/// 设备列表 leading：图标（按名称猜类型）/ 冲突错误图标 / 默认绿点。
+Widget _deviceLeading(String name) {
+  final icon = _deviceTypeIcon(name);
+  if (icon != null) return Icon(icon, color: kStatusConnected, size: 20);
+  return const _StatusDot(color: kStatusConnected);
+}
+
+/// 按设备名猜测设备类型图标（task-32）：手机 / 笔记本 / 台式机；
+/// 猜不到返回 null（UI 回退显示绿点）。
+IconData? _deviceTypeIcon(String name) {
+  final n = name.toLowerCase();
+  if (n.contains('iphone') ||
+      n.contains('ipad') ||
+      n.contains('phone') ||
+      n.contains('手机') ||
+      n.contains('小米') ||
+      n.contains('xiaomi') ||
+      n.contains('华为') ||
+      n.contains('huawei') ||
+      n.contains('honor') ||
+      n.contains('oppo') ||
+      n.contains('vivo') ||
+      n.contains('realme')) {
+    return Icons.smartphone;
+  }
+  if (n.contains('mac') ||
+      n.contains('book') ||
+      n.contains('laptop') ||
+      n.contains('笔记本') ||
+      n.contains('air')) {
+    return Icons.laptop_mac;
+  }
+  if (n.contains('pc') ||
+      n.contains('desktop') ||
+      n.contains('台式') ||
+      n.contains('windows') ||
+      n.contains('win')) {
+    return Icons.desktop_windows;
+  }
+  return null;
 }
 
 /// 发现设备的配对状态标记：未配对 / 已配对 / 设备 ID 冲突。
@@ -821,7 +864,8 @@ class _StatusBadge extends StatelessWidget {
     if (isPaired) {
       return _badge('已配对', colorScheme.primary);
     }
-    return _badge('未配对', colorScheme.tertiary);
+    // task-32：未配对用黑灰色（不再橙色）。
+    return _badge('未配对', colorScheme.onSurfaceVariant);
   }
 
   Widget _badge(String label, Color color) {
@@ -921,7 +965,7 @@ class _StatusDotState extends State<_StatusDot>
 /// 连接策略已简化为「配对成功永远自动连接」——设备行不再有连接开关，
 /// 只控制同步方向：向对端同步（本机推送）/ 从对端同步（本机接收），
 /// 两端各自独立、不同步。连接状态由状态圆点显示。
-class _PeerTile extends StatefulWidget {
+class _PeerTile extends StatelessWidget {
   const _PeerTile({
     required this.peer,
     required this.statusColor,
@@ -941,70 +985,20 @@ class _PeerTile extends StatefulWidget {
   final VoidCallback onUnpair;
 
   @override
-  State<_PeerTile> createState() => _PeerTileState();
-}
-
-class _PeerTileState extends State<_PeerTile> {
-  /// 连接中黄点是否已显示（延迟 800ms：快速握手不闪黄，直接灰→绿）。
-  bool _connectingShown = false;
-  Timer? _connectingTimer;
-
-  /// 当前是否连接中。
-  bool get _isConnecting => widget.peer.status == PeerStatus.connecting;
-
-  /// 同步连接中状态：connecting 持续超过 800ms 才显示黄点（呼吸）。
-  void _syncConnecting() {
-    if (_isConnecting && !_connectingShown) {
-      _connectingTimer?.cancel();
-      _connectingTimer = Timer(const Duration(milliseconds: 800), () {
-        if (mounted && _isConnecting) {
-          setState(() => _connectingShown = true);
-        }
-      });
-    } else if (!_isConnecting && _connectingShown) {
-      _connectingTimer?.cancel();
-      _connectingShown = false;
-    }
-  }
-
-  @override
-  void initState() {
-    super.initState();
-    _syncConnecting();
-  }
-
-  @override
-  void didUpdateWidget(covariant _PeerTile oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    _syncConnecting();
-  }
-
-  @override
-  void dispose() {
-    _connectingTimer?.cancel();
-    super.dispose();
-  }
-
-  @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
-    // 黄点只在连接中持续 800ms 后才显示（避免设备上线瞬间闪黄）。
-    final showConnecting = _isConnecting && _connectingShown;
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 10, 4, 10),
       child: Row(
         children: [
-          // 状态彩色圆点：已连接绿 / 连接中橙（呼吸，延迟显示）/ 未连接灰
-          _StatusDot(
-            color: showConnecting ? kStatusConnecting : widget.statusColor,
-            pulse: showConnecting,
-          ),
+          // 状态圆点：只留在线绿/离线灰（连接中按离线显示，不闪黄）。
+          _StatusDot(color: statusColor, pulse: false),
           const SizedBox(width: 12),
           Expanded(
             child: Text(
-              widget.peer.deviceName,
+              peer.deviceName,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(
@@ -1023,16 +1017,16 @@ class _PeerTileState extends State<_PeerTile> {
               _buildSwitchRow(
                 context: context,
                 label: '向此设备同步',
-                value: widget.peer.syncToPeer,
-                onChanged: widget.onSyncToChanged,
+                value: peer.syncToPeer,
+                onChanged: onSyncToChanged,
                 colorScheme: colorScheme,
               ),
               const SizedBox(height: 6),
               _buildSwitchRow(
                 context: context,
                 label: '从此设备同步',
-                value: widget.peer.syncFromPeer,
-                onChanged: widget.onSyncFromChanged,
+                value: peer.syncFromPeer,
+                onChanged: onSyncFromChanged,
                 colorScheme: colorScheme,
               ),
             ],
@@ -1050,7 +1044,8 @@ class _PeerTileState extends State<_PeerTile> {
               padding: WidgetStatePropertyAll(EdgeInsets.zero),
             ),
             builder: (context, controller, _) => IconButton(
-              tooltip: '更多操作',
+              // 不用 tooltip：每设备一个且频繁 hover 会触发
+              // RawTooltipState multiple tickers 异常（task-32）。
               icon: const Icon(Icons.more_vert),
               style: IconButton.styleFrom(
                 shape: RoundedRectangleBorder(
@@ -1061,7 +1056,7 @@ class _PeerTileState extends State<_PeerTile> {
             ),
             menuChildren: [
               MenuItemButton(
-                onPressed: widget.onUnpair,
+                onPressed: onUnpair,
                 style: MenuItemButton.styleFrom(
                   // 宽度适配文字：padding 决定按钮大小；圆角与容器一致，
                   // 单选项时 hover 高亮正好覆盖整个下拉容器。

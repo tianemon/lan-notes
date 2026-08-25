@@ -180,7 +180,7 @@ class PeerDevice {
 ///   服务端并发布 UDP 广播通告（JSON 携带 deviceId + 设备名 + 端口）；
 /// - **客户端（v4 智能扫描，task-27）**：**常态不主动扫描**——enable 后
 ///   先对已配对设备凭**地址缓存直连**（[directConnectAttempts]×2 组，组间
-///   [directConnectRetryDelay]），失败/无缓存才进入**退避扫描**（断开后
+///   [directConnectAttemptTimeout]），失败/无缓存才进入**退避扫描**（断开后
 ///   [backoffScanBase] 起每轮 +[backoffScanIncrement] 直到 [backoffScanCap]
 ///   封顶，持续低频扫描）；未配对设备不自动扫描，仅用户手动「重新扫描」
 ///   （[scanOnce]，3s 收集窗口后列表定格）；广播（30s 周期通告）保留。
@@ -225,8 +225,7 @@ class SyncService {
     this.fileChunkSendDelay = Duration.zero,
     this.directConnectAttempts = 3,
     this.directConnectGroups = 2,
-    this.directConnectRetryDelay = const Duration(seconds: 5),
-    this.directConnectAttemptTimeout = const Duration(seconds: 5),
+    this.directConnectAttemptTimeout = const Duration(seconds: 4),
     this.heartbeatInterval = const Duration(seconds: 2),
     this.heartbeatTimeout = const Duration(seconds: 5),
   })  : _repository = repository,
@@ -247,12 +246,11 @@ class SyncService {
   /// 直连阶段每组尝试次数（默认 3 次）。
   final int directConnectAttempts;
 
-  /// 直连阶段组数（默认 2 组：先试 3 次，失败等 [directConnectRetryDelay]
+  /// 直连阶段组数（默认 2 组：先试 3 次
   /// 再试 3 次；仍失败进入退避扫描）。
   final int directConnectGroups;
 
   /// 直连组间等待时长（默认 5s）。
-  final Duration directConnectRetryDelay;
 
   /// 单次直连尝试的等待上限（默认 5s；超时视为该次失败，避免对端不可达时
   /// 单次尝试被 SyncClient 内部指数退避拖满 31s）。
@@ -558,8 +556,8 @@ class SyncService {
   /// 临时广播定时器（task-31「可被发现」：广播 30s 后自动停止）。
   Timer? _announceTemporaryTimer;
 
-  /// 临时广播时长（「可被发现」向外广播的持续时间）。
-  static const Duration _announceTemporaryDuration = Duration(seconds: 30);
+  /// 临时广播时长（「可被发现」向外广播的持续时间；与 kDiscoveryWindow 统一）。
+  static const Duration _announceTemporaryDuration = kDiscoveryWindow;
 
   /// 临时广播通告间隔（「可被发现」每 5s 广播一次）。
   static const Duration _announceTemporaryInterval = Duration(seconds: 5);
@@ -664,7 +662,7 @@ class SyncService {
   /// 直连阶段（enable 后）：对全部「应主动连接」的已配对设备（autoConnect
   /// && 非手动断开 && 本机 deviceId 较小）凭缓存地址尝试连接
   /// [directConnectAttempts]×[directConnectGroups] 次（组间等待
-  /// [directConnectRetryDelay]）；仍失败进入退避扫描。
+  /// 仍失败进入退避扫描。
   ///
   /// 每台对端独立异步推进（不阻塞 enable 返回）。
   Future<void> _runDirectConnectPhase() async {
@@ -713,7 +711,7 @@ class SyncService {
       // TCP 已连上：等握手就绪（ready）——对端拒绝（自动连接被拒）时
       // 会话会被关闭，ready 永不成立，返回失败（task-32：修复「提示
       // 连接成功但实际没连」）。
-      final deadline = DateTime.now().add(const Duration(seconds: 6));
+      final deadline = DateTime.now().add(const Duration(seconds: 5));
       while (DateTime.now().isBefore(deadline)) {
         final sid = _sessionByPeerId[peerId];
         final s = sid == null ? null : _sessions[sid];
@@ -1393,7 +1391,8 @@ class SyncService {
         if (n != null) return n;
       }
     }
-    return peerId;
+    // 最终兜底：显示 ID 前 8 位（task-32，避免展示完整长 ID）。
+    return peerId.length <= 8 ? peerId : peerId.substring(0, 8);
   }
 
   /// 会话的连接状态（同步页展示）：就绪=已连接；出站传输层连接中/入站未就绪
@@ -2313,7 +2312,9 @@ class _PeerSession {
       service._unregisterPeerId(peerDeviceId, this);
     }
     peerDeviceId = peerId;
-    peerName = service._safePeerName(peerName, fallback: peerId);
+    // 关键：参数与字段同名，必须显式 this. 赋字段——否则字段恒 null，
+    // 导致已配对列表显示 ID（请求/弹窗用参数名正常，连接后字段空）。
+    this.peerName = service._safePeerName(peerName, fallback: peerId);
     return service._registerPeerId(this);
   }
 
@@ -2425,7 +2426,11 @@ class _PeerSession {
     }
     // 对端请求连接本机：本机作为接受方进入同意/拒绝队列。
     if (!_setPeerIdentity(peerId, peerName)) return;
-    _enterConsenter(peerId, peerName);
+    // task-32：pairing_request 名称为空时回退会话已登记的 hello 名称
+    // （请求方握手 hello 通常带名；避免弹窗显示 deviceId）。
+    final displayName =
+        peerName.trim().isNotEmpty ? peerName : (this.peerName ?? peerId);
+    _enterConsenter(peerId, displayName);
   }
 
   /// 收到 challenge（对端验证本机）：用本地存储的该设备密钥计算 HMAC 响应。
@@ -2650,10 +2655,32 @@ class _PeerSession {
   /// ready 翻转时统一刷新 peerList（含未就绪时的中间态刷新）。
   void _onReady() {
     service._emitPeers(); // ready 翻转/中间态：统一刷新设备列表状态
+    // task-32：存量信任条目存了 ID（旧包配对/对端空名）时，用会话名刷新。
+    unawaited(_refreshTrustedNameIfId());
     if (!ready || _fullSyncTriggered) return;
     _fullSyncTriggered = true;
     _startHeartbeat(); // 会话就绪：启动心跳探活（离线检测）
     service._emitDevices();
     _sendSyncRequest();
+  }
+
+  /// 信任列表条目名是 ID（等于 deviceId 或空）时，用会话登记的 peerName
+  /// 刷新——修复「已配对设备显示 ID」（task-32：存量数据 + 对端空名兜底）。
+  Future<void> _refreshTrustedNameIfId() async {
+    final peerId = peerDeviceId;
+    if (peerId == null) return;
+    final trusted = service._trustedCache
+        .where((t) => t.deviceId == peerId)
+        .firstOrNull;
+    if (trusted == null) return;
+    final stored = trusted.deviceName.trim();
+    final sessionName = (peerName ?? '').trim();
+    if ((stored.isEmpty || stored == peerId) &&
+        sessionName.isNotEmpty &&
+        sessionName != peerId) {
+      await service._identity.updateTrustedName(peerId, sessionName);
+      await service._refreshTrustedCache();
+      service._emitPeers();
+    }
   }
 }

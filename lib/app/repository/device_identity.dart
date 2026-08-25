@@ -43,7 +43,17 @@ class DeviceIdentityStore {
   })  : // 先给内存临时值（构造后即可同步读取）；ensureLoaded 后为持久化权威值。
         // 注入参数用于验证脚本构造确定性身份（见 temp/drafts/verify_sync.dart）。
         _deviceId = deviceId ?? const Uuid().v4(),
-        _deviceName = deviceName ?? _defaultDeviceName();
+        _deviceName = deviceName ?? _defaultDeviceName() {
+    // task-32：主机名取不到时（落到默认兜底名），改用 deviceId 前 8 位
+    // 作为设备名（避免对端看到「lan-notes」/「Android 设备」这类无意义名）。
+    if (deviceName == null &&
+        (_deviceName == 'lan-notes' ||
+            _deviceName == 'Android 设备' ||
+            _deviceName.isEmpty)) {
+      _deviceName =
+          _deviceId.length <= 8 ? _deviceId : _deviceId.substring(0, 8);
+    }
+  }
 
   final DeviceDao _dao;
 
@@ -139,6 +149,10 @@ class DeviceIdentityStore {
   }
 
   /// 刷新某已配对设备的认证密钥（确认回发/重新配对时）。
+  /// 更新某已配对设备的设备名（task-32：存量 ID 条目握手时刷新）。
+  Future<void> updateTrustedName(String deviceId, String deviceName) =>
+      _dao.updateTrustedName(deviceId, deviceName);
+
   Future<void> setTrustedSecret(String deviceId, String secret) =>
       _dao.setSecret(deviceId, secret);
 

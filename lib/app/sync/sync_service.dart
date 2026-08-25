@@ -350,6 +350,10 @@ class SyncService {
   Map<String, bool> _syncToByPeerId = const {};
   Map<String, bool> _syncFromByPeerId = const {};
 
+  /// 对端「向各设备同步」配置缓存（task-32 v5）：peerId → (targetId → bool)。
+  /// hello/sync_config 交换；fan-out 转发/接收时按 origin 的配置过滤。
+  Map<String, Map<String, bool>> _peerSyncToConfigs = const {};
+
   /// 会话级手动断开标记（task-16，WiFi 式断开）：按对端 deviceId 记录。
   ///
   /// 手动断开（[disconnectPeer]）后当下不自动重连（发现轮询跳过）；
@@ -913,6 +917,10 @@ class SyncService {
     );
     await _refreshTrustedCache();
     _emitPeers();
+    // task-32 v5：向配置变更 → 广播给所有已配对对端（转发/接收过滤依据）。
+    if (syncToPeer != prevTo) {
+      _broadcastSyncConfig();
+    }
     // task-32：开关打开时主动触发一次对应动作（已连接会话上）——
     // 向此设备同步打开 → 主动推一次全量；从此设备同步打开 → 主动拉一次。
     if (syncToPeer && !prevTo) {
@@ -920,6 +928,16 @@ class SyncService {
     }
     if (syncFromPeer && !prevFrom) {
       unawaited(_pullFromPeer(deviceId));
+    }
+  }
+
+  /// 广播本机「向」配置给所有已就绪对端（task-32 v5）。
+  void _broadcastSyncConfig() {
+    final message = SyncConfigMessage(syncTo: _syncToByPeerId).toJson();
+    for (final session in _sessions.values) {
+      if (session.ready) {
+        session.sendMessage(message);
+      }
     }
   }
 
@@ -1441,11 +1459,33 @@ class SyncService {
 
   /// 把消息转发给除 [except] 外的所有**已就绪**会话（多向广播 fan-out）。
   void _fanOutToOthers(Map<String, dynamic> message, _PeerSession except) {
+    // task-32 v5：转发时按 origin 的「向目标」配置过滤——A 关「向 B」后，
+    // 即使 C 向 B 开放，origin=A 的数据也不转发给 B。
+    final origin = _originOf(message);
     for (final session in _sessions.values) {
       if (session != except && session.ready && _canPushTo(session)) {
+        if (origin != null &&
+            !_originAllowsTo(origin, session.peerDeviceId)) {
+          continue; // origin 设备对该目标关「向」：不转发
+        }
         session.sendMessage(message);
       }
     }
+  }
+
+  /// 从消息提取 origin（note_upsert/note_delete 的原始作者）。
+  String? _originOf(Map<String, dynamic> message) {
+    final origin = message['origin'];
+    return origin is String && origin.isNotEmpty ? origin : null;
+  }
+
+  /// origin 设备是否允许数据到达目标（查对端缓存配置，缺省放行）。
+  bool _originAllowsTo(String origin, String? targetId) {
+    if (targetId == null || targetId.isEmpty) return true;
+    if (origin == deviceId) return true; // 本机数据：由本机「向」开关控制（_canPushTo）
+    final config = _peerSyncToConfigs[origin];
+    if (config == null) return true; // 无缓存（未交换过配置）：放行
+    return config[targetId] ?? true;
   }
 
   /// 向所有已就绪对端推送（本地变更 → note_upsert / note_delete）。
@@ -2121,6 +2161,7 @@ class _PeerSession {
       protocolVersion: kProtocolVersion,
       port: service._server.port, // 对端入站缓存本机地址用（task-32）
       manual: manualConnect, // 手动连接标志（对端据此不拒绝，task-32）
+      syncTo: service._syncToByPeerId, // 本机向配置（对端过滤转发/接收用）
     ).toJson());
   }
 
@@ -2244,7 +2285,14 @@ class _PeerSession {
         protocolVersion: final protocolVersion,
         port: final peerPort,
         manual: final manualHello,
+        syncTo: final peerSyncTo,
       ):
+        if (peerSyncTo.isNotEmpty) {
+          service._peerSyncToConfigs = {
+            ...service._peerSyncToConfigs,
+            peerId: peerSyncTo,
+          };
+        }
         await _onPeerHello(
           peerId,
           peerName,
@@ -2298,6 +2346,16 @@ class _PeerSession {
         // 对端关闭了对本机的自动连接：本机收到被拒通知 → 自动关闭对
         // 该对端的自动连接开关（持久化），避免反复尝试自动连被拒（Q4）。
         await service._onAutoConnectRejected(rejectingPeerId);
+        break;
+      case SyncConfigMessage(syncTo: final peerConfig):
+        // 对端同步方向配置变更：更新缓存（fan-out 转发/接收过滤依据）。
+        final fromPeer = peerDeviceId;
+        if (fromPeer != null && peerConfig.isNotEmpty) {
+          service._peerSyncToConfigs = {
+            ...service._peerSyncToConfigs,
+            fromPeer: peerConfig,
+          };
+        }
         break;
       case DisconnectMessage():
         // 对端主动断开（手动断开/关同步）：标记该对端为「手动断开」——
@@ -2669,6 +2727,11 @@ class _PeerSession {
         (service._syncFromByPeerId[authorId] ?? true) == false) {
       return;
     }
+    // v5：origin 设备对本机的「向」开关——关则丢弃（A 关「向本机」时，
+    // 即使经 C 转发也不接收 A 的数据）。
+    if (authorId != null && !service._originAllowsTo(authorId, service.deviceId)) {
+      return;
+    }
     final changed = await service._repository.mergeRemoteNote(note);
     // 图片缺失检测（task-30）：无论是否实际变更本地都执行——重复/回声消息
     // 也可能携带本地仍缺失的附件引用（上次请求超时/校验失败后的重试路径）。
@@ -2695,6 +2758,10 @@ class _PeerSession {
     final authorId = origin.isNotEmpty ? origin : peerDeviceId;
     if (authorId != null &&
         (service._syncFromByPeerId[authorId] ?? true) == false) {
+      return;
+    }
+    // v5：origin 设备对本机的「向」开关（同 upsert）。
+    if (authorId != null && !service._originAllowsTo(authorId, service.deviceId)) {
       return;
     }
     final changed = await service._repository.mergeRemoteDelete(

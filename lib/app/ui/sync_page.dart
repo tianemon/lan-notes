@@ -903,14 +903,17 @@ class _StatusDot extends StatefulWidget {
 
 class _StatusDotState extends State<_StatusDot>
     with SingleTickerProviderStateMixin {
-  late final AnimationController _pulse = AnimationController(
-    vsync: this,
-    duration: const Duration(milliseconds: 900),
-  );
+  late final AnimationController _pulse;
 
   @override
   void initState() {
     super.initState();
+    // initState 显式创建（非惰性）：避免 dispose 时首次访问 late 字段
+    // 触发创建 → 此时 widget 已 deactivated → 查 TickerMode ancestor 崩溃。
+    _pulse = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 900),
+    );
     if (widget.pulse) _pulse.repeat(reverse: true);
   }
 
@@ -1016,7 +1019,7 @@ class _PeerTile extends StatelessWidget {
             children: [
               _buildSwitchRow(
                 context: context,
-                label: '向此设备同步',
+                label: '向此设备推送',
                 value: peer.syncToPeer,
                 onChanged: onSyncToChanged,
                 colorScheme: colorScheme,
@@ -1024,7 +1027,7 @@ class _PeerTile extends StatelessWidget {
               const SizedBox(height: 6),
               _buildSwitchRow(
                 context: context,
-                label: '从此设备同步',
+                label: '从此设备拉取',
                 value: peer.syncFromPeer,
                 onChanged: onSyncFromChanged,
                 colorScheme: colorScheme,

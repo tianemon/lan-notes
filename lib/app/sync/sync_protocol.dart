@@ -41,6 +41,7 @@ sealed class SyncMessage {
         'pairing_fail' => PairingFailMessage.fromJson(json),
         'unpair' => UnpairMessage.fromJson(json),
         'disconnect' => const DisconnectMessage(),
+        'sync_config' => SyncConfigMessage.fromJson(json),
         'challenge' => ChallengeMessage.fromJson(json),
         'challenge_response' => ChallengeResponseMessage.fromJson(json),
         'sync_request' => const SyncRequestMessage(),
@@ -76,6 +77,7 @@ class HelloMessage extends SyncMessage {
     this.protocolVersion = kProtocolVersion,
     this.port,
     this.manual = false,
+    this.syncTo = const {},
   });
 
   /// 客户端设备 ID。
@@ -98,6 +100,10 @@ class HelloMessage extends SyncMessage {
   /// 关闭而拒绝；自动连接受对方 autoConnect 控制）。
   final bool manual;
 
+  /// 本机对所有已配对设备的「向对方同步」配置表（deviceId → bool，
+  /// task-32 v5：对端缓存后用于 fan-out 转发/接收时按 origin 的配置过滤）。
+  final Map<String, bool> syncTo;
+
   @override
   String get type => 'hello';
 
@@ -110,6 +116,7 @@ class HelloMessage extends SyncMessage {
     'protocolVersion': protocolVersion,
     if (port != null) 'port': port,
     if (manual) 'manual': true,
+    if (syncTo.isNotEmpty) 'syncTo': syncTo,
   };
 
   factory HelloMessage.fromJson(Map<String, dynamic> json) => HelloMessage(
@@ -119,6 +126,9 @@ class HelloMessage extends SyncMessage {
     protocolVersion: (json['protocolVersion'] as int?) ?? 1,
     port: (json['port'] as num?)?.toInt(),
     manual: (json['manual'] as bool?) ?? false,
+    syncTo: (json['syncTo'] as Map<String, dynamic>?)
+            ?.map((k, v) => MapEntry(k, v as bool)) ??
+        const {},
   );
 }
 
@@ -687,6 +697,32 @@ class DisconnectMessage extends SyncMessage {
 
   @override
   Map<String, dynamic> toJson() => {'type': type};
+}
+
+/// 同步方向配置广播（task-32 v5）：本机「向各设备同步」配置变更时发送
+/// 给所有已配对对端——对端缓存后，fan-out 转发/接收时按 origin 的配置
+/// 过滤（A 关「向 B」后，B 经 C 转发也收不到 A 的数据）。
+class SyncConfigMessage extends SyncMessage {
+  const SyncConfigMessage({required this.syncTo});
+
+  /// 本机对所有已配对设备的「向对方同步」配置（deviceId → bool）。
+  final Map<String, bool> syncTo;
+
+  @override
+  String get type => 'sync_config';
+
+  @override
+  Map<String, dynamic> toJson() => {
+        'type': type,
+        'syncTo': syncTo,
+      };
+
+  factory SyncConfigMessage.fromJson(Map<String, dynamic> json) =>
+      SyncConfigMessage(
+        syncTo: (json['syncTo'] as Map<String, dynamic>?)
+                ?.map((k, v) => MapEntry(k, v as bool)) ??
+            const {},
+      );
 }
 
 /// 心跳探活 ping（离线检测，v4 恢复）：连接内周期发送，对端回 pong。

@@ -904,6 +904,8 @@ class SyncService {
     required bool syncToPeer,
     required bool syncFromPeer,
   }) async {
+    final prevTo = _syncToByPeerId[deviceId] ?? true;
+    final prevFrom = _syncFromByPeerId[deviceId] ?? true;
     await _identity.setSyncDirections(
       deviceId,
       syncToPeer: syncToPeer,
@@ -911,6 +913,30 @@ class SyncService {
     );
     await _refreshTrustedCache();
     _emitPeers();
+    // task-32：开关打开时主动触发一次对应动作（已连接会话上）——
+    // 向此设备同步打开 → 主动推一次全量；从此设备同步打开 → 主动拉一次。
+    if (syncToPeer && !prevTo) {
+      unawaited(_pushFullToPeer(deviceId));
+    }
+    if (syncFromPeer && !prevFrom) {
+      unawaited(_pullFromPeer(deviceId));
+    }
+  }
+
+  /// 主动推送全量给对端（打开「向此设备同步」时）。
+  Future<void> _pushFullToPeer(String peerId) async {
+    final sessionId = _sessionByPeerId[peerId];
+    final session = sessionId == null ? null : _sessions[sessionId];
+    if (session == null || !session.ready) return;
+    await session._sendFullSnapshot();
+  }
+
+  /// 主动从对端拉取全量（打开「从此设备同步」时）。
+  Future<void> _pullFromPeer(String peerId) async {
+    final sessionId = _sessionByPeerId[peerId];
+    final session = sessionId == null ? null : _sessions[sessionId];
+    if (session == null || !session.ready) return;
+    session.sendMessage(const SyncRequestMessage().toJson());
   }
 
   /// 取消配对（task-27 v4 双边解除）：发 unpair{deviceId} → 对端移除信任
@@ -1445,7 +1471,9 @@ class SyncService {
       case NoteUpsertedEvent(note: final note):
       case NoteTrashedEvent(note: final note):
       case NoteRestoredEvent(note: final note):
-        _pushToAllPeers(NoteUpsertMessage(note: note).toJson());
+        _pushToAllPeers(
+          NoteUpsertMessage(note: note, origin: deviceId).toJson(),
+        );
       case NoteDeletedEvent(
         id: final id,
         version: final version,
@@ -1460,6 +1488,7 @@ class SyncService {
           id: id,
           version: version,
           deletedAt: deletedAt,
+          origin: deviceId,
         ).toJson());
     }
   }
@@ -2252,14 +2281,15 @@ class _PeerSession {
         await _onSyncRequest();
       case SyncDataMessage(notes: final notes, tombstones: final tombstones):
         await _onSyncData(notes, tombstones);
-      case NoteUpsertMessage(note: final note):
-        await _onNoteUpsert(note);
+      case NoteUpsertMessage(note: final note, origin: final upsertOrigin):
+        await _onNoteUpsert(note, upsertOrigin);
       case NoteDeleteMessage(
         id: final id,
         version: final version,
         deletedAt: final deletedAt,
+        origin: final deleteOrigin,
       ):
-        await _onNoteDelete(id, version, deletedAt);
+        await _onNoteDelete(id, version, deletedAt, deleteOrigin);
       case DevicesUpdateMessage():
         // P2P：各端设备列表以本机连接表为准（devicesUpdates 由本机
         // 连接表变化驱动），对端广播仅作信息参考，本地忽略。
@@ -2566,6 +2596,18 @@ class _PeerSession {
     // 统一刷新 peerList，修复接受方同步页长期显示“连接中”的问题（task-15）。
     service._emitPeers();
     if (!ready) return; // 本机未信任对端（未配对）：不响应（F14）。
+    // task-32：向对端同步开关关闭 → 不响应全量推送（方向由开关控制）。
+    final peerId = peerDeviceId;
+    if (peerId != null &&
+        (service._syncToByPeerId[peerId] ?? true) == false) {
+      return;
+    }
+    await _sendFullSnapshot();
+  }
+
+  /// 发送本机全量快照（响应 sync_request / 打开「向此设备同步」主动推）。
+  Future<void> _sendFullSnapshot() async {
+    if (!ready) return;
     // 全量快照：笔记（含回收站条目，deletedAt 非空即软删除）+ 墓碑列表
     // （docs/技术架构.md 7.2 节 v3 修订：sync_data 携带 tombstones，对端
     // 先写墓碑再合并笔记，防离线旧数据复活）。
@@ -2604,7 +2646,7 @@ class _PeerSession {
     // 的笔记也能到达对端（F8 双向数据一致）。
     final localNotes = await service._repository.getAll();
     for (final note in localNotes) {
-      _send(NoteUpsertMessage(note: note).toJson());
+      _send(NoteUpsertMessage(note: note, origin: service.deviceId).toJson());
     }
     final localTombstones = await service._repository.getAllTombstones();
     for (final tombstone in localTombstones) {
@@ -2612,13 +2654,21 @@ class _PeerSession {
         id: tombstone.id,
         version: tombstone.version,
         deletedAt: tombstone.deletedAt,
+        origin: service.deviceId,
       ).toJson());
     }
     service._markSyncCompleted();
   }
 
-  Future<void> _onNoteUpsert(Note note) async {
+  Future<void> _onNoteUpsert(Note note, String origin) async {
     if (!ready) return;
+    // task-32 v5：按原始作者检查「从该设备同步」——fan-out 转发的数据
+    // origin 是作者（来源会话可能是转发者），关闭作者的同步即丢弃。
+    final authorId = origin.isNotEmpty ? origin : peerDeviceId;
+    if (authorId != null &&
+        (service._syncFromByPeerId[authorId] ?? true) == false) {
+      return;
+    }
     final changed = await service._repository.mergeRemoteNote(note);
     // 图片缺失检测（task-30）：无论是否实际变更本地都执行——重复/回声消息
     // 也可能携带本地仍缺失的附件引用（上次请求超时/校验失败后的重试路径）。
@@ -2626,12 +2676,27 @@ class _PeerSession {
     if (!changed) return; // 未实际变更本地（重复/过期消息）：丢弃，消息链收敛
     // 多向广播（task-15）：仅当合并实际变更本地时才转发给其他已就绪对端；
     // 未变更即回声（消息已在 mesh 中传播过），转发会形成无限中继循环。
-    service._fanOutToOthers(NoteUpsertMessage(note: note).toJson(), this);
+    // v5：转发保留原始 origin（作者不变），接收方按 origin 过滤。
+    service._fanOutToOthers(
+      NoteUpsertMessage(note: note, origin: origin).toJson(),
+      this,
+    );
     service._markSyncCompleted();
   }
 
-  Future<void> _onNoteDelete(String id, int version, int? deletedAt) async {
+  Future<void> _onNoteDelete(
+    String id,
+    int version,
+    int? deletedAt,
+    String origin,
+  ) async {
     if (!ready) return;
+    // task-32 v5：按原始作者检查「从该设备同步」（fan-out 转发场景）。
+    final authorId = origin.isNotEmpty ? origin : peerDeviceId;
+    if (authorId != null &&
+        (service._syncFromByPeerId[authorId] ?? true) == false) {
+      return;
+    }
     final changed = await service._repository.mergeRemoteDelete(
       id: id,
       version: version,
@@ -2639,10 +2704,14 @@ class _PeerSession {
     );
     if (!changed) return; // 未实际变更本地（已删/乱序过期）：丢弃，消息链收敛
     // 删除同样多向广播（task-15）：仅实际删除时才转发（携带原始 version
-    // 与删除时间，防乱序/时间裁决语义不变）；未变更即回声，丢弃避免 mesh
-    // 中无限中继。
+    // 与删除时间，防乱序/时间裁决语义不变）；v5 转发保留 origin。
     service._fanOutToOthers(
-      NoteDeleteMessage(id: id, version: version, deletedAt: deletedAt).toJson(),
+      NoteDeleteMessage(
+        id: id,
+        version: version,
+        deletedAt: deletedAt,
+        origin: origin,
+      ).toJson(),
       this,
     );
     service._markSyncCompleted();
@@ -2661,7 +2730,12 @@ class _PeerSession {
     _fullSyncTriggered = true;
     _startHeartbeat(); // 会话就绪：启动心跳探活（离线检测）
     service._emitDevices();
-    _sendSyncRequest();
+    // task-32：连接建立时按方向开关拉取——「从此设备同步」开才发
+    // sync_request（对端是否响应受其「向本机同步」开关控制）。
+    final peerId = peerDeviceId;
+    if (peerId != null && (service._syncFromByPeerId[peerId] ?? true)) {
+      _sendSyncRequest();
+    }
   }
 
   /// 信任列表条目名是 ID（等于 deviceId 或空）时，用会话登记的 peerName

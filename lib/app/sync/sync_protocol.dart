@@ -12,7 +12,9 @@ import '../data/note.dart';
 /// 版本不符被接收端忽略；hello 携带的版本低于本值时，接收方回
 /// [PairingFailMessage]（原因「协议版本不兼容，请升级应用」）后断开
 /// （见 docs/技术架构.md 7.3 节）。
-const int kProtocolVersion = 4;
+/// 协议版本（v5：task-32 破坏性更新——增量消息携带 origin 原始作者，
+/// 同步方向开关按 origin 过滤 fan-out 转发；v4 及以下对端不互连）。
+const int kProtocolVersion = 5;
 
 /// 同步协议消息（docs/技术架构.md 7.2 节消息协议表）。
 ///
@@ -415,20 +417,29 @@ class SyncDataMessage extends SyncMessage {
 
 /// 笔记增/改推送（双向）：携带完整笔记（含递增后的 version）。
 class NoteUpsertMessage extends SyncMessage {
-  const NoteUpsertMessage({required this.note});
+  const NoteUpsertMessage({required this.note, required this.origin});
 
   /// 变更后的完整笔记。
   final Note note;
+
+  /// 原始作者 deviceId（task-32 v5）：fan-out 转发时保留不变——接收方
+  /// 按 origin 检查「从该设备同步」开关，防止「关 B 却经 C 转发收到 B」。
+  final String origin;
 
   @override
   String get type => 'note_upsert';
 
   @override
-  Map<String, dynamic> toJson() => {'type': type, 'note': note.toJson()};
+  Map<String, dynamic> toJson() => {
+        'type': type,
+        'note': note.toJson(),
+        'origin': origin,
+      };
 
   factory NoteUpsertMessage.fromJson(Map<String, dynamic> json) =>
       NoteUpsertMessage(
         note: Note.fromJson(json['note'] as Map<String, dynamic>),
+        origin: (json['origin'] as String?) ?? '',
       );
 }
 
@@ -444,6 +455,7 @@ class NoteDeleteMessage extends SyncMessage {
     required this.id,
     required this.version,
     this.deletedAt,
+    required this.origin,
   });
 
   /// 被删除笔记的 ID。
@@ -455,6 +467,10 @@ class NoteDeleteMessage extends SyncMessage {
   /// 删除/清空时刻（epoch ms，可选）：时间裁决用（见类注释）。
   final int? deletedAt;
 
+  /// 原始作者 deviceId（task-32 v5）：fan-out 转发保留，接收方按 origin
+  /// 检查「从该设备同步」开关（防止经转发绕过方向开关）。
+  final String origin;
+
   @override
   String get type => 'note_delete';
 
@@ -464,6 +480,7 @@ class NoteDeleteMessage extends SyncMessage {
     'id': id,
     'version': version,
     if (deletedAt != null) 'deletedAt': deletedAt,
+    'origin': origin,
   };
 
   factory NoteDeleteMessage.fromJson(Map<String, dynamic> json) =>
@@ -471,6 +488,7 @@ class NoteDeleteMessage extends SyncMessage {
         id: json['id'] as String,
         version: json['version'] as int,
         deletedAt: json['deletedAt'] as int?,
+        origin: (json['origin'] as String?) ?? '',
       );
 }
 

@@ -249,13 +249,18 @@ class _NotesListState extends ConsumerState<NotesList> {
       _zoneRect = _buildZoneRect(size);
     });
     // ghost 层（Overlay 顶层渲染，不挤压列表；笔记数据快照传入）。
+    // 必须包 Material（透明）——Overlay 顶层无 Material 上下文时，
+    // Text 会继承 MaterialApp 的调试默认样式（黄色下划线）。
     final currentNotes =
         ref.read(notesStreamProvider).value ?? const <Note>[];
     _ghostEntry = OverlayEntry(
-      builder: (_) => _GhostLayer(
-        drag: drag,
-        isFlyingBack: false,
-        notes: currentNotes,
+      builder: (_) => Material(
+        type: MaterialType.transparency,
+        child: _GhostLayer(
+          drag: drag,
+          isFlyingBack: false,
+          notes: currentNotes,
+        ),
       ),
     );
     Overlay.of(context).insert(_ghostEntry!);
@@ -367,11 +372,14 @@ class _NotesListState extends ConsumerState<NotesList> {
     _ghostEntry = null;
     entry.remove();
     final fly = OverlayEntry(
-      builder: (_) => _GhostLayer(
-        drag: d,
-        isFlyingBack: true,
-        notes: ref.read(notesStreamProvider).value ?? const <Note>[],
-        onDone: _removeGhost,
+      builder: (_) => Material(
+        type: MaterialType.transparency,
+        child: _GhostLayer(
+          drag: d,
+          isFlyingBack: true,
+          notes: ref.read(notesStreamProvider).value ?? const <Note>[],
+          onDone: _removeGhost,
+        ),
       ),
     );
     Overlay.of(context).insert(fly);
@@ -1435,8 +1443,8 @@ class _GhostLayerState extends State<_GhostLayer>
     duration: const Duration(milliseconds: 280),
   );
 
-  /// 方形迷你卡尺寸（用户确认：近似方形）。
-  static const double cardSize = 132;
+  /// 方形迷你卡尺寸（用户确认：近似方形，缩小一圈）。
+  static const double cardSize = 112;
 
   // ---- 弹性跟手（SpringSimulation，Flutter 官方弹簧物理，参考 iOS/安卓
   // 拖拽图标的 elastic follow）：ghost 显示位置由弹簧驱动向目标逼近——
@@ -1537,30 +1545,39 @@ class _GhostLayerState extends State<_GhostLayer>
     final dt = (elapsed - _lastElapsed).inMicroseconds / 1e6;
     _lastElapsed = elapsed;
     final sim = _sim;
-    if (sim == null) return;
-    _simTime += dt;
-    if (sim.isDone(_simTime)) {
-      _displayPos = sim.to; // 弹簧稳定：停在目标
-      _sim = null;
-      _ticker.stop();
-      // 停止：链强制收拢为精确 5px 阶梯（右下角露出面积完全一致）。
-      if (_chain.isNotEmpty) {
-        _chain[0] = _displayPos;
-        for (var i = 1; i < _chain.length; i++) {
-          _chain[i] = _displayPos + Offset(5.0 * i, 5.0 * i);
-        }
+    if (sim != null) {
+      _simTime += dt;
+      if (sim.isDone(_simTime)) {
+        _displayPos = sim.to; // 弹簧稳定：停在目标
+        _sim = null;
+      } else {
+        _displayPos = Offset(sim.x(_simTime), sim.y(_simTime));
       }
-    } else {
-      _displayPos = Offset(sim.x(_simTime), sim.y(_simTime));
-      // 动画（用户认可版）：历史采样时间延迟——卡 i = 主卡 (i×45ms)
-      // 前的位置 + 5px 阶梯（第一张先动、底层依次跟随的拖影）。
-      if (_chain.isNotEmpty) {
+    }
+    // 链（用户认可版）：历史采样时间延迟——卡 i = 主卡 (i×45ms)
+    // 前的位置 + 5px 阶梯（第一张先动、底层依次跟随的拖影动画）。
+    // 主卡不放大：静止收拢后每层露出精确 5px（排列规则）。
+    if (_chain.isNotEmpty) {
+      _chain[0] = _displayPos;
+      if (sim == null) {
+        // 弹簧稳定（手指停住/拖完）：链强制收拢为精确 5px 阶梯。
+        var converged = true;
+        for (var i = 1; i < _chain.length; i++) {
+          final target = _displayPos + Offset(5.0 * i, 5.0 * i);
+          final next = Offset.lerp(_chain[i], target, 0.3)!;
+          _chain[i] = next;
+          if ((next - target).distance > 0.5) converged = false;
+        }
+        if (converged) {
+          _ticker.stop();
+        }
+      } else {
+        // 弹簧运行中：历史采样依次延迟（拉开动画）。
         final now = DateTime.now().microsecondsSinceEpoch;
         _history.add(_HistoryPoint(now, _displayPos));
         _history.removeWhere(
           (p) => now - p.micros > _historyLifetimeMicros,
         );
-        _chain[0] = _displayPos;
         for (var i = 1; i < _chain.length; i++) {
           final sampled = _sampleHistory(now - i * _delayPerLevelMicros);
           _chain[i] = sampled + Offset(5.0 * i, 5.0 * i);
@@ -1668,13 +1685,14 @@ class _GhostLayerState extends State<_GhostLayer>
           isDark: isDark,
         ));
       }
-      // 主卡（最上层，放大 1.045 拿起感；弹簧跟手）。
+      // 主卡（最上层，不放大——放大会吃掉第二层的露出边缘，导致
+      // 露出面积不均匀；用户确认去掉拿起放大，保留阴影层次）。
       cards.add(_ghostCard(
         context,
         note: mainNote,
         offset: _chain.isEmpty ? _displayPos : _chain[0],
         opacity: 1.0,
-        scale: 1.045,
+        scale: 1.0,
         isDark: isDark,
       ));
       return Stack(
@@ -1707,7 +1725,7 @@ class _GhostLayerState extends State<_GhostLayer>
       note: mainNote,
       offset: _fly(Offset.zero, progress, drag, drag.mainId),
       opacity: 1.0,
-      scale: 1.045,
+      scale: 1.0,
       isDark: isDark,
     ));
     return Stack(
@@ -1753,10 +1771,7 @@ class _GhostLayerState extends State<_GhostLayer>
             decoration: BoxDecoration(
               color: isDark ? const Color(0xFF1B2838) : Colors.white,
               borderRadius: BorderRadius.circular(16),
-              border: Border.all(
-                color: colorScheme.primary.withValues(alpha: 0.55),
-                width: 1.2,
-              ),
+              // 无边框（用户确认去掉蓝色描边）。
               boxShadow: [
                 BoxShadow(
                   color: Colors.black.withValues(alpha: 0.2),

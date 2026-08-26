@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:drift_flutter/drift_flutter.dart';
+import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
@@ -78,6 +79,42 @@ final multiSelectProvider =
     StateNotifierProvider<MultiSelectNotifier, Set<String>>(
       (ref) => MultiSelectNotifier(),
     );
+
+/// FAB 扇形菜单展开状态（task-32）：HomePage 据此显示全屏收回 barrier。
+final fabOpenProvider = StateProvider<bool>((ref) => false);
+
+/// 拖放目标注册表（task-32 自绘拖拽）：FolderDrawer 注册各文件夹项 /
+/// 「新建文件夹」按钮的 GlobalKey 与高亮状态，笔记拖拽命中检测用
+/// [rectOf] 实时取矩形（拖拽中抽屉动画/滚动后仍准确），高亮由
+/// [highlighted] 驱动落点样式。
+class DropZoneRegistry {
+  final Map<String, GlobalKey> _keys = {};
+
+  /// 当前高亮目标（'__new__' = 新建文件夹按钮；其他 = 文件夹 id；null 无）。
+  final ValueNotifier<String?> highlighted = ValueNotifier(null);
+
+  /// 注册目标（FolderDrawer build 时逐个调用；重复注册幂等）。
+  void register(String id, GlobalKey key) => _keys[id] = key;
+
+  /// 当前注册的全部目标 id（落点命中遍历用）。
+  List<String> get keys => _keys.keys.toList();
+
+  /// 清空注册（FolderDrawer build 开头调用，防残留）。
+  void reset() => _keys.clear();
+
+  /// 取目标在全局坐标系中的矩形（未挂载返回 null）。
+  Rect? rectOf(String id) {
+    final ctx = _keys[id]?.currentContext;
+    if (ctx == null) return null;
+    final box = ctx.findRenderObject() as RenderBox?;
+    if (box == null) return null;
+    return box.localToGlobal(Offset.zero) & box.size;
+  }
+}
+
+final dropZoneRegistryProvider = Provider<DropZoneRegistry>(
+  (ref) => DropZoneRegistry(),
+);
 
 /// 文件夹仓库：文件夹数据读写统一入口，UI 与同步层共用。
 final folderRepositoryProvider = Provider<FolderRepository>((ref) {

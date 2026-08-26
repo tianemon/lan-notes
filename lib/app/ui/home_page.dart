@@ -127,15 +127,25 @@ class HomePage extends ConsumerWidget {
           ),
           // 文件夹抽屉（玻璃面板，含全部/置顶区/普通区 + 拖放落点）。
           const FolderDrawer(),
-          // 右下角扇形新建菜单（多选模式下隐藏）。
-          if (!multiActive)
-            Positioned(
-              right: 8,
-              bottom: 16,
-              child: _FabMenu(),
+          // 扇形菜单展开时的全屏收回区（FAB 在 Scaffold 槽位上层，
+          // 点击 FAB 不触发收回；点列表任意处收回）。
+          if (ref.watch(fabOpenProvider))
+            Positioned.fill(
+              child: GestureDetector(
+                behavior: HitTestBehavior.translucent,
+                onTap: () => ref.read(fabOpenProvider.notifier).state = false,
+              ),
             ),
         ],
       ),
+      // 新建入口：右下角扇形菜单（恢复 Scaffold 槽位，与改版前位置一致；
+      // 多选模式下隐藏）。
+      floatingActionButton: multiActive
+          ? null
+          : Padding(
+              padding: const EdgeInsets.only(right: 8, bottom: 16),
+              child: const _FabMenu(),
+            ),
     );
   }
 }
@@ -155,14 +165,15 @@ class _FabMenu extends ConsumerStatefulWidget {
 class _FabMenuState extends ConsumerState<_FabMenu> {
   bool _open = false;
 
-  /// 点击其他区域收回（全屏透明 barrier，FAB 与扇形按钮在其上层）。
-  void _close() {
-    if (_open) setState(() => _open = false);
+  /// 展开/收回：同步 fabOpenProvider（HomePage 全屏收回区据此显示）。
+  void _setOpen(bool v) {
+    setState(() => _open = v);
+    ref.read(fabOpenProvider.notifier).state = v;
   }
 
   /// 新建文件夹：命名框 → 创建。
   Future<void> _createFolder() async {
-    _close();
+    _setOpen(false);
     if (!mounted) return;
     final name = await showFolderNameDialog(context, title: '新建文件夹');
     if (name == null || !mounted) return;
@@ -171,7 +182,7 @@ class _FabMenuState extends ConsumerState<_FabMenu> {
 
   /// 新建笔记：创建空白笔记进编辑页（当前选中文件夹时自动归入）。
   Future<void> _createNote() async {
-    _close();
+    _setOpen(false);
     if (!mounted) return;
     final folderId = ref.read(folderFilterProvider);
     final note = await ref
@@ -183,30 +194,21 @@ class _FabMenuState extends ConsumerState<_FabMenu> {
 
   @override
   Widget build(BuildContext context) {
+    // 容器 132×132：FAB 在右下角（中心 (104,104)）；选项按钮展开位置
+    // 按原型精确坐标（fo-a 文件夹 上方 -4/-66；fo-b 笔记 左侧 -66/-4，
+    // 相对 FAB 中心），收起时与 FAB 中心重合。
     return SizedBox(
       width: 132,
       height: 132,
       child: Stack(
         clipBehavior: Clip.none,
         children: [
-          // 全屏收回区域（仅展开时存在，位于最底层）。
-          if (_open)
-            Positioned(
-              left: -132 - 8,
-              right: 132 + 8 - MediaQuery.sizeOf(context).width,
-              top: -132 - 16,
-              bottom: 132 + 16 - MediaQuery.sizeOf(context).height,
-              child: GestureDetector(
-                behavior: HitTestBehavior.translucent,
-                onTap: _close,
-              ),
-            ),
           // 扇形按钮：文件夹（上方）、笔记（左侧）。
           AnimatedPositioned(
-            duration: const Duration(milliseconds: 220),
-            curve: Curves.easeOutCubic,
-            right: _open ? 60 : 0,
-            bottom: _open ? 2 : 0,
+            duration: const Duration(milliseconds: 280),
+            curve: const Cubic(0.32, 0.72, 0, 1),
+            left: _open ? 72 : 76,
+            top: _open ? 10 : 76,
             child: IgnorePointer(
               ignoring: !_open,
               child: _FabOption(
@@ -217,10 +219,10 @@ class _FabMenuState extends ConsumerState<_FabMenu> {
             ),
           ),
           AnimatedPositioned(
-            duration: const Duration(milliseconds: 220),
-            curve: Curves.easeOutCubic,
-            right: _open ? 2 : 0,
-            bottom: _open ? 60 : 0,
+            duration: const Duration(milliseconds: 280),
+            curve: const Cubic(0.32, 0.72, 0, 1),
+            left: _open ? 10 : 76,
+            top: _open ? 72 : 76,
             child: IgnorePointer(
               ignoring: !_open,
               child: _FabOption(
@@ -230,13 +232,13 @@ class _FabMenuState extends ConsumerState<_FabMenu> {
               ),
             ),
           ),
-          // FAB 主按钮：点击展开/收回。
+          // FAB 主按钮：点击展开/收回（图标旋转 45°，原型同款）。
           Positioned(
             right: 0,
             bottom: 0,
             child: _FrostedFab(
               open: _open,
-              onPressed: () => setState(() => _open = !_open),
+              onPressed: () => _setOpen(!_open),
             ),
           ),
         ],
@@ -267,15 +269,27 @@ class _FabOption extends StatelessWidget {
         child: BackdropFilter(
           filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
           child: Material(
+            // 原型色值：亮色黑 6% / 暗色白 10%（与 FAB 主按钮一致）。
             color: (isDark ? Colors.white : Colors.black)
-                .withValues(alpha: isDark ? 0.12 : 0.08),
+                .withValues(alpha: isDark ? 0.10 : 0.06),
             shape: const CircleBorder(),
             child: InkWell(
               onTap: onTap,
               customBorder: const CircleBorder(),
-              child: Tooltip(
-                message: tooltip,
-                child: Center(child: Icon(icon, size: 24)),
+              child: Container(
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: isDark
+                        ? Colors.white.withValues(alpha: 0.10)
+                        : Colors.black.withValues(alpha: 0.06),
+                    width: 0.5,
+                  ),
+                ),
+                child: Tooltip(
+                  message: tooltip,
+                  child: Center(child: Icon(icon, size: 24)),
+                ),
               ),
             ),
           ),
@@ -304,17 +318,29 @@ class _FrostedFab extends StatelessWidget {
         child: BackdropFilter(
           filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
           child: Material(
+            // 原型色值：亮色黑 6% / 暗色白 10%（用户确认恢复）。
             color: (isDark ? Colors.white : Colors.black)
-                .withValues(alpha: isDark ? 0.12 : 0.08),
+                .withValues(alpha: isDark ? 0.10 : 0.06),
             shape: const CircleBorder(),
             child: InkWell(
               onTap: onPressed,
               customBorder: const CircleBorder(),
-              child: AnimatedRotation(
-                turns: open ? 0.125 : 0,
-                duration: const Duration(milliseconds: 200),
-                curve: Curves.easeOutCubic,
-                child: const Center(child: Icon(Icons.add, size: 28)),
+              child: Container(
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: isDark
+                        ? Colors.white.withValues(alpha: 0.10)
+                        : Colors.black.withValues(alpha: 0.06),
+                    width: 0.5,
+                  ),
+                ),
+                child: AnimatedRotation(
+                  turns: open ? 0.125 : 0,
+                  duration: const Duration(milliseconds: 200),
+                  curve: Curves.easeOutCubic,
+                  child: const Center(child: Icon(Icons.add, size: 28)),
+                ),
               ),
             ),
           ),

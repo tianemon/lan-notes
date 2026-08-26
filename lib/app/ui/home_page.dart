@@ -125,10 +125,8 @@ class HomePage extends ConsumerWidget {
               const Expanded(child: NotesList()),
             ],
           ),
-          // 文件夹抽屉（玻璃面板，含全部/置顶区/普通区 + 拖放落点）。
-          const FolderDrawer(),
-          // 扇形菜单展开时的全屏收回区（FAB 在 Scaffold 槽位上层，
-          // 点击 FAB 不触发收回；点列表任意处收回）。
+          // 扇形菜单展开时的全屏收回区（在抽屉之下：点抽屉仍正常；
+          // FAB 在 Scaffold 槽位上层，点击 FAB 不触发收回）。
           if (ref.watch(fabOpenProvider))
             Positioned.fill(
               child: GestureDetector(
@@ -136,6 +134,8 @@ class HomePage extends ConsumerWidget {
                 onTap: () => ref.read(fabOpenProvider.notifier).state = false,
               ),
             ),
+          // 文件夹抽屉（玻璃面板，含全部/置顶区/普通区 + 拖放落点）。
+          const FolderDrawer(),
         ],
       ),
       // 新建入口：右下角扇形菜单（恢复 Scaffold 槽位，与改版前位置一致；

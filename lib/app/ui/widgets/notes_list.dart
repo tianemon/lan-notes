@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:math' as math;
 
-import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -36,30 +35,6 @@ class NotesList extends ConsumerStatefulWidget {
 
   @override
   ConsumerState<NotesList> createState() => _NotesListState();
-}
-
-/// 按压状态（一次指针按下到抬起）。
-class _PressState {
-  _PressState({
-    required this.id,
-    required this.globalPos,
-    required this.offsetInCard,
-    required this.cardRect,
-  });
-
-  final String id;
-  final Offset globalPos;
-
-  /// 按下点相对卡片左上角（ghost 定位偏移）。
-  final Offset offsetInCard;
-
-  /// 按下时卡片矩形（回弹参考）。
-  final Rect cardRect;
-
-  bool moved = false;
-  bool canDrag = false; // 多选模式下可拖（已选卡 / 刚点选的未选卡）
-  bool pendingDeselect = false; // 已选卡按下：未移动松手 = 取消选中
-  Timer? timer; // 300ms 长按进入多选
 }
 
 /// 拖拽状态。
@@ -100,14 +75,10 @@ class _NotesListState extends ConsumerState<NotesList> {
   static const double zoneWidth = 70;
   static const double zoneHeightRatio = 0.75;
 
-  _PressState? _press;
   _DragState? _drag;
 
   /// 抽卡集合：拖拽中隐藏（其他卡片补位），松手恢复。
   Set<String> _hiddenIds = {};
-
-  /// 卡片矩形注册表（id → GlobalKey，首次创建复用保证 state 不丢）。
-  final Map<String, GlobalKey> _cardKeys = {};
 
   /// 浮起动画信号（长按进入多选的卡片 + 序号）。
   String? _liftId;
@@ -117,15 +88,12 @@ class _NotesListState extends ConsumerState<NotesList> {
   Path? _zonePath;
 
   OverlayEntry? _ghostEntry;
-  PointerRoute? _globalRoute;
 
   /// 左侧拖放区是否显示（拖拽中）。
   bool _dragging_ = false;
 
   /// 当前选中集合（watch 由 build 驱动，read 由手势用）。
   Set<String> _selectedNow() => ref.read(multiSelectProvider);
-
-  bool _multiNow() => _selectedNow().isNotEmpty;
 
   @override
   Widget build(BuildContext context) {
@@ -175,9 +143,8 @@ class _NotesListState extends ConsumerState<NotesList> {
                   key: const ValueKey('list'),
                   notes: notes,
                   columns: layoutMode,
-                  cardKeys: _cardKeys,
                   hiddenIds: _hiddenIds,
-                  onRegisterCard: _registerCard,
+                  onRegisterCard: registerCardKey,
                 ),
         );
       },
@@ -185,155 +152,41 @@ class _NotesListState extends ConsumerState<NotesList> {
       error: (error, _) => Center(child: Text('加载失败：$error')),
     );
 
-    return Listener(
-      // 原始指针事件：长按计时 + 拖拽（不参与手势竞技场，与卡片 InkWell
-      // 的 tap/longPress 并存；拖拽开始后经全局路由接收后续 move/up）。
-      onPointerDown: _onPointerDown,
-      onPointerMove: _onPointerMove,
-      onPointerUp: _onPointerUp,
-      onPointerCancel: _onPointerCancel,
-      child: GestureDetector(
-        // 多选模式下点空白退出多选（卡片点击被消费，不冒泡到这里；
-        // 拖拽中不触发退出）。
-        behavior: HitTestBehavior.translucent,
-        onTap: multiActive && !_dragging_
-            ? () => ref.read(multiSelectProvider.notifier).exit()
-            : null,
-        child: Stack(
-          children: [
-            Positioned.fill(child: body),
-            // 左侧圆角梯形触发区：拖拽动作开始后才出现（用户确认）。
-            if (_dragging_)
-              Positioned(
-                left: 0,
-                top: 0,
-                bottom: 0,
-                width: zoneWidth,
-                child: IgnorePointer(
-                  child: _DropZoneTrapezoid(
-                    heightRatio: zoneHeightRatio,
-                    width: zoneWidth,
-                  ),
+    return GestureDetector(
+      // 多选模式下点空白退出多选（卡片点击被消费，不冒泡到这里；
+      // 拖拽中不触发退出）。
+      behavior: HitTestBehavior.translucent,
+      onTap: multiActive && !_dragging_
+          ? () => ref.read(multiSelectProvider.notifier).exit()
+          : null,
+      child: Stack(
+        children: [
+          Positioned.fill(child: body),
+          // 左侧圆角梯形触发区：拖拽动作开始后才出现（用户确认）。
+          if (_dragging_)
+            Positioned(
+              left: 0,
+              top: 0,
+              bottom: 0,
+              width: zoneWidth,
+              child: IgnorePointer(
+                child: _DropZoneTrapezoid(
+                  heightRatio: zoneHeightRatio,
+                  width: zoneWidth,
                 ),
               ),
-            // 底部多选操作面板（非模态：拖拽共存）。
-            if (multiActive)
-              Positioned(
-                left: 0,
-                right: 0,
-                bottom: 0,
-                child: _MultiSelectSheet(),
-              ),
-          ],
-        ),
+            ),
+          // 底部多选操作面板（非模态：拖拽共存）。
+          if (multiActive)
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 0,
+              child: _MultiSelectSheet(),
+            ),
+        ],
       ),
     );
-  }
-
-  // ===== 卡片注册 =====
-
-  void _registerCard(String id, GlobalKey key) {
-    _cardKeys[id] = key;
-  }
-
-  /// 命中检测：全局坐标落在哪张卡片上。
-  String? _cardAt(Offset globalPos) {
-    for (final entry in _cardKeys.entries) {
-      final ctx = entry.value.currentContext;
-      if (ctx == null) continue;
-      final box = ctx.findRenderObject() as RenderBox?;
-      if (box == null) continue;
-      final rect = box.localToGlobal(Offset.zero) & box.size;
-      if (rect.contains(globalPos)) return entry.key;
-    }
-    return null;
-  }
-
-  // ===== 手势：按下 =====
-
-  void _onPointerDown(PointerDownEvent e) {
-    if (_dragging_) return;
-    final id = _cardAt(e.position);
-    if (id == null) return;
-    final box =
-        (_cardKeys[id]?.currentContext?.findRenderObject() as RenderBox?);
-    final cardRect = box == null
-        ? const Rect.fromLTWH(0, 0, 0, 0)
-        : (box.localToGlobal(Offset.zero) & box.size);
-    final press = _PressState(
-      id: id,
-      globalPos: e.position,
-      offsetInCard: e.position - cardRect.topLeft,
-      cardRect: cardRect,
-    );
-    _press = press;
-    if (!_multiNow()) {
-      // 非多选：300ms 长按进入多选（不松手继续拖，见 _beginMultiSelect）。
-      press.timer = Timer(
-        const Duration(milliseconds: 300),
-        () => _beginMultiSelect(id),
-      );
-    } else {
-      final selected = _selectedNow();
-      if (selected.contains(id)) {
-        // 已选卡：可直接拖；未移动松手 = 取消选中（原型 pendingDeselect）。
-        press.canDrag = true;
-        press.pendingDeselect = true;
-      } else {
-        // 未选卡：立即选中并可拖（原型：按下即加入选中）。
-        ref.read(multiSelectProvider.notifier).toggle(id);
-        press.canDrag = true;
-        press.pendingDeselect = false;
-      }
-    }
-  }
-
-  // ===== 手势：移动 =====
-
-  void _onPointerMove(PointerMoveEvent e) {
-    final p = _press;
-    if (p == null) {
-      if (_dragging_) _moveDrag(e.position);
-      return;
-    }
-    final dist = (e.position - p.globalPos).distance;
-    if (dist > 10) {
-      p.moved = true;
-      p.timer?.cancel();
-      // 长按进入多选后（或多选模式按下可拖卡）移动超阈值 → 开始拖拽。
-      if (_multiNow() && p.canDrag && !_dragging_) {
-        _beginDrag(e.position);
-      }
-    }
-    if (_dragging_) _moveDrag(e.position);
-  }
-
-  // ===== 手势：抬起 / 取消 =====
-
-  void _onPointerUp(PointerUpEvent e) {
-    final p = _press;
-    if (p == null) {
-      if (_dragging_) _endDrag();
-      return;
-    }
-    p.timer?.cancel();
-    if (_dragging_) {
-      _endDrag();
-      _press = null;
-      return;
-    }
-    // 已选卡按下未移动松手：取消选中（点击 toggle 由卡片 InkWell 处理，
-    // 这里只处理"已选卡点按取消"的原型语义，避免双重 toggle）。
-    if (_multiNow() && p.pendingDeselect && !p.moved) {
-      ref.read(multiSelectProvider.notifier).toggle(p.id);
-    }
-    _press = null;
-  }
-
-  void _onPointerCancel(PointerCancelEvent e) {
-    _press?.timer?.cancel();
-    _press = null;
-    if (_dragging_) _endDrag();
   }
 
   // ===== 进入多选（长按触发） =====
@@ -346,34 +199,44 @@ class _NotesListState extends ConsumerState<NotesList> {
       _liftId = id;
       _liftSeq++;
     });
-    final p = _press;
-    if (p != null) {
-      // 长按后不松手：同一次手势延续为拖拽（原型核心交互）。
-      p.canDrag = true;
-      p.pendingDeselect = false;
-    }
+    // 长按后不松手：同一次手势延续为拖拽，由卡片的
+    // onLongPressMoveUpdate 触发（_beginDrag）。
   }
 
   // ===== 拖拽 =====
 
-  void _beginDrag(Offset globalPos) {
+  /// 是否正在拖拽（卡片手势回调查询）。
+  bool get isDraggingNow => _dragging_;
+
+  /// 当前拖拽是否由长按延续（onLongPressCancel/End 只结束长按路径的拖拽，
+  /// 多选 drag 路径由 onVerticalDrag* 结束，避免竞技失败误结束）。
+  bool _dragFromLongPress = false;
+
+  void _beginDrag(
+    Offset globalPos, {
+    String? mainId,
+    bool fromLongPress = false,
+  }) {
     final selected = _selectedNow();
     if (selected.isEmpty) return;
-    final p = _press!;
+    final main = mainId ?? selected.first;
+    _dragFromLongPress = fromLongPress;
     // 记录每张选中卡原矩形（回弹目标）。
     final rects = <String, Rect>{};
     for (final id in selected) {
-      final ctx = _cardKeys[id]?.currentContext;
+      final ctx = _cardKeyOf(id)?.currentContext;
       if (ctx == null) continue;
       final box = ctx.findRenderObject() as RenderBox?;
       if (box != null) rects[id] = box.localToGlobal(Offset.zero) & box.size;
     }
+    // ghost 定位：主卡中心跟随指针（偏移 = 半卡尺寸 66px）。
+    const halfCard = 66.0;
     final drag = _DragState(
       ids: List<String>.of(selected),
-      mainId: p.id,
-      offsetInCard: p.offsetInCard,
+      mainId: main,
+      offsetInCard: const Offset(halfCard, halfCard),
       rects: rects,
-      position: globalPos - p.offsetInCard,
+      position: globalPos - const Offset(halfCard, halfCard),
     );
     _drag = drag;
     setState(() {
@@ -395,16 +258,16 @@ class _NotesListState extends ConsumerState<NotesList> {
       ),
     );
     Overlay.of(context).insert(_ghostEntry!);
-    // 全局路由：指针移出列表区域（抽屉上/屏幕边缘）仍能收到 move/up。
-    _globalRoute = (event) {
-      if (event is PointerMoveEvent) {
-        _moveDrag(event.position);
-      } else if (event is PointerUpEvent || event is PointerCancelEvent) {
-        _endDrag();
-      }
-    };
-    WidgetsBinding.instance.pointerRouter.addGlobalRoute(_globalRoute!);
   }
+
+  /// 卡片 GlobalKey 注册表（回弹矩形用，首次创建后复用）。
+  final Map<String, GlobalKey> _cardKeyRegistry = {};
+
+  /// 注册卡片 key（NoteListItem build 时调用；按 id 复用稳定实例）。
+  GlobalKey registerCardKey(String id) =>
+      _cardKeyRegistry[id] ??= GlobalKey();
+
+  GlobalKey? _cardKeyOf(String id) => _cardKeyRegistry[id];
 
   void _moveDrag(Offset globalPos) {
     final d = _drag;
@@ -441,10 +304,7 @@ class _NotesListState extends ConsumerState<NotesList> {
     final d = _drag;
     if (d == null) return;
     _drag = null;
-    if (_globalRoute != null) {
-      WidgetsBinding.instance.pointerRouter.removeGlobalRoute(_globalRoute!);
-      _globalRoute = null;
-    }
+    _dragFromLongPress = false;
     ref.read(dropZoneRegistryProvider).highlighted.value = null;
     final target = d.target;
     final wasDrawerByDrag = ref.read(folderDrawerByDragProvider);
@@ -587,7 +447,6 @@ class _NoteListBody extends StatelessWidget {
     super.key,
     required this.notes,
     required this.columns,
-    required this.cardKeys,
     required this.hiddenIds,
     required this.onRegisterCard,
   });
@@ -597,13 +456,11 @@ class _NoteListBody extends StatelessWidget {
   /// 布局模式：1=单列 / 2=双列 / 4=四列。
   final int columns;
 
-  /// 卡片 GlobalKey 注册表（手势命中检测用，首次创建后复用）。
-  final Map<String, GlobalKey> cardKeys;
-
   /// 抽卡集合（拖拽中隐藏的卡片）。
   final Set<String> hiddenIds;
 
-  final void Function(String id, GlobalKey key) onRegisterCard;
+  /// 卡片 GlobalKey 注册（回弹矩形用，首次创建后复用，返回稳定 key）。
+  final GlobalKey Function(String id) onRegisterCard;
 
   /// 底部留白：容纳悬浮的毛玻璃新建按钮（EE _buildFrostedFab），
   /// 滚动到底部最后一张卡片不被 FAB 遮挡。
@@ -621,10 +478,8 @@ class _NoteListBody extends StatelessWidget {
             // 抽卡占位：高度收缩动画（补位平滑），松手恢复。
             return _ShrinkPlaceholder(key: ValueKey('ph-${note.id}'));
           }
-          final key = cardKeys[note.id] ??= GlobalKey();
-          onRegisterCard(note.id, key);
           return NoteListItem(
-            key: key,
+            key: onRegisterCard(note.id),
             note: note,
             liftSeq: _liftSeqOf(context),
             isLift: _liftIdOf(context) == note.id,
@@ -677,12 +532,10 @@ class _NoteListBody extends StatelessWidget {
     );
   }
 
-  /// 网格卡片（注册拖拽命中 key + 摘要行数适配：四列 1 行、双列 2 行）。
+  /// 网格卡片（注册回弹 key + 摘要行数适配：四列 1 行、双列 2 行）。
   Widget _gridCard(BuildContext context, Note note) {
-    final key = cardKeys[note.id] ??= GlobalKey();
-    onRegisterCard(note.id, key);
     return NoteListItem(
-      key: key,
+      key: onRegisterCard(note.id),
       note: note,
       maxSummaryLines: columns >= 4 ? 1 : 2,
       liftSeq: _liftSeqOf(context),
@@ -741,6 +594,7 @@ class NoteListItem extends ConsumerStatefulWidget {
   });
 
   final Note note;
+
 
   /// 摘要最大行数：单列/双列 2 行、四列 1 行（窄列适配，task-26）。
   final int maxSummaryLines;
@@ -855,8 +709,89 @@ class _NoteListItemState extends ConsumerState<NoteListItem> {
     );
   }
 
-  /// 卡片本体（含多选框）：多选模式点击 = 切换选中、长按禁用；
-  /// 非多选点击 = 进编辑页、长按 = 进入多选。
+  /// 已选卡按下未移动松手 = 取消选中（原型 pendingDeselect 语义）。
+  bool _pendingDeselect = false;
+
+  /// 多选点按：未选卡 down 立即选中；已选卡 down 记 pending，up 未移动取消。
+  void _onTapDown(String id) {
+    if (ref.read(multiSelectProvider).contains(id)) {
+      _pendingDeselect = true;
+    } else {
+      ref.read(multiSelectProvider.notifier).toggle(id);
+    }
+  }
+
+  void _onTapUp(String id) {
+    if (_pendingDeselect) {
+      _pendingDeselect = false;
+      ref.read(multiSelectProvider.notifier).toggle(id); // 取消选中
+    }
+  }
+
+  void _onTapCancel() => _pendingDeselect = false;
+
+  /// 长按进入多选（非多选态；识别器常驻，多选态忽略——见类注释）。
+  void _onLongPressStart(LongPressStartDetails d) {
+    if (ref.read(multiSelectProvider).isNotEmpty) return;
+    _notesListState?._beginMultiSelect(widget.note.id);
+  }
+
+  /// 长按后不松手继续移动 → 开始拖拽（原型核心交互）；已拖拽中则移动。
+  void _onLongPressMoveUpdate(LongPressMoveUpdateDetails d) {
+    final list = _notesListState;
+    if (list == null) return;
+    if (list.isDraggingNow) {
+      list._moveDrag(d.globalPosition);
+    } else {
+      // 长按已 accept（竞技场胜利，列表滚动已被压制）→ 直接开始拖拽。
+      list._beginDrag(
+        d.globalPosition,
+        mainId: widget.note.id,
+        fromLongPress: true,
+      );
+    }
+  }
+
+  /// 长按拖拽结束（仅结束长按路径的拖拽；多选 drag 路径由
+  /// onVerticalDrag* 结束——竞技场中 drag accept 会让 longPress 触发
+  /// cancel，若不加判断会误结束拖拽）。
+  void _onLongPressEnd() {
+    final list = _notesListState;
+    if (list != null &&
+        list.isDraggingNow &&
+        list._dragFromLongPress) {
+      list._endDrag();
+    }
+  }
+
+  void _onLongPressCancel() => _onLongPressEnd();
+
+  /// 多选态：按住卡片移动即拖拽（drag 识别器赢竞技场，列表滚动被压制）。
+  void _onVerticalDragStart(DragStartDetails d) {
+    if (ref.read(multiSelectProvider).isEmpty) return;
+    _notesListState?._beginDrag(
+      d.globalPosition,
+      mainId: widget.note.id,
+    );
+  }
+
+  void _onVerticalDragUpdate(DragUpdateDetails d) {
+    _notesListState?._moveDrag(d.globalPosition);
+  }
+
+  void _onVerticalDragEnd() => _notesListState?._endDrag();
+
+  void _onVerticalDragCancel() => _notesListState?._endDrag();
+
+  /// 外层列表状态（拖拽状态机）。
+  _NotesListState? get _notesListState =>
+      context.findAncestorStateOfType<_NotesListState>();
+
+  /// 卡片本体（含多选框）。手势全部由本层 GestureDetector 统一处理：
+  /// - 非多选：点击进编辑；长按进多选（识别器常驻，进入多选后不中断，
+  ///   长按后不松手继续移动 = 拖拽）；
+  /// - 多选：点按切换选中（down 立即选中 / up 取消已选）；按住移动 =
+  ///   拖拽（drag 识别器与 ListView 滚动竞技，压掉滚动）。
   Widget _buildCard(
     BuildContext context, {
     required bool multiActive,
@@ -870,17 +805,28 @@ class _NoteListItemState extends ConsumerState<NoteListItem> {
     return GestureDetector(
       // 桌面右键：弹统一笔记菜单（在鼠标位置）。
       onSecondaryTapUp: (d) => _showContextMenu(context, d.globalPosition),
+      // 多选点按：切换选中。
+      onTapDown: multiActive ? (d) => _onTapDown(note.id) : null,
+      onTapUp: multiActive ? (d) => _onTapUp(note.id) : null,
+      onTapCancel: multiActive ? _onTapCancel : null,
+      // 非多选：点击进编辑页。
+      onTap: multiActive ? null : () => context.push('/editor/${note.id}'),
+      // 长按识别器常驻（进入多选后不中断，延续为拖拽）。
+      onLongPressStart: _onLongPressStart,
+      onLongPressMoveUpdate: _onLongPressMoveUpdate,
+      onLongPressEnd: (_) => _onLongPressEnd(),
+      onLongPressCancel: _onLongPressCancel,
+      // 多选：按住即拖（压掉列表滚动）。
+      onVerticalDragStart: multiActive ? _onVerticalDragStart : null,
+      onVerticalDragUpdate: multiActive ? (d) => _onVerticalDragUpdate(d) : null,
+      onVerticalDragEnd: multiActive ? (_) => _onVerticalDragEnd() : null,
+      onVerticalDragCancel: multiActive ? _onVerticalDragCancel : null,
       child: GlassCard(
         heroTag: null,
-        // 卡片宽度恒定：关闭 hover 缩放（EE 卡片无 hover 效果，
-        // 悬停放大 1.2% 会被感知为宽度不一致）。
+        // 卡片宽度恒定：关闭 hover 缩放。
         hoverLift: false,
-        // 点击：非多选 = 进编辑页（多选的选中切换由手势层处理，避免
-        // 与 Listener 的 pendingDeselect 双重 toggle 冲突）。长按全部交给
-        // 手势层（Listener）。
-        onTap: multiActive
-            ? null
-            : () => context.push('/editor/${note.id}'),
+        // 点击/长按全部由外层 GestureDetector 处理（避免双识别器冲突）。
+        onTap: null,
         onLongPress: null,
         // 多选时左侧留位给多选框。
         padding: multiActive

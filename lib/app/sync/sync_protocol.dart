@@ -1,20 +1,22 @@
+import '../data/folder.dart';
 import '../data/note.dart';
 
-/// 协议版本（v4 图片跨设备同步，task-30）：通告（UDP JSON `v` 字段）与
-/// hello 均携带。
+/// 协议版本（v6：task-32 文件夹归类——新增 folder_upsert 消息 + sync_data
+/// 携带 folders 快照 + Note 载荷增加 folderId 字段）：通告（UDP JSON `v`
+/// 字段）与 hello 均携带。
 ///
 /// 版本沿革：v1（mDNS 时代）→ v2（task-27 配对协议 v4：请求-同意 + HMAC
 /// 挑战认证）→ v3（task-29 富文本：Note.content 格式由纯文本改为 delta
-/// JSON 字符串）→ **v4（task-30 图片跨设备同步：新增 file_request /
-/// file_chunk / file_complete 文件传输消息）**。
+/// JSON 字符串）→ v4（task-30 图片跨设备同步：新增 file_request /
+/// file_chunk / file_complete 文件传输消息）→ v5（task-32 同步方向开关：
+/// 增量消息携带 origin 原始作者）→ **v6（task-32 文件夹归类：新增
+/// folder_upsert 消息；sync_data 携带 folders；Note 载荷增加 folderId）**。
 ///
-/// 版本不兼容（对端协议版本 < 本值，含 v3 无图片同步对端）时不互连：通告
-/// 版本不符被接收端忽略；hello 携带的版本低于本值时，接收方回
+/// 版本不兼容（对端协议版本 < 本值，含 v5 无文件夹协议对端）时不互连：
+/// 通告版本不符被接收端忽略；hello 携带的版本低于本值时，接收方回
 /// [PairingFailMessage]（原因「协议版本不兼容，请升级应用」）后断开
 /// （见 docs/技术架构.md 7.3 节）。
-/// 协议版本（v5：task-32 破坏性更新——增量消息携带 origin 原始作者，
-/// 同步方向开关按 origin 过滤 fan-out 转发；v4 及以下对端不互连）。
-const int kProtocolVersion = 5;
+const int kProtocolVersion = 6;
 
 /// 同步协议消息（docs/技术架构.md 7.2 节消息协议表）。
 ///
@@ -48,6 +50,7 @@ sealed class SyncMessage {
         'sync_data' => SyncDataMessage.fromJson(json),
         'note_upsert' => NoteUpsertMessage.fromJson(json),
         'note_delete' => NoteDeleteMessage.fromJson(json),
+        'folder_upsert' => FolderUpsertMessage.fromJson(json),
         'devices_update' => DevicesUpdateMessage.fromJson(json),
         'auto_connect_rejected' => AutoConnectRejectedMessage.fromJson(json),
         'file_request' => FileRequestMessage.fromJson(json),
@@ -376,14 +379,19 @@ class Tombstone {
   );
 }
 
-/// 全量快照（双向，响应 sync_request）：携带本端全部笔记（含回收站条目）
-/// 与全部墓碑，对端按 v3 合并规则处理（docs/技术架构.md 7.2 节）。
+/// 全量快照（双向，响应 sync_request）：携带本端全部笔记（含回收站条目）、
+/// 全部墓碑与全部文件夹（含软删除条目，task-32 v6），对端按 LWW 合并
+/// 规则处理（docs/技术架构.md 7.2 节）。
 ///
-/// 墓碑先行：对端先处理 tombstones（写本地墓碑/拦截被覆盖的本地旧数据），
-/// 再合并 notes（含 deletedAt 非空的回收站条目），保证清空过的笔记不会
-/// 被快照中的旧数据复活。
+/// 合并顺序：先处理 tombstones（写本地墓碑/拦截被覆盖的本地旧数据），
+/// 再合并 folders 与 notes——保证清空过的笔记不会被快照中的旧数据复活；
+/// folders 与 notes 相互独立（LWW 各自裁决），顺序无依赖。
 class SyncDataMessage extends SyncMessage {
-  const SyncDataMessage({required this.notes, this.tombstones = const []});
+  const SyncDataMessage({
+    required this.notes,
+    this.tombstones = const [],
+    this.folders = const [],
+  });
 
   /// 全量笔记列表（含回收站条目，deletedAt 非空即软删除）。
   final List<Note> notes;
@@ -391,15 +399,20 @@ class SyncDataMessage extends SyncMessage {
   /// 全量墓碑列表（缺省空列表，兼容旧对端——旧对端不携带该字段）。
   final List<Tombstone> tombstones;
 
+  /// 全量文件夹列表（含软删除条目，deletedAt 非空即删除；task-32 v6，
+  /// 缺省空列表——v5 及以下对端不互连，此缺省仅防畸形载荷）。
+  final List<Folder> folders;
+
   @override
   String get type => 'sync_data';
 
   @override
   Map<String, dynamic> toJson() => {
-    'type': type,
-    'notes': notes.map((note) => note.toJson()).toList(),
-    'tombstones': tombstones.map((t) => t.toJson()).toList(),
-  };
+        'type': type,
+        'notes': notes.map((note) => note.toJson()).toList(),
+        'tombstones': tombstones.map((t) => t.toJson()).toList(),
+        'folders': folders.map((f) => f.toJson()).toList(),
+      };
 
   factory SyncDataMessage.fromJson(Map<String, dynamic> json) {
     final notes = <Note>[];
@@ -421,8 +434,52 @@ class SyncDataMessage extends SyncMessage {
         }
       }
     }
-    return SyncDataMessage(notes: notes, tombstones: tombstones);
+    // 旧对端无 folders 字段：缺省空列表（task-32 v6）。
+    final folders = <Folder>[];
+    final rawFolders = json['folders'];
+    if (rawFolders is List) {
+      for (final raw in rawFolders) {
+        if (raw is Map<String, dynamic>) {
+          folders.add(Folder.fromJson(raw));
+        }
+      }
+    }
+    return SyncDataMessage(
+      notes: notes,
+      tombstones: tombstones,
+      folders: folders,
+    );
   }
+}
+
+/// 文件夹增/改/软删除推送（task-32 v6，双向）：携带完整文件夹
+/// （含递增后的 version；deletedAt 非空即软删除——文件夹删除不可恢复，
+/// 对端 LWW 合并后同样隐藏）。
+class FolderUpsertMessage extends SyncMessage {
+  const FolderUpsertMessage({required this.folder, required this.origin});
+
+  /// 变更后的完整文件夹。
+  final Folder folder;
+
+  /// 原始作者 deviceId（v5 语义沿用）：fan-out 转发时保留不变——接收方
+  /// 按 origin 检查「从该设备同步」开关。
+  final String origin;
+
+  @override
+  String get type => 'folder_upsert';
+
+  @override
+  Map<String, dynamic> toJson() => {
+        'type': type,
+        'folder': folder.toJson(),
+        'origin': origin,
+      };
+
+  factory FolderUpsertMessage.fromJson(Map<String, dynamic> json) =>
+      FolderUpsertMessage(
+        folder: Folder.fromJson(json['folder'] as Map<String, dynamic>),
+        origin: (json['origin'] as String?) ?? '',
+      );
 }
 
 /// 笔记增/改推送（双向）：携带完整笔记（含递增后的 version）。

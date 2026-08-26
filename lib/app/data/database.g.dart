@@ -118,6 +118,17 @@ class $NotesTable extends Notes with TableInfo<$NotesTable, NoteRow> {
     type: DriftSqlType.string,
     requiredDuringInsert: false,
   );
+  static const VerificationMeta _folderIdMeta = const VerificationMeta(
+    'folderId',
+  );
+  @override
+  late final GeneratedColumn<String> folderId = GeneratedColumn<String>(
+    'folder_id',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
   @override
   List<GeneratedColumn> get $columns => [
     id,
@@ -130,6 +141,7 @@ class $NotesTable extends Notes with TableInfo<$NotesTable, NoteRow> {
     isPinned,
     tags,
     origin,
+    folderId,
   ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -206,6 +218,12 @@ class $NotesTable extends Notes with TableInfo<$NotesTable, NoteRow> {
         origin.isAcceptableOrUnknown(data['origin']!, _originMeta),
       );
     }
+    if (data.containsKey('folder_id')) {
+      context.handle(
+        _folderIdMeta,
+        folderId.isAcceptableOrUnknown(data['folder_id']!, _folderIdMeta),
+      );
+    }
     return context;
   }
 
@@ -255,6 +273,10 @@ class $NotesTable extends Notes with TableInfo<$NotesTable, NoteRow> {
         DriftSqlType.string,
         data['${effectivePrefix}origin'],
       ),
+      folderId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}folder_id'],
+      ),
     );
   }
 
@@ -287,6 +309,10 @@ class NoteRow extends DataClass implements Insertable<NoteRow> {
   /// 最后修改者 deviceId（task-32 v10）：null=本机/旧数据；合并远端采用
   /// 时记录消息 origin——全量/增量同步按此过滤「从该设备同步」开关。
   final String? origin;
+
+  /// 所属文件夹 id（task-32 文件夹归类）：null=未分类（「全部」视图下
+  /// 的未分类笔记）。移动笔记 = 置值 + version+1，随 note_upsert 同步。
+  final String? folderId;
   const NoteRow({
     required this.id,
     required this.title,
@@ -298,6 +324,7 @@ class NoteRow extends DataClass implements Insertable<NoteRow> {
     required this.isPinned,
     required this.tags,
     this.origin,
+    this.folderId,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -315,6 +342,9 @@ class NoteRow extends DataClass implements Insertable<NoteRow> {
     map['tags'] = Variable<String>(tags);
     if (!nullToAbsent || origin != null) {
       map['origin'] = Variable<String>(origin);
+    }
+    if (!nullToAbsent || folderId != null) {
+      map['folder_id'] = Variable<String>(folderId);
     }
     return map;
   }
@@ -335,6 +365,9 @@ class NoteRow extends DataClass implements Insertable<NoteRow> {
       origin: origin == null && nullToAbsent
           ? const Value.absent()
           : Value(origin),
+      folderId: folderId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(folderId),
     );
   }
 
@@ -354,6 +387,7 @@ class NoteRow extends DataClass implements Insertable<NoteRow> {
       isPinned: serializer.fromJson<bool>(json['isPinned']),
       tags: serializer.fromJson<String>(json['tags']),
       origin: serializer.fromJson<String?>(json['origin']),
+      folderId: serializer.fromJson<String?>(json['folderId']),
     );
   }
   @override
@@ -370,6 +404,7 @@ class NoteRow extends DataClass implements Insertable<NoteRow> {
       'isPinned': serializer.toJson<bool>(isPinned),
       'tags': serializer.toJson<String>(tags),
       'origin': serializer.toJson<String?>(origin),
+      'folderId': serializer.toJson<String?>(folderId),
     };
   }
 
@@ -384,6 +419,7 @@ class NoteRow extends DataClass implements Insertable<NoteRow> {
     bool? isPinned,
     String? tags,
     Value<String?> origin = const Value.absent(),
+    Value<String?> folderId = const Value.absent(),
   }) => NoteRow(
     id: id ?? this.id,
     title: title ?? this.title,
@@ -395,6 +431,7 @@ class NoteRow extends DataClass implements Insertable<NoteRow> {
     isPinned: isPinned ?? this.isPinned,
     tags: tags ?? this.tags,
     origin: origin.present ? origin.value : this.origin,
+    folderId: folderId.present ? folderId.value : this.folderId,
   );
   NoteRow copyWithCompanion(NotesCompanion data) {
     return NoteRow(
@@ -408,6 +445,7 @@ class NoteRow extends DataClass implements Insertable<NoteRow> {
       isPinned: data.isPinned.present ? data.isPinned.value : this.isPinned,
       tags: data.tags.present ? data.tags.value : this.tags,
       origin: data.origin.present ? data.origin.value : this.origin,
+      folderId: data.folderId.present ? data.folderId.value : this.folderId,
     );
   }
 
@@ -423,7 +461,8 @@ class NoteRow extends DataClass implements Insertable<NoteRow> {
           ..write('deletedAt: $deletedAt, ')
           ..write('isPinned: $isPinned, ')
           ..write('tags: $tags, ')
-          ..write('origin: $origin')
+          ..write('origin: $origin, ')
+          ..write('folderId: $folderId')
           ..write(')'))
         .toString();
   }
@@ -440,6 +479,7 @@ class NoteRow extends DataClass implements Insertable<NoteRow> {
     isPinned,
     tags,
     origin,
+    folderId,
   );
   @override
   bool operator ==(Object other) =>
@@ -454,7 +494,8 @@ class NoteRow extends DataClass implements Insertable<NoteRow> {
           other.deletedAt == this.deletedAt &&
           other.isPinned == this.isPinned &&
           other.tags == this.tags &&
-          other.origin == this.origin);
+          other.origin == this.origin &&
+          other.folderId == this.folderId);
 }
 
 class NotesCompanion extends UpdateCompanion<NoteRow> {
@@ -468,6 +509,7 @@ class NotesCompanion extends UpdateCompanion<NoteRow> {
   final Value<bool> isPinned;
   final Value<String> tags;
   final Value<String?> origin;
+  final Value<String?> folderId;
   final Value<int> rowid;
   const NotesCompanion({
     this.id = const Value.absent(),
@@ -480,6 +522,7 @@ class NotesCompanion extends UpdateCompanion<NoteRow> {
     this.isPinned = const Value.absent(),
     this.tags = const Value.absent(),
     this.origin = const Value.absent(),
+    this.folderId = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   NotesCompanion.insert({
@@ -493,6 +536,7 @@ class NotesCompanion extends UpdateCompanion<NoteRow> {
     this.isPinned = const Value.absent(),
     this.tags = const Value.absent(),
     this.origin = const Value.absent(),
+    this.folderId = const Value.absent(),
     this.rowid = const Value.absent(),
   }) : id = Value(id),
        createdAt = Value(createdAt),
@@ -508,6 +552,7 @@ class NotesCompanion extends UpdateCompanion<NoteRow> {
     Expression<bool>? isPinned,
     Expression<String>? tags,
     Expression<String>? origin,
+    Expression<String>? folderId,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -521,6 +566,7 @@ class NotesCompanion extends UpdateCompanion<NoteRow> {
       if (isPinned != null) 'is_pinned': isPinned,
       if (tags != null) 'tags': tags,
       if (origin != null) 'origin': origin,
+      if (folderId != null) 'folder_id': folderId,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -536,6 +582,7 @@ class NotesCompanion extends UpdateCompanion<NoteRow> {
     Value<bool>? isPinned,
     Value<String>? tags,
     Value<String?>? origin,
+    Value<String?>? folderId,
     Value<int>? rowid,
   }) {
     return NotesCompanion(
@@ -549,6 +596,7 @@ class NotesCompanion extends UpdateCompanion<NoteRow> {
       isPinned: isPinned ?? this.isPinned,
       tags: tags ?? this.tags,
       origin: origin ?? this.origin,
+      folderId: folderId ?? this.folderId,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -586,6 +634,9 @@ class NotesCompanion extends UpdateCompanion<NoteRow> {
     if (origin.present) {
       map['origin'] = Variable<String>(origin.value);
     }
+    if (folderId.present) {
+      map['folder_id'] = Variable<String>(folderId.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -605,6 +656,7 @@ class NotesCompanion extends UpdateCompanion<NoteRow> {
           ..write('isPinned: $isPinned, ')
           ..write('tags: $tags, ')
           ..write('origin: $origin, ')
+          ..write('folderId: $folderId, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -871,6 +923,569 @@ class TombstonesCompanion extends UpdateCompanion<Tombstone> {
           ..write('id: $id, ')
           ..write('version: $version, ')
           ..write('deletedAt: $deletedAt, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
+class $FoldersTable extends Folders with TableInfo<$FoldersTable, FolderRow> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $FoldersTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<String> id = GeneratedColumn<String>(
+    'id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _nameMeta = const VerificationMeta('name');
+  @override
+  late final GeneratedColumn<String> name = GeneratedColumn<String>(
+    'name',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _createdAtMeta = const VerificationMeta(
+    'createdAt',
+  );
+  @override
+  late final GeneratedColumn<int> createdAt = GeneratedColumn<int>(
+    'created_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _updatedAtMeta = const VerificationMeta(
+    'updatedAt',
+  );
+  @override
+  late final GeneratedColumn<int> updatedAt = GeneratedColumn<int>(
+    'updated_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _versionMeta = const VerificationMeta(
+    'version',
+  );
+  @override
+  late final GeneratedColumn<int> version = GeneratedColumn<int>(
+    'version',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+    defaultValue: const Constant(0),
+  );
+  static const VerificationMeta _deletedAtMeta = const VerificationMeta(
+    'deletedAt',
+  );
+  @override
+  late final GeneratedColumn<int> deletedAt = GeneratedColumn<int>(
+    'deleted_at',
+    aliasedName,
+    true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _isPinnedMeta = const VerificationMeta(
+    'isPinned',
+  );
+  @override
+  late final GeneratedColumn<bool> isPinned = GeneratedColumn<bool>(
+    'is_pinned',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("is_pinned" IN (0, 1))',
+    ),
+    defaultValue: const Constant(false),
+  );
+  static const VerificationMeta _sortOrderMeta = const VerificationMeta(
+    'sortOrder',
+  );
+  @override
+  late final GeneratedColumn<int> sortOrder = GeneratedColumn<int>(
+    'sort_order',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+    defaultValue: const Constant(0),
+  );
+  static const VerificationMeta _originMeta = const VerificationMeta('origin');
+  @override
+  late final GeneratedColumn<String> origin = GeneratedColumn<String>(
+    'origin',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [
+    id,
+    name,
+    createdAt,
+    updatedAt,
+    version,
+    deletedAt,
+    isPinned,
+    sortOrder,
+    origin,
+  ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'folders';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<FolderRow> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    } else if (isInserting) {
+      context.missing(_idMeta);
+    }
+    if (data.containsKey('name')) {
+      context.handle(
+        _nameMeta,
+        name.isAcceptableOrUnknown(data['name']!, _nameMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_nameMeta);
+    }
+    if (data.containsKey('created_at')) {
+      context.handle(
+        _createdAtMeta,
+        createdAt.isAcceptableOrUnknown(data['created_at']!, _createdAtMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_createdAtMeta);
+    }
+    if (data.containsKey('updated_at')) {
+      context.handle(
+        _updatedAtMeta,
+        updatedAt.isAcceptableOrUnknown(data['updated_at']!, _updatedAtMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_updatedAtMeta);
+    }
+    if (data.containsKey('version')) {
+      context.handle(
+        _versionMeta,
+        version.isAcceptableOrUnknown(data['version']!, _versionMeta),
+      );
+    }
+    if (data.containsKey('deleted_at')) {
+      context.handle(
+        _deletedAtMeta,
+        deletedAt.isAcceptableOrUnknown(data['deleted_at']!, _deletedAtMeta),
+      );
+    }
+    if (data.containsKey('is_pinned')) {
+      context.handle(
+        _isPinnedMeta,
+        isPinned.isAcceptableOrUnknown(data['is_pinned']!, _isPinnedMeta),
+      );
+    }
+    if (data.containsKey('sort_order')) {
+      context.handle(
+        _sortOrderMeta,
+        sortOrder.isAcceptableOrUnknown(data['sort_order']!, _sortOrderMeta),
+      );
+    }
+    if (data.containsKey('origin')) {
+      context.handle(
+        _originMeta,
+        origin.isAcceptableOrUnknown(data['origin']!, _originMeta),
+      );
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  FolderRow map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return FolderRow(
+      id: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}id'],
+      )!,
+      name: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}name'],
+      )!,
+      createdAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}created_at'],
+      )!,
+      updatedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}updated_at'],
+      )!,
+      version: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}version'],
+      )!,
+      deletedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}deleted_at'],
+      ),
+      isPinned: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}is_pinned'],
+      )!,
+      sortOrder: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}sort_order'],
+      )!,
+      origin: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}origin'],
+      ),
+    );
+  }
+
+  @override
+  $FoldersTable createAlias(String alias) {
+    return $FoldersTable(attachedDatabase, alias);
+  }
+}
+
+class FolderRow extends DataClass implements Insertable<FolderRow> {
+  final String id;
+  final String name;
+  final int createdAt;
+  final int updatedAt;
+  final int version;
+
+  /// 软删除标记（epoch ms）：null=正常，非 null=已删除（不可恢复，
+  /// 仅列表隐藏；同步语义与笔记软删除一致——LWW 合并）。
+  final int? deletedAt;
+
+  /// 置顶：抽屉排序 isPinned DESC → sortOrder ASC（置顶区/普通区）。
+  final bool isPinned;
+
+  /// 手动排序键：拖拽排序后归一化为 0..n-1（每文件夹内全局连续）。
+  final int sortOrder;
+
+  /// 最后修改者 deviceId（同 Notes.origin，task-32 v10）。
+  final String? origin;
+  const FolderRow({
+    required this.id,
+    required this.name,
+    required this.createdAt,
+    required this.updatedAt,
+    required this.version,
+    this.deletedAt,
+    required this.isPinned,
+    required this.sortOrder,
+    this.origin,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<String>(id);
+    map['name'] = Variable<String>(name);
+    map['created_at'] = Variable<int>(createdAt);
+    map['updated_at'] = Variable<int>(updatedAt);
+    map['version'] = Variable<int>(version);
+    if (!nullToAbsent || deletedAt != null) {
+      map['deleted_at'] = Variable<int>(deletedAt);
+    }
+    map['is_pinned'] = Variable<bool>(isPinned);
+    map['sort_order'] = Variable<int>(sortOrder);
+    if (!nullToAbsent || origin != null) {
+      map['origin'] = Variable<String>(origin);
+    }
+    return map;
+  }
+
+  FoldersCompanion toCompanion(bool nullToAbsent) {
+    return FoldersCompanion(
+      id: Value(id),
+      name: Value(name),
+      createdAt: Value(createdAt),
+      updatedAt: Value(updatedAt),
+      version: Value(version),
+      deletedAt: deletedAt == null && nullToAbsent
+          ? const Value.absent()
+          : Value(deletedAt),
+      isPinned: Value(isPinned),
+      sortOrder: Value(sortOrder),
+      origin: origin == null && nullToAbsent
+          ? const Value.absent()
+          : Value(origin),
+    );
+  }
+
+  factory FolderRow.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return FolderRow(
+      id: serializer.fromJson<String>(json['id']),
+      name: serializer.fromJson<String>(json['name']),
+      createdAt: serializer.fromJson<int>(json['createdAt']),
+      updatedAt: serializer.fromJson<int>(json['updatedAt']),
+      version: serializer.fromJson<int>(json['version']),
+      deletedAt: serializer.fromJson<int?>(json['deletedAt']),
+      isPinned: serializer.fromJson<bool>(json['isPinned']),
+      sortOrder: serializer.fromJson<int>(json['sortOrder']),
+      origin: serializer.fromJson<String?>(json['origin']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<String>(id),
+      'name': serializer.toJson<String>(name),
+      'createdAt': serializer.toJson<int>(createdAt),
+      'updatedAt': serializer.toJson<int>(updatedAt),
+      'version': serializer.toJson<int>(version),
+      'deletedAt': serializer.toJson<int?>(deletedAt),
+      'isPinned': serializer.toJson<bool>(isPinned),
+      'sortOrder': serializer.toJson<int>(sortOrder),
+      'origin': serializer.toJson<String?>(origin),
+    };
+  }
+
+  FolderRow copyWith({
+    String? id,
+    String? name,
+    int? createdAt,
+    int? updatedAt,
+    int? version,
+    Value<int?> deletedAt = const Value.absent(),
+    bool? isPinned,
+    int? sortOrder,
+    Value<String?> origin = const Value.absent(),
+  }) => FolderRow(
+    id: id ?? this.id,
+    name: name ?? this.name,
+    createdAt: createdAt ?? this.createdAt,
+    updatedAt: updatedAt ?? this.updatedAt,
+    version: version ?? this.version,
+    deletedAt: deletedAt.present ? deletedAt.value : this.deletedAt,
+    isPinned: isPinned ?? this.isPinned,
+    sortOrder: sortOrder ?? this.sortOrder,
+    origin: origin.present ? origin.value : this.origin,
+  );
+  FolderRow copyWithCompanion(FoldersCompanion data) {
+    return FolderRow(
+      id: data.id.present ? data.id.value : this.id,
+      name: data.name.present ? data.name.value : this.name,
+      createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
+      updatedAt: data.updatedAt.present ? data.updatedAt.value : this.updatedAt,
+      version: data.version.present ? data.version.value : this.version,
+      deletedAt: data.deletedAt.present ? data.deletedAt.value : this.deletedAt,
+      isPinned: data.isPinned.present ? data.isPinned.value : this.isPinned,
+      sortOrder: data.sortOrder.present ? data.sortOrder.value : this.sortOrder,
+      origin: data.origin.present ? data.origin.value : this.origin,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('FolderRow(')
+          ..write('id: $id, ')
+          ..write('name: $name, ')
+          ..write('createdAt: $createdAt, ')
+          ..write('updatedAt: $updatedAt, ')
+          ..write('version: $version, ')
+          ..write('deletedAt: $deletedAt, ')
+          ..write('isPinned: $isPinned, ')
+          ..write('sortOrder: $sortOrder, ')
+          ..write('origin: $origin')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(
+    id,
+    name,
+    createdAt,
+    updatedAt,
+    version,
+    deletedAt,
+    isPinned,
+    sortOrder,
+    origin,
+  );
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is FolderRow &&
+          other.id == this.id &&
+          other.name == this.name &&
+          other.createdAt == this.createdAt &&
+          other.updatedAt == this.updatedAt &&
+          other.version == this.version &&
+          other.deletedAt == this.deletedAt &&
+          other.isPinned == this.isPinned &&
+          other.sortOrder == this.sortOrder &&
+          other.origin == this.origin);
+}
+
+class FoldersCompanion extends UpdateCompanion<FolderRow> {
+  final Value<String> id;
+  final Value<String> name;
+  final Value<int> createdAt;
+  final Value<int> updatedAt;
+  final Value<int> version;
+  final Value<int?> deletedAt;
+  final Value<bool> isPinned;
+  final Value<int> sortOrder;
+  final Value<String?> origin;
+  final Value<int> rowid;
+  const FoldersCompanion({
+    this.id = const Value.absent(),
+    this.name = const Value.absent(),
+    this.createdAt = const Value.absent(),
+    this.updatedAt = const Value.absent(),
+    this.version = const Value.absent(),
+    this.deletedAt = const Value.absent(),
+    this.isPinned = const Value.absent(),
+    this.sortOrder = const Value.absent(),
+    this.origin = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  FoldersCompanion.insert({
+    required String id,
+    required String name,
+    required int createdAt,
+    required int updatedAt,
+    this.version = const Value.absent(),
+    this.deletedAt = const Value.absent(),
+    this.isPinned = const Value.absent(),
+    this.sortOrder = const Value.absent(),
+    this.origin = const Value.absent(),
+    this.rowid = const Value.absent(),
+  }) : id = Value(id),
+       name = Value(name),
+       createdAt = Value(createdAt),
+       updatedAt = Value(updatedAt);
+  static Insertable<FolderRow> custom({
+    Expression<String>? id,
+    Expression<String>? name,
+    Expression<int>? createdAt,
+    Expression<int>? updatedAt,
+    Expression<int>? version,
+    Expression<int>? deletedAt,
+    Expression<bool>? isPinned,
+    Expression<int>? sortOrder,
+    Expression<String>? origin,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (name != null) 'name': name,
+      if (createdAt != null) 'created_at': createdAt,
+      if (updatedAt != null) 'updated_at': updatedAt,
+      if (version != null) 'version': version,
+      if (deletedAt != null) 'deleted_at': deletedAt,
+      if (isPinned != null) 'is_pinned': isPinned,
+      if (sortOrder != null) 'sort_order': sortOrder,
+      if (origin != null) 'origin': origin,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  FoldersCompanion copyWith({
+    Value<String>? id,
+    Value<String>? name,
+    Value<int>? createdAt,
+    Value<int>? updatedAt,
+    Value<int>? version,
+    Value<int?>? deletedAt,
+    Value<bool>? isPinned,
+    Value<int>? sortOrder,
+    Value<String?>? origin,
+    Value<int>? rowid,
+  }) {
+    return FoldersCompanion(
+      id: id ?? this.id,
+      name: name ?? this.name,
+      createdAt: createdAt ?? this.createdAt,
+      updatedAt: updatedAt ?? this.updatedAt,
+      version: version ?? this.version,
+      deletedAt: deletedAt ?? this.deletedAt,
+      isPinned: isPinned ?? this.isPinned,
+      sortOrder: sortOrder ?? this.sortOrder,
+      origin: origin ?? this.origin,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<String>(id.value);
+    }
+    if (name.present) {
+      map['name'] = Variable<String>(name.value);
+    }
+    if (createdAt.present) {
+      map['created_at'] = Variable<int>(createdAt.value);
+    }
+    if (updatedAt.present) {
+      map['updated_at'] = Variable<int>(updatedAt.value);
+    }
+    if (version.present) {
+      map['version'] = Variable<int>(version.value);
+    }
+    if (deletedAt.present) {
+      map['deleted_at'] = Variable<int>(deletedAt.value);
+    }
+    if (isPinned.present) {
+      map['is_pinned'] = Variable<bool>(isPinned.value);
+    }
+    if (sortOrder.present) {
+      map['sort_order'] = Variable<int>(sortOrder.value);
+    }
+    if (origin.present) {
+      map['origin'] = Variable<String>(origin.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('FoldersCompanion(')
+          ..write('id: $id, ')
+          ..write('name: $name, ')
+          ..write('createdAt: $createdAt, ')
+          ..write('updatedAt: $updatedAt, ')
+          ..write('version: $version, ')
+          ..write('deletedAt: $deletedAt, ')
+          ..write('isPinned: $isPinned, ')
+          ..write('sortOrder: $sortOrder, ')
+          ..write('origin: $origin, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -1586,6 +2201,7 @@ abstract class _$AppDatabase extends GeneratedDatabase {
   $AppDatabaseManager get managers => $AppDatabaseManager(this);
   late final $NotesTable notes = $NotesTable(this);
   late final $TombstonesTable tombstones = $TombstonesTable(this);
+  late final $FoldersTable folders = $FoldersTable(this);
   late final $DeviceSettingsTable deviceSettings = $DeviceSettingsTable(this);
   late final $TrustedDevicesTable trustedDevices = $TrustedDevicesTable(this);
   late final Index idxNotesUpdatedAt = Index(
@@ -1593,6 +2209,7 @@ abstract class _$AppDatabase extends GeneratedDatabase {
     'CREATE INDEX idx_notes_updated_at ON notes (updated_at)',
   );
   late final NoteDao noteDao = NoteDao(this as AppDatabase);
+  late final FolderDao folderDao = FolderDao(this as AppDatabase);
   late final DeviceDao deviceDao = DeviceDao(this as AppDatabase);
   @override
   Iterable<TableInfo<Table, Object?>> get allTables =>
@@ -1601,6 +2218,7 @@ abstract class _$AppDatabase extends GeneratedDatabase {
   List<DatabaseSchemaEntity> get allSchemaEntities => [
     notes,
     tombstones,
+    folders,
     deviceSettings,
     trustedDevices,
     idxNotesUpdatedAt,
@@ -1619,6 +2237,7 @@ typedef $$NotesTableCreateCompanionBuilder =
       Value<bool> isPinned,
       Value<String> tags,
       Value<String?> origin,
+      Value<String?> folderId,
       Value<int> rowid,
     });
 typedef $$NotesTableUpdateCompanionBuilder =
@@ -1633,6 +2252,7 @@ typedef $$NotesTableUpdateCompanionBuilder =
       Value<bool> isPinned,
       Value<String> tags,
       Value<String?> origin,
+      Value<String?> folderId,
       Value<int> rowid,
     });
 
@@ -1691,6 +2311,11 @@ class $$NotesTableFilterComposer extends Composer<_$AppDatabase, $NotesTable> {
 
   ColumnFilters<String> get origin => $composableBuilder(
     column: $table.origin,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get folderId => $composableBuilder(
+    column: $table.folderId,
     builder: (column) => ColumnFilters(column),
   );
 }
@@ -1753,6 +2378,11 @@ class $$NotesTableOrderingComposer
     column: $table.origin,
     builder: (column) => ColumnOrderings(column),
   );
+
+  ColumnOrderings<String> get folderId => $composableBuilder(
+    column: $table.folderId,
+    builder: (column) => ColumnOrderings(column),
+  );
 }
 
 class $$NotesTableAnnotationComposer
@@ -1793,6 +2423,9 @@ class $$NotesTableAnnotationComposer
 
   GeneratedColumn<String> get origin =>
       $composableBuilder(column: $table.origin, builder: (column) => column);
+
+  GeneratedColumn<String> get folderId =>
+      $composableBuilder(column: $table.folderId, builder: (column) => column);
 }
 
 class $$NotesTableTableManager
@@ -1833,6 +2466,7 @@ class $$NotesTableTableManager
                 Value<bool> isPinned = const Value.absent(),
                 Value<String> tags = const Value.absent(),
                 Value<String?> origin = const Value.absent(),
+                Value<String?> folderId = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => NotesCompanion(
                 id: id,
@@ -1845,6 +2479,7 @@ class $$NotesTableTableManager
                 isPinned: isPinned,
                 tags: tags,
                 origin: origin,
+                folderId: folderId,
                 rowid: rowid,
               ),
           createCompanionCallback:
@@ -1859,6 +2494,7 @@ class $$NotesTableTableManager
                 Value<bool> isPinned = const Value.absent(),
                 Value<String> tags = const Value.absent(),
                 Value<String?> origin = const Value.absent(),
+                Value<String?> folderId = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => NotesCompanion.insert(
                 id: id,
@@ -1871,6 +2507,7 @@ class $$NotesTableTableManager
                 isPinned: isPinned,
                 tags: tags,
                 origin: origin,
+                folderId: folderId,
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0
@@ -2052,6 +2689,276 @@ typedef $$TombstonesTableProcessedTableManager =
       $$TombstonesTableUpdateCompanionBuilder,
       (Tombstone, BaseReferences<_$AppDatabase, $TombstonesTable, Tombstone>),
       Tombstone,
+      PrefetchHooks Function()
+    >;
+typedef $$FoldersTableCreateCompanionBuilder =
+    FoldersCompanion Function({
+      required String id,
+      required String name,
+      required int createdAt,
+      required int updatedAt,
+      Value<int> version,
+      Value<int?> deletedAt,
+      Value<bool> isPinned,
+      Value<int> sortOrder,
+      Value<String?> origin,
+      Value<int> rowid,
+    });
+typedef $$FoldersTableUpdateCompanionBuilder =
+    FoldersCompanion Function({
+      Value<String> id,
+      Value<String> name,
+      Value<int> createdAt,
+      Value<int> updatedAt,
+      Value<int> version,
+      Value<int?> deletedAt,
+      Value<bool> isPinned,
+      Value<int> sortOrder,
+      Value<String?> origin,
+      Value<int> rowid,
+    });
+
+class $$FoldersTableFilterComposer
+    extends Composer<_$AppDatabase, $FoldersTable> {
+  $$FoldersTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get name => $composableBuilder(
+    column: $table.name,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get createdAt => $composableBuilder(
+    column: $table.createdAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get updatedAt => $composableBuilder(
+    column: $table.updatedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get version => $composableBuilder(
+    column: $table.version,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get deletedAt => $composableBuilder(
+    column: $table.deletedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get isPinned => $composableBuilder(
+    column: $table.isPinned,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get sortOrder => $composableBuilder(
+    column: $table.sortOrder,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get origin => $composableBuilder(
+    column: $table.origin,
+    builder: (column) => ColumnFilters(column),
+  );
+}
+
+class $$FoldersTableOrderingComposer
+    extends Composer<_$AppDatabase, $FoldersTable> {
+  $$FoldersTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get name => $composableBuilder(
+    column: $table.name,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get createdAt => $composableBuilder(
+    column: $table.createdAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get updatedAt => $composableBuilder(
+    column: $table.updatedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get version => $composableBuilder(
+    column: $table.version,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get deletedAt => $composableBuilder(
+    column: $table.deletedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<bool> get isPinned => $composableBuilder(
+    column: $table.isPinned,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get sortOrder => $composableBuilder(
+    column: $table.sortOrder,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get origin => $composableBuilder(
+    column: $table.origin,
+    builder: (column) => ColumnOrderings(column),
+  );
+}
+
+class $$FoldersTableAnnotationComposer
+    extends Composer<_$AppDatabase, $FoldersTable> {
+  $$FoldersTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<String> get name =>
+      $composableBuilder(column: $table.name, builder: (column) => column);
+
+  GeneratedColumn<int> get createdAt =>
+      $composableBuilder(column: $table.createdAt, builder: (column) => column);
+
+  GeneratedColumn<int> get updatedAt =>
+      $composableBuilder(column: $table.updatedAt, builder: (column) => column);
+
+  GeneratedColumn<int> get version =>
+      $composableBuilder(column: $table.version, builder: (column) => column);
+
+  GeneratedColumn<int> get deletedAt =>
+      $composableBuilder(column: $table.deletedAt, builder: (column) => column);
+
+  GeneratedColumn<bool> get isPinned =>
+      $composableBuilder(column: $table.isPinned, builder: (column) => column);
+
+  GeneratedColumn<int> get sortOrder =>
+      $composableBuilder(column: $table.sortOrder, builder: (column) => column);
+
+  GeneratedColumn<String> get origin =>
+      $composableBuilder(column: $table.origin, builder: (column) => column);
+}
+
+class $$FoldersTableTableManager
+    extends
+        RootTableManager<
+          _$AppDatabase,
+          $FoldersTable,
+          FolderRow,
+          $$FoldersTableFilterComposer,
+          $$FoldersTableOrderingComposer,
+          $$FoldersTableAnnotationComposer,
+          $$FoldersTableCreateCompanionBuilder,
+          $$FoldersTableUpdateCompanionBuilder,
+          (FolderRow, BaseReferences<_$AppDatabase, $FoldersTable, FolderRow>),
+          FolderRow,
+          PrefetchHooks Function()
+        > {
+  $$FoldersTableTableManager(_$AppDatabase db, $FoldersTable table)
+    : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$FoldersTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$FoldersTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$FoldersTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback:
+              ({
+                Value<String> id = const Value.absent(),
+                Value<String> name = const Value.absent(),
+                Value<int> createdAt = const Value.absent(),
+                Value<int> updatedAt = const Value.absent(),
+                Value<int> version = const Value.absent(),
+                Value<int?> deletedAt = const Value.absent(),
+                Value<bool> isPinned = const Value.absent(),
+                Value<int> sortOrder = const Value.absent(),
+                Value<String?> origin = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => FoldersCompanion(
+                id: id,
+                name: name,
+                createdAt: createdAt,
+                updatedAt: updatedAt,
+                version: version,
+                deletedAt: deletedAt,
+                isPinned: isPinned,
+                sortOrder: sortOrder,
+                origin: origin,
+                rowid: rowid,
+              ),
+          createCompanionCallback:
+              ({
+                required String id,
+                required String name,
+                required int createdAt,
+                required int updatedAt,
+                Value<int> version = const Value.absent(),
+                Value<int?> deletedAt = const Value.absent(),
+                Value<bool> isPinned = const Value.absent(),
+                Value<int> sortOrder = const Value.absent(),
+                Value<String?> origin = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => FoldersCompanion.insert(
+                id: id,
+                name: name,
+                createdAt: createdAt,
+                updatedAt: updatedAt,
+                version: version,
+                deletedAt: deletedAt,
+                isPinned: isPinned,
+                sortOrder: sortOrder,
+                origin: origin,
+                rowid: rowid,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .toList(),
+          prefetchHooksCallback: null,
+        ),
+      );
+}
+
+typedef $$FoldersTableProcessedTableManager =
+    ProcessedTableManager<
+      _$AppDatabase,
+      $FoldersTable,
+      FolderRow,
+      $$FoldersTableFilterComposer,
+      $$FoldersTableOrderingComposer,
+      $$FoldersTableAnnotationComposer,
+      $$FoldersTableCreateCompanionBuilder,
+      $$FoldersTableUpdateCompanionBuilder,
+      (FolderRow, BaseReferences<_$AppDatabase, $FoldersTable, FolderRow>),
+      FolderRow,
       PrefetchHooks Function()
     >;
 typedef $$DeviceSettingsTableCreateCompanionBuilder =
@@ -2452,6 +3359,8 @@ class $AppDatabaseManager {
       $$NotesTableTableManager(_db, _db.notes);
   $$TombstonesTableTableManager get tombstones =>
       $$TombstonesTableTableManager(_db, _db.tombstones);
+  $$FoldersTableTableManager get folders =>
+      $$FoldersTableTableManager(_db, _db.folders);
   $$DeviceSettingsTableTableManager get deviceSettings =>
       $$DeviceSettingsTableTableManager(_db, _db.deviceSettings);
   $$TrustedDevicesTableTableManager get trustedDevices =>

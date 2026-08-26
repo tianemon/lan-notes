@@ -49,6 +49,7 @@ class NoteDao extends DatabaseAccessor<AppDatabase> with _$NoteDaoMixin {
         isPinned: current.isPinned,
         tags: current.tags,
       origin: current.origin,
+        folderId: current.folderId,
       );
     });
   }
@@ -72,6 +73,7 @@ class NoteDao extends DatabaseAccessor<AppDatabase> with _$NoteDaoMixin {
         isPinned: isPinned,
         tags: current.tags,
       origin: current.origin,
+        folderId: current.folderId,
       );
     });
   }
@@ -95,6 +97,32 @@ class NoteDao extends DatabaseAccessor<AppDatabase> with _$NoteDaoMixin {
         isPinned: current.isPinned,
         tags: List.of(tags),
         origin: current.origin,
+        folderId: current.folderId,
+      );
+    });
+  }
+
+  /// 移动到文件夹（task-32 文件夹归类）：folderId 置值 + version+1 +
+  /// updatedAt 刷新。
+  ///
+  /// [folderId] 传 null = 移出文件夹（未分类）。幂等：与当前状态一致时
+  /// 直接返回当前值，不重复递增版本。移动随 note_upsert 同步。
+  Future<Note> moveToFolder(String id, String? folderId) {
+    return _mutate(id, '移动', (current) {
+      if (current.folderId == folderId) return current; // 幂等
+      final now = DateTime.now().millisecondsSinceEpoch;
+      return Note(
+        id: id,
+        title: current.title,
+        content: current.content,
+        createdAt: current.createdAt,
+        updatedAt: now,
+        version: current.version + 1,
+        deletedAt: current.deletedAt,
+        isPinned: current.isPinned,
+        tags: current.tags,
+        origin: current.origin,
+        folderId: folderId,
       );
     });
   }
@@ -144,6 +172,7 @@ class NoteDao extends DatabaseAccessor<AppDatabase> with _$NoteDaoMixin {
       isPinned: current.isPinned,
       tags: current.tags,
       origin: current.origin,
+        folderId: current.folderId,
     );
     await update(notes).replace(trashed.toRow());
     return trashed;
@@ -173,6 +202,7 @@ class NoteDao extends DatabaseAccessor<AppDatabase> with _$NoteDaoMixin {
       isPinned: current.isPinned,
       tags: current.tags,
       origin: current.origin,
+        folderId: current.folderId,
     );
     await update(notes).replace(restored.toRow());
     return restored;

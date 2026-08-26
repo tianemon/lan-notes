@@ -541,6 +541,180 @@
       "passes": true,
       "evaluated": true,
       "status": "done"
+    },
+    {
+      "id": "task-32",
+      "title": "数据层：folders 表 + notes.folderId + schema v11 + Folder 类 + FolderDao",
+      "description": "文件夹归类的数据模型：Folders 表（字段体系与 Notes 同构：id/name/createdAt/updatedAt/version/deletedAt/isPinned/sortOrder/origin），Notes 加 folderId 列（可空=未分类），schemaVersion 10→11 迁移；Folder 数据类（fromRow/toRow/toJson/fromJson）；FolderDao（CRUD/流/排序/软删除/合并支持）。",
+      "steps": [
+        "database.dart：新增 Folders 表（@DataClassName('FolderRow')）+ Notes.folderId 可空列 + @DriftDatabase 注册 + schemaVersion 11 + 迁移 v11（createTable folders + addColumn notes.folderId）",
+        "folder.dart：Folder 数据类（id/name/createdAt/updatedAt/version/deletedAt/isPinned/sortOrder/origin，含 fromRow/toRow/toJson/fromJson）",
+        "folder_dao.dart：FolderDao（insertOrReplace/rename/setPinned/setSortOrder/softDelete/_mutate/getActiveStream/getAll/getById/deleteById/getActive），排序 isPinned DESC → sortOrder ASC",
+        "notes_dao.dart：新增 moveToFolder（folderId 置值 + version+1 + updatedAt 刷新，幂等），所有重建 Note 处补 folderId 透传",
+        "note.dart：加 folderId 字段（构造/fromRow/toRow/toJson/fromJson，JSON 缺失 → null 兼容）",
+        "dart run build_runner build --force-jit 重新生成（含 database.g.dart 的 folderDao getter）；flutter analyze 0 issues"
+      ],
+      "reference": "现有 Notes 表/NoteDao 模式（task-2 数据层）；LWW 字段体系见 docs/技术架构.md 3.3 节",
+      "passes": true,
+      "evaluated": true,
+      "status": "done"
+    },
+    {
+      "id": "task-33",
+      "title": "仓库层：FolderRepository + NoteRepository 扩展（批量移动/删除）+ providers",
+      "description": "FolderRepository（本地文件夹读写统一入口 + 变更事件通道 + mergeRemoteFolder LWW 合并）；NoteRepository 批量方法（moveNotesToFolder/softDeleteNotes）+ mergeRemoteNote 加 folderId 合并；providers（folderRepositoryProvider/foldersStreamProvider/folderFilterProvider/activeNotesStreamProvider/多选与抽屉状态 provider），移除标签筛选 provider（tagFilterProvider/tagsProvider/allNotesStreamProvider）。",
+      "steps": [
+        "folder_repository.dart：FolderChangeEvent（FolderUpsertedEvent/FolderTrashedEvent）+ FolderRepository（createFolder 排序追加/renameFolder/setPinned 含排序归一化/softDeleteFolder 二选一（deleteNotes 联动笔记批量处理）/reorder 归一化/getActiveStream/getActive/getAll/getById/mergeRemoteFolder LWW（version 大者胜→时间→删除优先，无墓碑）/dispose）",
+        "note_repository.dart：moveNotesToFolder（批量 folderId 置值 + NoteUpsertedEvent）/softDeleteNotes（批量软删除 + NoteTrashedEvent）；mergeRemoteNote 对齐判断与合并保留加 folderId；createNote 加 folderId 参数",
+        "providers.dart：folderRepositoryProvider（注入 noteRepository）/foldersStreamProvider/activeNotesStreamProvider/folderFilterProvider（null=全部）/folderDrawerOpenProvider/folderDrawerByDragProvider/MultiSelectNotifier + multiSelectProvider（enter/toggle/selectAll/exit，空集自动退出）；移除 tagFilterProvider/tagsProvider/allNotesStreamProvider（标签栏移除，编辑页标签保留）",
+        "flutter analyze 0 issues"
+      ],
+      "reference": "NoteRepository 既有模式（task-3）；LWW 合并规则见 docs/技术架构.md 7.4 节",
+      "passes": true,
+      "evaluated": true,
+      "status": "done"
+    },
+    {
+      "id": "task-34",
+      "title": "同步协议 v6：folder_upsert + sync_data 扩展 + Note.folderId + kProtocolVersion=6",
+      "description": "协议版本 v5→v6（文件夹归类）：新增 FolderUpsertMessage（folder + origin）；SyncDataMessage 加 folders 字段；Note JSON 载荷加 folderId；kProtocolVersion=6（v5 及以下对端不互连，需全员升级）。",
+      "steps": [
+        "sync_protocol.dart：kProtocolVersion 5→6（注释版本沿革 v6）；import folder.dart；FolderUpsertMessage（type=folder_upsert，载荷 folder+origin）；SyncDataMessage 加 folders（缺省空列表）；SyncMessage.fromJson 分发加 folder_upsert",
+        "note.dart toJson/fromJson 加 folderId（可缺失 → null）——已随 task-32 完成，此处核对",
+        "flutter analyze 0 issues"
+      ],
+      "reference": "现有消息模型（task-7/21/30 演进）；协议版本不兼容策略见 docs/技术架构.md 7.3 节",
+      "passes": true,
+      "evaluated": true,
+      "status": "done"
+    },
+    {
+      "id": "task-35",
+      "title": "同步服务：文件夹合并/fan-out/全量对齐/本地推送",
+      "description": "SyncService 接入文件夹：构造注入 FolderRepository 并订阅 changes（本地变更 → folder_upsert 推送）；_onMessage 分发 folder_upsert；_onFolderUpsert（origin 过滤 → mergeRemoteFolder → 实际变更才 fan-out）；_sendFullSnapshot 携带 folders；_onSyncData 合并 folders + 双向回推 folders；_doEnable 设置 FolderRepository.localDeviceId。",
+      "steps": [
+        "sync_service.dart：构造加 FolderRepository? 参数 + 订阅 _folderChangesSub（dispose 取消）；_onLocalFolderChange（FolderUpsertedEvent/FolderTrashedEvent → FolderUpsertMessage 推送）",
+        "_onMessage 加 case FolderUpsertMessage → _onFolderUpsert（镜像 _onNoteUpsert：origin 过滤「从/向」开关 → mergeRemoteFolder → changed 才 fan-out）",
+        "_sendFullSnapshot 加 folders（getAll 含软删除）；_onSyncData 加 folders 参数（墓碑后合并 folders 与 notes，origin 过滤）",
+        "_onSyncData 双向回推：本机全部 folders 以 folder_upsert 回推（origin = folder.origin ?? 本机）",
+        "_doEnable 设置 _folderRepository?.localDeviceId；providers.syncServiceProvider 注入 folderRepository",
+        "flutter analyze 0 issues"
+      ],
+      "reference": "笔记增量/全量链路（task-7/9/15/21/32 演进）；fan-out 门控见 docs/技术架构.md 7.2 节",
+      "passes": true,
+      "evaluated": true,
+      "status": "done"
+    },
+    {
+      "id": "task-36",
+      "title": "UI 布局重构：AppBar 文件夹按钮 + 搜索框独立行 + 移除标签栏",
+      "description": "主页布局按用户确认重构：第一行 [文件夹按钮][同步状态点][排列][设置]（多选态切换为 [全选][已选 N 项][完成]）；搜索框下移独占第二行；移除标签筛选栏（_TagFilterBar 及 tagsProvider/tagFilterProvider 引用）；FAB 移入 body Stack。",
+      "steps": [
+        "home_page.dart：AppBar leading=文件夹按钮（Icons.folder_outlined，点击切换 folderDrawerOpen）/actions=同步状态点+排列+设置；多选态 leading=全选、title=已选 N 项、actions=完成",
+        "搜索框 _SearchField 移入 body Column 顶部独占一行（原 AppBar title）；移除 _TagFilterBar 类",
+        "FAB 改由 body Stack 右下角挂载（多选时隐藏）；新增 FolderDrawer 挂载",
+        "test/widget_test.dart：断言更新（文件夹按钮 tooltip/设置图标/add 图标 findsWidgets + pumpAndSettle）",
+        "flutter analyze 0 issues；flutter test 通过"
+      ],
+      "reference": "用户确认布局（交互规格第 0 节）；原型 prototype/index.html 顶部结构",
+      "passes": true,
+      "evaluated": true,
+      "status": "done"
+    },
+    {
+      "id": "task-37",
+      "title": "文件夹抽屉：面板/全部/置顶区/普通区/菜单/删除二选一/拖拽排序/拖放落点",
+      "description": "folder_drawer.dart 新组件：200px 玻璃抽屉（AnimatedPositioned 滑入滑出 + 按钮模式 backdrop / 拖拽模式无 backdrop）；「全部」固定不可操作 + 置顶区/普通区（ReorderableListView 手柄拖拽排序，onReorderItem）；文件夹长按/右键悬浮菜单（重命名/置顶/删除）；删除二选一弹窗（笔记移到全部/同时删除笔记）；顶部虚线「+ 新建文件夹」拖放目标；每项 DragTarget（笔记拖拽落点批量移动）。",
+      "steps": [
+        "folder_drawer.dart：FolderDrawer（Stack + AnimatedPositioned + backdrop 条件显示；宽 200；内容 ListView：全部项 + 置顶区 + 普通区 + 空态提示）",
+        "_ReorderZone：ReorderableListView.builder（shrinkWrap/NeverScrollable/buildDefaultDragHandles:false/onReorderItem）+ ReorderableDragStartListener 手柄；区内重排后组装完整顺序调 FolderRepository.reorder（归一化 sortOrder）",
+        "_FolderItem：选中态高亮/笔记数/置顶图钉；DragTarget<List<String>>（onAccept → NoteRepository.moveNotesToFolder + exit 多选 + SnackBar）；长按/右键玻璃悬浮菜单（重命名/置顶/删除）",
+        "删除二选一（note_actions.showDeleteFolderDialog）：showGlassDialog（笔记移到全部 / 同时删除笔记）；删除后若正选中该文件夹退回「全部」",
+        "_NewFolderDropTarget：顶部虚线「+ 新建文件夹」，onDrop → 创建「未命名」→ 批量移入 → exit 多选 → 弹重命名框",
+        "flutter analyze 0 issues"
+      ],
+      "reference": "原型 prototype/index.html 抽屉交互；安卓桌面图标拖拽（层叠）；玻璃风格 glass_style.dart",
+      "passes": true,
+      "evaluated": true,
+      "status": "done"
+    },
+    {
+      "id": "task-38",
+      "title": "多选模式：长按进入/多选框/顶部工具栏/点击切换/退出",
+      "description": "笔记卡片长按（300ms）进入多选模式：全部卡片左上角出现圆形多选框，被长按卡片默认选中；顶部 AppBar 切换多选工具栏（已选 N 项/全选/完成）；多选时点击卡片切换选中（不进编辑页）、左滑删除禁用；退出：完成/点空白/Esc/清空选择。",
+      "steps": [
+        "notes_list.dart NoteListItem：长按 → multiSelectProvider.enter(id)（替代原长按菜单）；多选 active 时卡片显示 _CheckCircle 多选框（padding 左侧留位）、点击 toggle、Dismissible direction:none",
+        "home_page.dart AppBar 多选态（全选/已选 N 项/完成）——已随 task-36 完成",
+        "NotesList 外层 GestureDetector：多选态点空白退出（卡片点击被消费不冒泡；拖拽中不触发）",
+        "Esc 退出（HomePage/NotesList 监听键盘）——桌面便利，移动端走完成/空白",
+        "flutter analyze 0 issues；flutter test 通过"
+      ],
+      "reference": "iOS/安卓相册多选交互；原型长按多选交互（300ms 浮起 + 多选框）",
+      "passes": true,
+      "evaluated": true,
+      "status": "done"
+    },
+    {
+      "id": "task-39",
+      "title": "底部菜单 + 移动到：玻璃面板/批量删除/文件夹选择",
+      "description": "多选模式底部玻璃操作面板（非模态、拖拽共存）：选中 1 项 = 置顶/移动到/删除；≥2 项 = 移动到/删除；「移动到」弹文件夹选择面板（全部=未分类 + 活跃文件夹，批量移动 + SnackBar）；删除走确认弹窗批量软删除进回收站；右键悬浮菜单加「移动到」项。",
+      "steps": [
+        "notes_list.dart _MultiSelectSheet：底部非模态玻璃面板（margin 避开左侧拖放区，maxWidth 420 居中）；_SheetItem（图标+文字+hover）；菜单项按选中数量（single 显示置顶）",
+        "note_actions.dart：showMoveToPanel（showModalBottomSheet 玻璃面板：全部（未分类）+ 活跃文件夹列表 + 笔记数；返回语义 null=取消/''=全部/其他=文件夹 id；批量移动 + SnackBar）；showBatchDeleteConfirm（批量软删除确认）；showFolderNameDialog（新建/重命名共用输入框弹窗）；showDeleteFolderDialog",
+        "notes_list.dart 右键菜单加「移动到」项（置顶与删除之间），宽度计算含新项",
+        "flutter analyze 0 issues"
+      ],
+      "reference": "原型底部玻璃菜单；玻璃弹窗体系 glass_style.dart（showGlassDialog）",
+      "passes": true,
+      "evaluated": true,
+      "status": "done"
+    },
+    {
+      "id": "task-40",
+      "title": "层叠拖拽：左侧拖放区/抽屉联动/新建文件夹落点",
+      "description": "多选模式按住任意选中卡片拖动：层叠反馈（选中卡片沿对角线阶梯偏移，参考安卓桌面移动图标）；左侧半透明虚线拖放区（桌面 150px/移动 60px，CustomPaint 虚线边框）；拖入区域展开抽屉（drag-mode 无 backdrop），拖出收回；拖到文件夹/新建文件夹落点批量移动；拖空白回弹多选保持。",
+      "steps": [
+        "notes_list.dart：多选态卡片包 Draggable<List<String>>（data=当前选中集合快照）；feedback=_StackedFeedback（主卡 + 其余选中卡 6px 阶梯偏移）；childWhenDragging 半透明",
+        "onDragStarted/Update/End：拖放区显示（_NotesListState._setDragging）；进入左区展开抽屉（folderDrawerOpen+ByDrag=true），拖出且 byDrag 收回；结束清理（多选退出兜底清 _dragging）",
+        "_LeftDropZone：左侧虚线区（IgnorePointer 展示层，CustomPaint 垂直虚线 + 半透明底 + 文件夹图标/文案，窄屏只显图标）",
+        "文件夹项/新建文件夹按钮 DragTarget 落点（随 task-37）；落点后 exit 多选 + 关抽屉 + SnackBar",
+        "flutter analyze 0 issues"
+      ],
+      "reference": "安卓桌面移动图标（层叠拖拽）；原型拖拽交互（temp/drafts/文件夹功能-交互规格.md 第 2 节）",
+      "passes": true,
+      "evaluated": true,
+      "status": "done"
+    },
+    {
+      "id": "task-41",
+      "title": "扇形新建菜单：FAB 展开两个圆形按钮（文件夹/笔记）",
+      "description": "右下角 FAB 点击展开两个 56px 圆形玻璃按钮（文件夹在上、笔记在左），AnimatedPositioned 动画；再点 FAB 或点其他区域收回（全屏透明 barrier）；FAB 展开时图标旋转 45°；点「文件夹」弹命名框创建；点「笔记」直接创建空白笔记进编辑页（选中文件夹时自动归入该文件夹）。",
+      "steps": [
+        "home_page.dart：_FabMenu（ConsumerStatefulWidget，_open 状态 + AnimatedPositioned 扇形展开 + IgnorePointer 控制可点性 + 全屏收回 barrier）",
+        "_FabOption：56px 圆形玻璃按钮（复用 _FrostedFab 样式，folder/note 图标 + Tooltip）；_FrostedFab 加 open 参数（AnimatedRotation 45°）",
+        "创建逻辑：showFolderNameDialog → FolderRepository.createFolder；createNote(folderId: folderFilterProvider) → push /editor/:id",
+        "flutter analyze 0 issues"
+      ],
+      "reference": "原型 FAB 扇形菜单（交互规格第 3 节）；现有 _FrostedFab（EE 毛玻璃）",
+      "passes": true,
+      "evaluated": true,
+      "status": "done"
+    },
+    {
+      "id": "task-42",
+      "title": "文档更新 + 验证收尾",
+      "description": "技术架构/需求文档/开发进度更新（folders 表、folderId、协议 v6、消息表、组件树、决策记录）；verify_sync.dart 联调脚本确认文件夹场景不回归；flutter analyze/test/build 验证；README 升级说明（协议 v6 需全员升级）。",
+      "steps": [
+        "docs/技术架构.md：3.1 加 folders 表 + folderId 列（含排序/软删除语义）；7.2 消息表加 folder_upsert + SyncDataMessage folders + Note 载荷 folderId；协议版本 v6 说明（版本沿革 + 升级提示）；4 组件树 home 页结构更新；10 决策记录加文件夹归类一行",
+        "docs/需求文档.md：追加需求变更记录（文件夹归类 + 多选拖拽 + 布局重构）",
+        "docs/开发进度.md：任务表追加 task-32~42 + 本次增量记录",
+        "README：升级说明（协议 v6：文件夹归类，需全员升级）",
+        "flutter analyze 0 issues；flutter test 通过；本机（macOS）flutter build macos --debug 编译通过"
+      ],
+      "reference": "既有文档体系（docs/技术架构.md / 需求文档.md / 开发进度.md / README）",
+      "passes": true,
+      "evaluated": true,
+      "status": "done"
     }
   ]
 }

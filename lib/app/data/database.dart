@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:drift/drift.dart';
 
 import 'device_dao.dart';
+import 'folder_dao.dart';
 import 'notes_dao.dart';
 
 part 'database.g.dart';
@@ -40,6 +41,46 @@ class Notes extends Table {
 
   /// 最后修改者 deviceId（task-32 v10）：null=本机/旧数据；合并远端采用
   /// 时记录消息 origin——全量/增量同步按此过滤「从该设备同步」开关。
+  TextColumn get origin => text().nullable()();
+
+  /// 所属文件夹 id（task-32 文件夹归类）：null=未分类（「全部」视图下
+  /// 的未分类笔记）。移动笔记 = 置值 + version+1，随 note_upsert 同步。
+  TextColumn get folderId => text().nullable()();
+
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
+/// 文件夹表：跨设备同步的文件夹（task-32 文件夹归类）。
+///
+/// 字段体系与 [Notes] 同构（LWW 合并框架完全复用）：
+/// - [Folders.id]：UUID 文本主键，跨设备全局唯一
+/// - [Folders.createdAt] / [Folders.updatedAt]：epoch ms
+/// - [Folders.version]：LWW 冲突合并的单调递增版本号（默认 0）
+/// - [Folders.deletedAt]：软删除标记（null=正常，非 null=已删除；文件夹
+///   删除不可恢复——无文件夹回收站，软删除条目从抽屉隐藏，仍随同步）
+/// - [Folders.isPinned]：置顶（抽屉置顶区，isPinned DESC → sortOrder ASC）
+/// - [Folders.sortOrder]：手动排序键（拖拽排序后归一化为 0..n-1）
+/// - [Folders.origin]：最后修改者 deviceId（同 [Notes.origin]）
+@DataClassName('FolderRow')
+class Folders extends Table {
+  TextColumn get id => text()();
+  TextColumn get name => text()();
+  IntColumn get createdAt => integer()();
+  IntColumn get updatedAt => integer()();
+  IntColumn get version => integer().withDefault(const Constant(0))();
+
+  /// 软删除标记（epoch ms）：null=正常，非 null=已删除（不可恢复，
+  /// 仅列表隐藏；同步语义与笔记软删除一致——LWW 合并）。
+  IntColumn get deletedAt => integer().nullable()();
+
+  /// 置顶：抽屉排序 isPinned DESC → sortOrder ASC（置顶区/普通区）。
+  BoolColumn get isPinned => boolean().withDefault(const Constant(false))();
+
+  /// 手动排序键：拖拽排序后归一化为 0..n-1（每文件夹内全局连续）。
+  IntColumn get sortOrder => integer().withDefault(const Constant(0))();
+
+  /// 最后修改者 deviceId（同 Notes.origin，task-32 v10）。
   TextColumn get origin => text().nullable()();
 
   @override
@@ -121,8 +162,8 @@ class TrustedDevices extends Table {
 /// 使用 drift_flutter 的 [driftDatabase] 跨平台统一初始化
 /// （桌面/移动端走系统 SQLite，见 docs/开发进度.md 风险记录）。
 @DriftDatabase(
-  tables: [Notes, Tombstones, DeviceSettings, TrustedDevices],
-  daos: [NoteDao, DeviceDao],
+  tables: [Notes, Tombstones, Folders, DeviceSettings, TrustedDevices],
+  daos: [NoteDao, FolderDao, DeviceDao],
 )
 class AppDatabase extends _$AppDatabase {
   /// 注入执行器：默认文件库由 providers.dart 传入（drift_flutter），
@@ -134,7 +175,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase(super.executor);
 
   @override
-  int get schemaVersion => 10;
+  int get schemaVersion => 11;
 
   /// 迁移策略：v1（仅 Notes）→ v2（新增 DeviceSettings/TrustedDevices）
   /// → v3（TrustedDevices 加 autoConnect 列，task-16）→ v4（Notes 加
@@ -142,7 +183,10 @@ class AppDatabase extends _$AppDatabase {
   /// （TrustedDevices 加 secret 列，task-27 v4 HMAC 挑战认证密钥）→ v6
   /// （Notes 加 isPinned 列，task-28 置顶）→ v7（Notes 加 tags 列，task-28
   /// 标签）→ v8（task-29 富文本：notes.content 纯文本 → delta JSON，
-  /// 逐行转换，列类型不变）。
+  /// 逐行转换，列类型不变）→ v9（TrustedDevices 加 syncToPeer/syncFromPeer
+  /// 列，task-32 同步方向开关）→ v10（Notes 加 origin 列，task-32 最后
+  /// 修改者）→ **v11（task-32 文件夹归类：新建 Folders 表 + Notes 加
+  /// folderId 列，存量笔记默认 null=未分类）**。
   ///
   /// task-12 新增两张表：旧库（schemaVersion=1）升级时仅建新表，
   /// 不触碰笔记数据；task-16 给信任列表加「自动连接」开关列（带默认值
@@ -194,6 +238,10 @@ class AppDatabase extends _$AppDatabase {
           }
           if (from < 10) {
             await m.addColumn(notes, notes.origin);
+          }
+          if (from < 11) {
+            await m.createTable(folders);
+            await m.addColumn(notes, notes.folderId);
           }
         },
       );

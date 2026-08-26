@@ -100,9 +100,13 @@ class NoteRepository {
   Stream<NoteChangeEvent> get changes => _changes.stream;
 
   /// 新建笔记：生成 UUID、记录创建/更新时间，version 从 0 开始。
+  ///
+  /// [folderId] 传当前选中文件夹 id（task-32：选中文件夹时新建自动归入），
+  /// null = 未分类。
   Future<Note> createNote({
     required String title,
     required String content,
+    String? folderId,
   }) async {
     final now = DateTime.now().millisecondsSinceEpoch;
     final note = Note(
@@ -112,6 +116,7 @@ class NoteRepository {
       createdAt: now,
       updatedAt: now,
       origin: localDeviceId,
+      folderId: folderId,
     );
     await _dao.insertOrReplace(note);
     _changes.add(NoteUpsertedEvent(note));
@@ -155,6 +160,27 @@ class NoteRepository {
     final updated = await _dao.setTags(id, tags);
     _changes.add(NoteUpsertedEvent(updated));
     return updated;
+  }
+
+  /// 批量移动到文件夹（task-32 文件夹归类）：逐条 folderId 置值 +
+  /// version+1（幂等：已在目标文件夹的笔记跳过，不递增版本）。
+  ///
+  /// [folderId] 传 null = 移出文件夹（未分类）。每条变更经
+  /// [NoteUpsertedEvent] 推送（note_upsert 随同步）。
+  Future<void> moveNotesToFolder(List<String> ids, String? folderId) async {
+    for (final id in ids) {
+      final updated = await _dao.moveToFolder(id, folderId);
+      _changes.add(NoteUpsertedEvent(updated));
+    }
+  }
+
+  /// 批量软删除（task-32 删除文件夹「同时删除笔记」模式）：逐条进回收站
+  /// （deletedAt 置时间 + version+1，幂等）。每条经 [NoteTrashedEvent] 推送。
+  Future<void> softDeleteNotes(List<String> ids) async {
+    for (final id in ids) {
+      final trashed = await _dao.softDelete(id);
+      _changes.add(NoteTrashedEvent(trashed));
+    }
   }
 
   /// 删除笔记（物理删除 + 写墓碑）：**兼容保留，供现有 UI 调用**。
@@ -291,8 +317,9 @@ class NoteRepository {
         remote.content == local.content &&
         remote.deletedAt == local.deletedAt &&
         remote.isPinned == local.isPinned &&
+        remote.folderId == local.folderId &&
         _sameTags(remote.tags, local.tags)) {
-      // 内容与删除/置顶/标签状态均一致：仅对齐版本/时间戳（防“全量同步→
+      // 内容与删除/置顶/标签/文件夹状态均一致：仅对齐版本/时间戳（防“全量同步→
       // 版本+1→回推→再+1”膨胀）。
       final aligned = Note(
         id: remote.id,
@@ -307,6 +334,7 @@ class NoteRepository {
         isPinned: remote.isPinned,
         tags: remote.tags,
         origin: remote.origin ?? local.origin,
+        folderId: remote.folderId ?? local.folderId,
       );
       await _dao.insertOrReplace(aligned);
       return true;
@@ -322,6 +350,7 @@ class NoteRepository {
       isPinned: remote.isPinned,
       tags: remote.tags,
       origin: remote.origin ?? local.origin,
+      folderId: remote.folderId ?? local.folderId,
     );
     await _dao.insertOrReplace(merged);
     return true;

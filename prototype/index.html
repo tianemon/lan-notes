@@ -1,0 +1,1443 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>EasyNote · 文件夹归类 &amp; 多选拖拽原型</title>
+<style>
+/* ============================================================
+   设计令牌（EE 玻璃风格 · 来自 lib/app/theme.dart + glass_style.dart）
+   亮色：#F2F2F7 背景 / 卡片白85% / 强调 #4F6EF7
+   暗色：#0D1B2A 背景 / 卡片 #1B2838 / 浮层 #223344 / 强调 #5B9BD5
+   ============================================================ */
+:root{
+  --bg:#F2F2F7;
+  --card:rgba(255,255,255,0.85);
+  --floating:rgba(255,255,255,0.88);
+  --fg:#1C1C1E;
+  --muted:#6E6E73;
+  --faint:#9AA0A6;
+  --border:rgba(255,255,255,0.45);          /* 卡片细边框：白40% */
+  --float-border:rgba(0,0,0,0.10);          /* 浮层细边框 */
+  --accent:#4F6EF7;
+  --on-accent:#FFFFFF;
+  --input:#E9E9EF;
+  --hover:rgba(0,0,0,0.05);
+  --hover-strong:rgba(0,0,0,0.10);
+  --glass-fab:rgba(0,0,0,0.06);
+  --shadow:0 8px 20px rgba(0,0,0,0.06);
+  --shadow-deep:0 8px 24px rgba(0,0,0,0.12);
+  --scrim:rgba(0,0,0,0.35);
+  --toast-bg:#1C1C1E;
+  --toast-fg:#FFFFFF;
+  --green:#34C759;
+  --gray:#9AA0A6;
+  --danger:#E5484D;
+  --danger-soft:rgba(229,72,77,0.10);
+  --sel-bg:color-mix(in srgb, var(--accent) 8%, var(--card));
+  --sel-border:var(--accent);
+  --work-bg:#E7E8EF;
+  --work-fg:#3A3D4A;
+  --work-on:#FFFFFF;
+  --work-active:#22262F;
+  --device-bezel:#1B1E26;
+}
+body.dark{
+  --bg:#0D1B2A;
+  --card:#1B2838;
+  --floating:rgba(34,51,68,0.88);
+  --fg:#E0E0E0;
+  --muted:#9FB0C0;
+  --faint:#6B7B8D;
+  --border:rgba(255,255,255,0.06);          /* 卡片细边框：白6% */
+  --float-border:rgba(255,255,255,0.12);
+  --accent:#5B9BD5;
+  --on-accent:#062033;
+  --input:#1B2838;
+  --hover:rgba(255,255,255,0.06);
+  --hover-strong:rgba(255,255,255,0.12);
+  --glass-fab:rgba(255,255,255,0.10);
+  --shadow:0 8px 20px rgba(0,0,0,0.26);
+  --shadow-deep:0 8px 24px rgba(0,0,0,0.34);
+  --scrim:rgba(0,0,0,0.55);
+  --toast-bg:#2A3A4A;
+  --toast-fg:#E0E0E0;
+  --sel-bg:color-mix(in srgb, var(--accent) 14%, var(--card));
+  --work-bg:#141A26;
+  --work-fg:#8A93A6;
+  --work-on:#FFFFFF;
+  --work-active:#DDE3EC;
+  --device-bezel:#0A0E16;
+}
+
+*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{height:100%}
+body{
+  font-family:system-ui,-apple-system,"PingFang SC","HarmonyOS Sans SC","Microsoft YaHei",sans-serif;
+  background:var(--work-bg);
+  color:var(--work-fg);
+  display:flex;flex-direction:column;align-items:center;
+  transition:background .3s ease-out;
+}
+svg{fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;flex:none}
+button{font-family:inherit;border:none;background:none;color:inherit;cursor:pointer}
+button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+/* ============ 页面工具栏（画布外） ============ */
+.page-bar{
+  width:100%;max-width:1180px;padding:20px 24px 16px;
+  display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;
+}
+.page-title{display:flex;align-items:center;gap:10px;font-size:15px;font-weight:600;letter-spacing:.01em}
+.logo-dot{width:10px;height:10px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 4px color-mix(in srgb,var(--accent) 22%,transparent)}
+.page-controls{display:flex;align-items:center;gap:12px}
+.seg{display:flex;background:var(--work-fg);border-radius:12px;padding:3px;gap:2px;opacity:.9}
+.seg-btn{padding:6px 16px;border-radius:9px;font-size:13px;font-weight:500;color:var(--work-on);opacity:.55;transition:all .2s ease-out}
+.seg-btn.active{background:var(--work-on);color:var(--work-active);opacity:1;box-shadow:0 1px 4px rgba(0,0,0,.14)}
+.ghost-btn{
+  padding:7px 16px;border-radius:12px;font-size:13px;font-weight:500;
+  background:var(--work-fg);color:var(--work-on);opacity:.9;transition:all .2s ease-out;
+}
+.ghost-btn:hover{opacity:1;transform:translateY(-1px)}
+.ghost-btn:active{transform:scale(.96)}
+.hint-line{font-size:12px;color:var(--work-fg);opacity:.55;margin-bottom:6px}
+
+/* ============ 设备框架 ============ */
+.device{
+  background:var(--device-bezel);
+  border-radius:44px;
+  padding:14px;
+  box-shadow:0 30px 60px rgba(0,0,0,.28),0 6px 16px rgba(0,0,0,.14);
+  transition:all .35s ease-out;
+  margin-bottom:40px;
+}
+.screen{
+  position:relative;
+  width:375px;height:812px;
+  border-radius:32px;
+  background:var(--bg);
+  overflow:hidden;
+  display:flex;flex-direction:column;
+  transition:width .35s ease-out,height .35s ease-out,background .3s ease-out;
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.06);
+  color:var(--fg);
+}
+/* 桌面视图 */
+.device.desktop{padding:16px;border-radius:20px}
+.device.desktop .screen{width:1024px;height:700px;border-radius:16px}
+
+/* ============ 状态栏（仅手机） ============ */
+.statusbar{
+  height:44px;flex:none;display:flex;align-items:center;justify-content:space-between;
+  padding:0 26px 0 30px;font-size:14px;font-weight:600;
+}
+.sb-icons{display:flex;align-items:center;gap:6px;color:var(--fg)}
+.sb-icons svg{width:17px;height:12px}
+.device.desktop .statusbar{display:none}
+
+/* ============ 第一行：文件夹按钮 + 状态点/排列/设置 ============ */
+.topbar{
+  height:52px;flex:none;display:flex;align-items:center;gap:4px;padding:0 12px;
+  transition:opacity .22s ease-out,transform .26s ease-out;
+}
+.folder-btn{
+  display:inline-flex;align-items:center;justify-content:center;
+  width:38px;height:38px;border-radius:12px;
+  color:var(--fg);transition:background .2s ease-out,transform .18s ease-out;
+}
+.folder-btn svg{width:22px;height:22px}
+.folder-btn:hover{background:var(--hover)}
+.folder-btn:active{transform:scale(.95)}
+.folder-btn.open{color:var(--accent)}
+.tb-right{margin-left:auto;display:flex;align-items:center;gap:2px}
+.icon-btn{
+  width:34px;height:34px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;
+  color:var(--fg);transition:background .2s ease-out,transform .15s ease-out;
+}
+.icon-btn svg{width:19px;height:19px}
+.icon-btn:hover{background:var(--hover)}
+.icon-btn:active{background:var(--hover-strong);transform:scale(.92)}
+.sync-dot{width:10px;height:10px;border-radius:50%;background:var(--green);box-shadow:0 0 0 4px color-mix(in srgb,var(--green) 22%,transparent);transition:background .3s}
+
+/* ============ 多选工具栏 ============ */
+.multibar{
+  position:absolute;left:0;right:0;top:44px;height:52px;z-index:35;
+  display:flex;align-items:center;gap:6px;padding:0 12px;
+  background:var(--floating);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);
+  border-bottom:.5px solid var(--float-border);
+  transform:translateY(-120%);opacity:0;
+  transition:transform .28s cubic-bezier(.32,.72,0,1),opacity .22s ease-out;
+}
+.mb-count{font-size:15px;font-weight:600}
+.mb-spacer{flex:1}
+.mb-btn{
+  height:32px;padding:0 14px;border-radius:16px;font-size:13px;font-weight:600;color:var(--fg);
+  transition:background .2s ease-out,transform .15s ease-out;
+}
+.mb-btn:hover{background:var(--hover)}
+.mb-btn:active{transform:scale(.94)}
+.mb-btn.primary{background:var(--accent);color:var(--on-accent)}
+.mb-btn.primary:hover{filter:brightness(1.06)}
+.mb-btn.primary:active{filter:brightness(.95)}
+.screen.multi-active .topbar{transform:translateY(-110%);opacity:0;pointer-events:none}
+.screen.multi-active .multibar{transform:translateY(0);opacity:1}
+/* 多选时搜索栏/标签栏保留（仅替换顶栏）：避免列表上跳、长按卡片从指下滑走 */
+
+/* ============ 第二行：搜索框独占一行 ============ */
+.searchbar{position:relative;flex:none;padding:2px 12px 10px;transition:opacity .22s ease-out}
+.searchbar .s-icon{
+  position:absolute;left:25px;top:50%;transform:translateY(-50%);width:16px;height:16px;color:var(--faint);pointer-events:none;
+}
+.searchbar input{
+  width:100%;height:38px;border:none;outline:none;border-radius:24px;
+  background:var(--input);color:var(--fg);font-size:14px;padding:0 40px 0 38px;
+  transition:background .25s ease-out,box-shadow .25s ease-out;
+}
+.searchbar input::placeholder{color:var(--faint)}
+.searchbar input:focus{box-shadow:0 0 0 1.5px var(--accent) inset}
+.s-clear{
+  position:absolute;right:20px;top:50%;transform:translateY(-50%);
+  width:20px;height:20px;border-radius:50%;background:var(--hover);color:var(--muted);
+  display:none;align-items:center;justify-content:center;
+}
+.s-clear svg{width:11px;height:11px}
+.s-clear.show{display:flex}
+.s-clear:active{transform:translateY(-50%) scale(.9)}
+
+/* ============ 笔记列表 ============ */
+.list{flex:1;overflow-y:auto;overflow-x:hidden;position:relative;scroll-behavior:smooth}
+.notes-wrap{padding:2px 12px 100px}
+.device.desktop .list{padding:4px 24px 40px}
+.device.desktop .notes-wrap{max-width:760px;margin:0 auto;padding-bottom:60px}
+
+/* 双列排列 */
+.list.grid-2 .notes-wrap{display:grid;grid-template-columns:1fr 1fr;gap:0 12px}
+.list.grid-2 .note-card{margin-bottom:12px}
+.list.grid-2 .nc-excerpt{-webkit-line-clamp:1}
+
+/* 顶部虚线拖放目标：+ 新建文件夹 */
+.newfolder-drop{
+  height:44px;margin-bottom:12px;border:2px dashed var(--faint);border-radius:12px;
+  display:none;align-items:center;justify-content:center;gap:7px;
+  color:var(--faint);font-size:13px;font-weight:500;
+  transition:all .2s ease-out;
+}
+.newfolder-drop svg{width:15px;height:15px}
+.newfolder-drop.show{display:flex}
+.newfolder-drop.drop-hover{border-color:var(--accent);color:var(--accent);background:color-mix(in srgb,var(--accent) 8%,transparent)}
+
+/* 笔记卡片（三段式：标题+摘要+时间） */
+.note-card{
+  position:relative;
+  background:var(--card);
+  border:.5px solid var(--border);
+  border-radius:16px;
+  box-shadow:var(--shadow);
+  padding:14px 16px;
+  margin-bottom:12px;
+  cursor:pointer;
+  user-select:none;-webkit-user-select:none;
+  touch-action:pan-y;
+  transition:transform .18s ease-out,box-shadow .2s ease-out,opacity .25s ease-out,border-color .2s ease-out,background .2s ease-out;
+}
+.device.desktop .note-card:hover{transform:scale(1.012);box-shadow:0 10px 24px rgba(0,0,0,.09)}
+.note-card:active{transform:scale(.985)}
+.nc-title{display:flex;align-items:center;gap:6px;font-size:16px;font-weight:700;color:var(--fg);line-height:1.35}
+.nc-title-text{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.nc-pin{display:inline-flex;color:var(--accent);margin-left:auto}
+.nc-pin svg{width:13px;height:13px;fill:currentColor;stroke:none}
+.nc-excerpt{
+  margin-top:4px;font-size:13px;line-height:1.45;color:var(--muted);
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;
+}
+.nc-time{display:block;margin-top:8px;font-size:11px;color:var(--faint)}
+
+/* 多选：左上角圆形多选框 */
+.check{
+  position:absolute;top:10px;left:10px;width:20px;height:20px;border-radius:50%;
+  border:2px solid var(--muted);background:var(--bg);
+  display:flex;align-items:center;justify-content:center;
+  opacity:0;transform:scale(.5);pointer-events:none;
+  transition:opacity .2s ease-out,transform .24s cubic-bezier(.32,.72,0,1),background .2s ease-out,border-color .2s ease-out;
+  z-index:2;
+}
+.check svg{width:11px;height:11px;color:#fff;opacity:0;transition:opacity .15s ease-out;stroke-width:3}
+.list.multi .check{opacity:1;transform:scale(1)}
+.note-card.selected{
+  border-color:var(--sel-border);
+  background:var(--sel-bg);
+  box-shadow:var(--shadow),0 0 0 1px var(--accent);
+}
+.note-card.selected .check{background:var(--accent);border-color:var(--accent)}
+.note-card.selected .check svg{opacity:1}
+.list.multi .note-card{padding-left:40px}
+.list.multi .note-card:active{transform:scale(.99)}
+.list.multi .note-card.selected:active{transform:scale(.99)}
+
+/* 拖拽源卡片半透明 */
+.note-card.drag-source{opacity:.32;transform:scale(.98)}
+
+/* 左侧虚线拖放区 */
+.left-zone{
+  position:absolute;left:0;top:0;bottom:0;width:60px;z-index:20;
+  border-right:2.5px dashed var(--accent);
+  background:color-mix(in srgb,var(--accent) 8%,transparent);
+  display:flex;align-items:center;justify-content:center;
+  opacity:0;pointer-events:none;transition:opacity .2s ease-out;
+}
+.left-zone span{
+  writing-mode:vertical-rl;font-size:11px;color:var(--accent);letter-spacing:.14em;
+  display:flex;align-items:center;gap:6px;
+}
+.left-zone span svg{width:13px;height:13px}
+.device.desktop .left-zone{width:150px}
+.left-zone.show{opacity:1}
+
+/* ============ 拖拽 ghost（层叠卡片） ============ */
+.ghost{
+  position:fixed;pointer-events:none;border-radius:16px;opacity:.97;
+  box-shadow:0 16px 40px rgba(0,0,0,.24),0 0 0 1px var(--accent);
+  background:var(--card);border:.5px solid var(--border);
+  padding:14px 16px 14px 40px;z-index:50;
+  will-change:left,top;
+}
+.ghost .check{opacity:1;transform:scale(1);background:var(--accent);border-color:var(--accent)}
+.ghost .check svg{opacity:1}
+.ghost-main{transform:scale(1.045);z-index:52}
+.ghost-stack{opacity:.88;z-index:51}
+.ghost .nc-excerpt{-webkit-line-clamp:2}
+.ghost .drag-none{display:none}
+
+/* ============ 文件夹抽屉 ============ */
+.drawer-backdrop{
+  position:absolute;inset:0;background:var(--scrim);z-index:38;
+  opacity:0;pointer-events:none;transition:opacity .26s ease-out;
+}
+.drawer-backdrop.show{opacity:1;pointer-events:auto}
+.drawer-backdrop.drag-mode{pointer-events:none}
+.drawer{
+  position:absolute;left:0;top:0;bottom:0;width:200px;z-index:40;
+  background:var(--floating);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);
+  border-right:.5px solid var(--float-border);
+  transform:translateX(-104%);
+  transition:transform .28s cubic-bezier(.32,.72,0,1);
+  display:flex;flex-direction:column;
+}
+.drawer.open{transform:translateX(0)}
+.drawer-head{
+  padding:20px 18px 12px;font-size:17px;font-weight:700;display:flex;align-items:center;gap:8px;
+}
+.drawer-head svg{width:18px;height:18px;color:var(--accent)}
+.drawer-scroll{flex:1;overflow-y:auto;padding:0 10px 24px;scrollbar-width:none}
+.drawer-scroll::-webkit-scrollbar{display:none}
+.folder-item{
+  display:flex;align-items:center;gap:11px;padding:11px 12px;border-radius:12px;
+  cursor:pointer;font-size:14px;color:var(--fg);user-select:none;
+  transition:background .18s ease-out,transform .15s ease-out;
+}
+.folder-item svg{width:17px;height:17px;color:var(--muted)}
+.folder-item .fi-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.folder-item .fi-count{margin-left:auto;font-size:12px;color:var(--faint);flex:none}
+.folder-item .fi-pin{display:inline-flex;color:var(--accent);margin-left:4px;flex:none}
+.folder-item .fi-pin svg{width:12px;height:12px;fill:currentColor;stroke:none}
+.folder-item:hover{background:var(--hover)}
+.folder-item:active{transform:scale(.98)}
+.folder-item.active{background:color-mix(in srgb,var(--accent) 12%,transparent);color:var(--accent)}
+.folder-item.active svg{color:var(--accent)}
+.folder-item.active .fi-count{color:var(--accent)}
+.folder-item.drop-hover{
+  background:color-mix(in srgb,var(--accent) 16%,transparent);
+  outline:2px dashed var(--accent);outline-offset:-2px;
+  color:var(--accent);
+}
+.folder-item.drop-hover svg{color:var(--accent)}
+.folder-item.always{cursor:default}
+.folder-item.always:hover{background:transparent}
+.sec-label{
+  padding:14px 12px 6px;font-size:11px;font-weight:600;letter-spacing:.06em;color:var(--faint);
+  text-transform:uppercase;
+}
+
+/* ============ FAB 扇形菜单 ============ */
+.fab-wrap{
+  position:absolute;right:16px;bottom:22px;z-index:22;
+  width:56px;height:56px;
+  transition:opacity .25s ease-out,transform .25s ease-out;
+}
+.fab{
+  position:absolute;right:0;bottom:0;width:56px;height:56px;border-radius:50%;
+  background:var(--glass-fab);backdrop-filter:blur(15px);-webkit-backdrop-filter:blur(15px);
+  border:.5px solid var(--float-border);
+  box-shadow:var(--shadow-deep);
+  display:flex;align-items:center;justify-content:center;color:var(--fg);
+  transition:transform .2s cubic-bezier(.32,.72,0,1),background .2s ease-out;
+  z-index:2;
+}
+.fab svg{width:26px;height:26px}
+.fab:hover{background:var(--hover-strong)}
+.fab:active{transform:scale(.92)}
+.fab-wrap.open .fab{transform:rotate(45deg)}
+.fab-option{
+  position:absolute;right:0;bottom:0;width:56px;height:56px;border-radius:50%;
+  background:var(--glass-fab);backdrop-filter:blur(15px);-webkit-backdrop-filter:blur(15px);
+  border:.5px solid var(--float-border);box-shadow:var(--shadow);
+  display:flex;align-items:center;justify-content:center;color:var(--fg);
+  opacity:0;pointer-events:none;
+  transition:transform .28s cubic-bezier(.32,.72,0,1),opacity .18s ease-out,background .2s ease-out;
+}
+.fab-option svg{width:24px;height:24px}
+.fab-option:hover{background:var(--hover-strong)}
+.fab-option:active{transform:scale(.9)}
+.fab-wrap.open .fab-option{opacity:1;pointer-events:auto}
+.fab-wrap.open .fo-a{transform:translate(-4px,-66px)}
+.fab-wrap.open .fo-b{transform:translate(-66px,-4px)}
+.screen.multi-active .fab-wrap{opacity:0;transform:scale(.7);pointer-events:none}
+
+/* ============ 底部玻璃菜单面板 ============ */
+.bottom-sheet{
+  position:absolute;left:12px;right:12px;bottom:12px;z-index:45;
+  background:var(--floating);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);
+  border:.5px solid var(--float-border);border-radius:20px;box-shadow:var(--shadow-deep);
+  padding:8px;
+  transform:translateY(130%);opacity:0;
+  transition:transform .28s cubic-bezier(.32,.72,0,1),opacity .2s ease-out;
+}
+.bottom-sheet.open{transform:translateY(0);opacity:1}
+.sheet-item{
+  display:flex;align-items:center;gap:12px;padding:13px 14px;border-radius:12px;
+  font-size:14.5px;font-weight:500;color:var(--fg);cursor:pointer;
+  transition:background .18s ease-out,transform .14s ease-out;
+}
+.sheet-item svg{width:18px;height:18px;color:var(--muted)}
+.sheet-item:hover{background:var(--hover)}
+.sheet-item:active{transform:scale(.98)}
+.sheet-item.danger{color:var(--danger)}
+.sheet-item.danger svg{color:var(--danger)}
+
+/* ============ 弹窗层（液态玻璃） ============ */
+.modal-layer{
+  position:absolute;inset:0;z-index:60;
+  background:var(--scrim);backdrop-filter:blur(2px);-webkit-backdrop-filter:blur(2px);
+  display:flex;align-items:center;justify-content:center;
+  opacity:0;pointer-events:none;transition:opacity .22s ease-out;
+}
+.modal-layer.open{opacity:1;pointer-events:auto}
+.modal-card{
+  width:300px;max-height:520px;overflow-y:auto;scrollbar-width:none;
+  background:var(--floating);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);
+  border:.5px solid var(--float-border);border-radius:20px;box-shadow:var(--shadow-deep);
+  padding:20px 20px 14px;
+  transform:scale(.9) translateY(10px);
+  transition:transform .24s cubic-bezier(.32,.72,0,1);
+}
+.modal-layer.open .modal-card{transform:scale(1) translateY(0)}
+.modal-card h3{font-size:17px;font-weight:700;margin-bottom:8px}
+.modal-card .mc-desc{font-size:13.5px;color:var(--muted);line-height:1.55;margin-bottom:14px}
+.modal-input{
+  width:100%;height:42px;border:none;outline:none;border-radius:12px;
+  background:var(--input);color:var(--fg);font-size:14.5px;padding:0 14px;margin:6px 0 16px;
+  border:1px solid transparent;transition:box-shadow .2s ease-out;
+}
+.modal-input:focus{box-shadow:0 0 0 1.5px var(--accent)}
+.mc-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:4px}
+.mc-btn{
+  height:36px;padding:0 18px;border-radius:12px;font-size:13.5px;font-weight:600;
+  color:var(--fg);transition:background .2s ease-out,transform .15s ease-out,filter .2s;
+}
+.mc-btn:hover{background:var(--hover)}
+.mc-btn:active{transform:scale(.95)}
+.mc-btn.primary{background:var(--accent);color:var(--on-accent)}
+.mc-btn.primary:hover{filter:brightness(1.07)}
+.mc-btn.danger{background:var(--danger);color:#fff}
+.mc-btn.danger:hover{filter:brightness(1.08)}
+.mc-list{margin:2px -6px 6px}
+.mc-list-item{
+  display:flex;align-items:center;gap:11px;padding:11px 10px;border-radius:11px;
+  font-size:14px;color:var(--fg);cursor:pointer;transition:background .18s ease-out;
+}
+.mc-list-item svg{width:17px;height:17px;color:var(--muted)}
+.mc-list-item .ml-count{margin-left:auto;font-size:12px;color:var(--faint)}
+.mc-list-item:hover{background:var(--hover)}
+.mc-list-item:active{transform:scale(.99)}
+.mc-list-item.danger{color:var(--danger)}
+.mc-list-item.danger svg{color:var(--danger)}
+.mc-sep{height:.5px;background:var(--float-border);margin:6px 10px}
+
+/* ============ 桌面右键浮动菜单 ============ */
+.float-menu{
+  position:absolute;z-index:65;min-width:148px;
+  background:var(--floating);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);
+  border:.5px solid var(--float-border);border-radius:12px;box-shadow:var(--shadow-deep);
+  padding:6px;opacity:0;pointer-events:none;transform:scale(.95) translateY(-4px);
+  transition:opacity .16s ease-out,transform .18s ease-out;
+}
+.float-menu.open{opacity:1;pointer-events:auto;transform:scale(1) translateY(0)}
+.fm-item{
+  display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:8px;
+  font-size:13px;font-weight:500;color:var(--fg);cursor:pointer;white-space:nowrap;
+  transition:background .15s ease-out;
+}
+.fm-item svg{width:15px;height:15px;color:var(--muted)}
+.fm-item:hover{background:var(--hover)}
+.fm-item:active{transform:scale(.98)}
+.fm-item.danger{color:var(--danger)}
+.fm-item.danger svg{color:var(--danger)}
+
+/* ============ Toast ============ */
+.toast{
+  position:absolute;left:50%;bottom:96px;transform:translate(-50%,16px);z-index:70;
+  background:var(--toast-bg);color:var(--toast-fg);
+  padding:10px 18px;border-radius:12px;font-size:13px;font-weight:500;
+  box-shadow:var(--shadow-deep);white-space:nowrap;max-width:88%;
+  opacity:0;pointer-events:none;
+  transition:opacity .22s ease-out,transform .24s cubic-bezier(.32,.72,0,1);
+}
+.toast.show{opacity:1;transform:translate(-50%,0)}
+
+/* ============ 通用动画 ============ */
+@keyframes cardIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+.note-card.enter{animation:cardIn .3s cubic-bezier(.32,.72,0,1)}
+@keyframes liftUp{0%{transform:scale(1)}35%{transform:scale(1.045)}100%{transform:scale(1.03)}}
+.note-card.lifting{animation:liftUp .3s cubic-bezier(.32,.72,0,1) forwards;box-shadow:0 18px 44px rgba(0,0,0,.2),0 0 0 1px var(--accent)}
+
+/* ============ 移动端窄屏适配 ============ */
+@media (max-width:430px){
+  .device{padding:10px;border-radius:36px}
+  .screen{border-radius:26px}
+  .page-bar{padding:14px 16px 10px}
+}
+</style>
+</head>
+<body>
+
+<div class="page-bar">
+  <div class="page-title"><span class="logo-dot"></span>EasyNote · 文件夹归类 &amp; 多选拖拽</div>
+  <div class="page-controls">
+    <div class="seg">
+      <button class="seg-btn active" data-view="phone" id="viewPhone">手机</button>
+      <button class="seg-btn" data-view="desktop" id="viewDesktop">桌面</button>
+    </div>
+    <button class="ghost-btn" id="themeBtn">切换暗色</button>
+  </div>
+</div>
+<div class="hint-line">手机：长按卡片 300ms 进多选 → 拖动层叠卡片到左侧抽屉 / 顶部虚线创建文件夹 · 桌面：右键笔记卡片弹悬浮菜单</div>
+
+<div class="device" id="device">
+  <div class="screen" id="screen">
+
+    <!-- 状态栏 -->
+    <div class="statusbar">
+      <span>9:41</span>
+      <span class="sb-icons">
+        <svg viewBox="0 0 18 12"><path d="M1 10h2.5M5 7h2.5M9 4h2.5M13 1h2.5"/></svg>
+        <svg viewBox="0 0 18 12"><path d="M2 5.5a10 10 0 0 1 14 0M4.5 8a6.5 6.5 0 0 1 9 0M7 10.5a3 3 0 0 1 4 0"/></svg>
+        <svg viewBox="0 0 26 12"><rect x="1" y="2" width="20" height="8" rx="2.5"/><path d="M23 4.5v3a2 2 0 0 0 0-3z" fill="currentColor" stroke="none"/></svg>
+      </span>
+    </div>
+
+    <!-- 第一行：文件夹按钮 + 同步状态点 + 排列 + 设置 -->
+    <header class="topbar" id="topbar">
+      <button class="folder-btn" id="folderBtn" title="文件夹">
+        <svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2.2 2.2H19a2 2 0 0 1 2 2V17a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></svg>
+      </button>
+      <div class="tb-right">
+        <button class="icon-btn" id="syncBtn" title="同步状态">
+          <span class="sync-dot"></span>
+        </button>
+        <button class="icon-btn" id="layoutBtn" title="切换排列">
+          <svg viewBox="0 0 24 24" id="layoutIcon"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M4 10h16M10 4v16"/></svg>
+        </button>
+        <button class="icon-btn" id="settingsBtn" title="设置">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <!-- 多选工具栏 -->
+    <div class="multibar" id="multibar">
+      <span class="mb-count" id="mbCount">已选 0 项</span>
+      <span class="mb-spacer"></span>
+      <button class="mb-btn" id="selectAllBtn">全选</button>
+      <button class="mb-btn primary" id="doneBtn">完成</button>
+    </div>
+
+    <!-- 第二行：搜索框独占一行 -->
+    <div class="searchbar">
+      <svg class="s-icon" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+      <input id="searchInput" placeholder="搜索笔记" autocomplete="off">
+      <button class="s-clear" id="searchClear"><svg viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+    </div>
+
+    <!-- 笔记列表 -->
+    <main class="list" id="list">
+      <div class="notes-wrap">
+        <div class="newfolder-drop" id="newFolderDrop">
+          <svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2.2 2.2H19a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/><path d="M12 12v6M9 15h6"/></svg>
+          + 新建文件夹
+        </div>
+        <div id="notesContainer"></div>
+      </div>
+    </main>
+
+    <!-- 左侧虚线拖放区 -->
+    <div class="left-zone" id="leftZone">
+      <span><svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2.2 2.2H19a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></svg>拖到此处 · 文件夹</span>
+    </div>
+
+    <!-- FAB 扇形菜单 -->
+    <div class="fab-wrap" id="fabWrap">
+      <button class="fab-option fo-a" data-kind="folder" title="新建文件夹">
+        <svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2.2 2.2H19a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/><path d="M12 12v6M9 15h6"/></svg>
+      </button>
+      <button class="fab-option fo-b" data-kind="note" title="新建笔记">
+        <svg viewBox="0 0 24 24"><path d="M5 3h14a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>
+      </button>
+      <button class="fab" id="fabBtn"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
+    </div>
+
+    <!-- 文件夹抽屉 -->
+    <div class="drawer-backdrop" id="drawerBackdrop"></div>
+    <aside class="drawer" id="drawer">
+      <div class="drawer-head"><svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2.2 2.2H19a2 2 0 0 1 2 2V17a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></svg>文件夹</div>
+      <div class="drawer-scroll" id="drawerScroll"></div>
+    </aside>
+
+    <!-- 底部玻璃菜单 -->
+    <div class="bottom-sheet" id="bottomSheet"></div>
+
+    <!-- 桌面右键悬浮菜单 -->
+    <div class="float-menu" id="floatMenu"></div>
+
+    <!-- 弹窗层 -->
+    <div class="modal-layer" id="modalLayer"></div>
+
+    <!-- Toast -->
+    <div class="toast" id="toast"></div>
+
+  </div>
+</div>
+
+<script>
+/* ============================================================
+   EasyNote 原型 · 数据
+   ============================================================ */
+let folders = [
+  { id:'work', name:'工作',   pinned:true  },
+  { id:'life', name:'生活',   pinned:false },
+  { id:'idea', name:'灵感',   pinned:false },
+  { id:'todo', name:'待整理', pinned:false },
+];
+let notes = [
+  { id:'n1',  title:'周会纪要：Q3 同步方案', excerpt:'LWW 合并规则与删除防乱序已确认；mDNS 设备发现偶发超时，下轮重点跟进。', time:'2 分钟前',  pinned:true,  folder:'work' },
+  { id:'n2',  title:'产品需求：文件夹归类交互', excerpt:'长按卡片进多选、层叠拖拽、左侧抽屉收纳……交互规格已评审，进入原型验证阶段。', time:'18 分钟前', pinned:true,  folder:'work' },
+  { id:'n3',  title:'季度 OKR 复盘', excerpt:'同步稳定性达成，离线合并达成，跨端体验进行中——重点补 Windows 托盘与开机自启。', time:'1 小时前',  pinned:false, folder:'work' },
+  { id:'n4',  title:'地铁上的灵感：卡片层叠动效', excerpt:'安卓桌面移动图标那套对角线阶梯偏移，第一张在上、后续依次错开，拿起来很有触感。', time:'昨天',     pinned:false, folder:'idea' },
+  { id:'n5',  title:'读《设计中的设计》摘录', excerpt:'「设计不是制造新奇，而是让人重新认识日常。」无印良品伞柄凹槽那段值得反复读。', time:'2 天前',   pinned:false, folder:'idea' },
+  { id:'n6',  title:'番茄牛腩做法', excerpt:'牛腩焯水 → 炒糖色 → 加番茄块慢炖 40 分钟 → 最后放整颗番茄提鲜。高压锅 20 分钟版。', time:'3 天前',   pinned:false, folder:'life' },
+  { id:'n7',  title:'周末行程：西山徒步', excerpt:'周六 7:30 出发，带三明治和热水；回程顺路去国贸那家书店，晚上吃火锅。', time:'4 天前',   pinned:false, folder:'life' },
+  { id:'n8',  title:'报销发票清单', excerpt:'6 月差旅：高铁 2 张、住宿 3 晚、打车若干。下周前交给财务，别忘了电子发票。', time:'5 天前',   pinned:false, folder:'todo' },
+  { id:'n9',  title:'备份 NAS 照片', excerpt:'整理 2023 全家福到新硬盘，按月份建目录，视频单独放，留一份异地备份。', time:'1 周前',   pinned:false, folder:'todo' },
+  { id:'n10', title:'', excerpt:'随手记：把上周那个想法展开写一写，周末有空。', time:'2 周前', pinned:false, folder:null },
+];
+
+/* ============================================================
+   SVG 图标集（线条风格）
+   ============================================================ */
+const I = {
+  folder:'<svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2.2 2.2H19a2 2 0 0 1 2 2V17a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></svg>',
+  folderPlus:'<svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2.2 2.2H19a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/><path d="M12 12v6M9 15h6"/></svg>',
+  folderDown:'<svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2.2 2.2H19a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/><path d="m9 14 3 3 3-3"/><path d="M12 10v7"/></svg>',
+  search:'<svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>',
+  grid1:'<svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M4 10h16M10 4v16"/></svg>',
+  grid2:'<svg viewBox="0 0 24 24"><rect x="4" y="4" width="7.2" height="16" rx="2"/><rect x="12.8" y="4" width="7.2" height="16" rx="2"/></svg>',
+  pin:'<svg viewBox="0 0 24 24"><path d="M12 17v5"/><path d="M8 4h8l-1.2 6.5 3.2 2.5H6l3.2-2.5L8 4z"/></svg>',
+  pinSolid:'<svg viewBox="0 0 24 24"><path d="M12 17v5M8 4h8l-1.2 6.5 3.2 2.5H6l3.2-2.5L8 4z"/></svg>',
+  plus:'<svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>',
+  check:'<svg viewBox="0 0 24 24"><path d="m20 6-11 11-5-5"/></svg>',
+  trash:'<svg viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="m19 6-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/></svg>',
+  pencil:'<svg viewBox="0 0 24 24"><path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg>',
+  move:'<svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2.2 2.2H19a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/><path d="m9 14 3 3 3-3"/><path d="M12 11v6"/></svg>',
+  close:'<svg viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg>',
+  note:'<svg viewBox="0 0 24 24"><path d="M5 3h14a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>',
+};
+
+/* ============================================================
+   DOM 引用 & 状态
+   ============================================================ */
+const $ = id => document.getElementById(id);
+const screenEl = $('screen'), deviceEl = $('device'), listEl = $('list');
+const notesC = $('notesContainer'), drawerScroll = $('drawerScroll');
+const bottomSheet = $('bottomSheet'), modalLayer = $('modalLayer');
+const floatMenu = $('floatMenu'), toastEl = $('toast');
+const multibar = $('multibar'), mbCount = $('mbCount'), selectAllBtn = $('selectAllBtn');
+const drawer = $('drawer'), drawerBackdrop = $('drawerBackdrop');
+const fabWrap = $('fabWrap'), leftZone = $('leftZone'), newFolderDrop = $('newFolderDrop');
+const searchInput = $('searchInput'), searchClear = $('searchClear');
+
+const state = {
+  view:'phone', dark:false,
+  activeFolder:'all',
+  drawerOpen:false, drawerByDrag:false,
+  fabOpen:false,
+  multi:false, selected:new Set(),
+  dragging:false, drag:null,
+  press:null, fp:null,
+  search:'', layout:1,
+  toastTimer:null,
+  menuOpen:false,   // 右键悬浮菜单
+};
+
+/* ============================================================
+   工具
+   ============================================================ */
+const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+const folderCount = fid => notes.filter(n => n.folder === fid).length;
+const folderName = fid => fid === 'all' ? '全部' : (folders.find(f=>f.id===fid)||{}).name || fid;
+const cardEl = id => document.querySelector(`.note-card[data-id="${id}"]`);
+const screenRect = () => screenEl.getBoundingClientRect();
+const zoneWidth = () => state.view === 'desktop' ? 150 : 60;
+
+function toast(msg){
+  toastEl.textContent = msg;
+  toastEl.classList.add('show');
+  clearTimeout(state.toastTimer);
+  state.toastTimer = setTimeout(()=>toastEl.classList.remove('show'), 2200);
+}
+
+/* ============================================================
+   渲染：笔记列表
+   ============================================================ */
+function getVisibleNotes(){
+  let list = notes.slice();
+  if (state.activeFolder !== 'all') list = list.filter(n => n.folder === state.activeFolder);
+  if (state.search){
+    const q = state.search.toLowerCase();
+    list = list.filter(n => (n.title + ' ' + n.excerpt).toLowerCase().includes(q));
+  }
+  return list;
+}
+function cardHTML(n){
+  const title = n.title.trim() || '无标题';
+  return `<article class="note-card${n.pinned ? ' pinned' : ''}${state.multi && state.selected.has(n.id) ? ' selected' : ''}" data-id="${n.id}">
+    <span class="check">${I.check}</span>
+    <h3 class="nc-title"><span class="nc-title-text">${esc(title)}</span>${n.pinned ? '<span class="nc-pin">'+I.pinSolid+'</span>' : ''}</h3>
+    ${n.excerpt ? `<p class="nc-excerpt">${esc(n.excerpt)}</p>` : ''}
+    <span class="nc-time">${esc(n.time)}</span>
+  </article>`;
+}
+function renderList(animateId){
+  const visible = getVisibleNotes();
+  notesC.innerHTML = visible.map(cardHTML).join('');
+  if (animateId){
+    const el = cardEl(animateId);
+    if (el) el.classList.add('enter');
+  }
+  updateMultiUI(true);
+}
+function toggleLayout(){
+  state.layout = state.layout === 1 ? 2 : 1;
+  // 只替换 svg 内部内容（保留外层 <svg> 标签与公共描边属性）
+  const inner = state.layout === 1
+    ? '<rect x="4" y="4" width="16" height="16" rx="3"/><path d="M4 10h16M10 4v16"/>'
+    : '<rect x="4" y="4" width="7.2" height="16" rx="2"/><rect x="12.8" y="4" width="7.2" height="16" rx="2"/>';
+  $('layoutIcon').innerHTML = inner;
+  listEl.classList.toggle('grid-2', state.layout === 2);
+  toast(state.layout === 1 ? '已切换为单列排列' : '已切换为双列排列');
+}
+
+/* ============================================================
+   渲染：文件夹抽屉
+   ============================================================ */
+function renderDrawer(){
+  const pinned = folders.filter(f => f.pinned);
+  const normal = folders.filter(f => !f.pinned);
+  let html = folderItemHTML('all','全部',notes.length,true);
+  if (pinned.length){
+    html += '<div class="sec-label">置顶</div>';
+    html += pinned.map(f => folderItemHTML(f.id, f.name, folderCount(f.id), false, true)).join('');
+  }
+  html += '<div class="sec-label">文件夹</div>';
+  html += normal.map(f => folderItemHTML(f.id, f.name, folderCount(f.id), false)).join('');
+  drawerScroll.innerHTML = html;
+}
+function folderItemHTML(id, name, count, isAll, isPinned){
+  const active = state.activeFolder === id;
+  return `<div class="folder-item${isAll ? ' always' : ''}${active ? ' active' : ''}" data-id="${id}">
+    ${I.folder}<span class="fi-name">${esc(name)}</span>
+    ${isPinned ? '<span class="fi-pin">'+I.pinSolid+'</span>' : ''}
+    <span class="fi-count">${count}</span>
+  </div>`;
+}
+
+/* ============================================================
+   文件夹抽屉：打开 / 关闭 / 选中
+   ============================================================ */
+function openDrawer(byDrag){
+  state.drawerOpen = true;
+  if (byDrag) state.drawerByDrag = true;
+  drawer.classList.add('open');
+  if (!byDrag){ drawerBackdrop.classList.add('show'); drawerBackdrop.classList.remove('drag-mode'); }
+  else { drawerBackdrop.classList.add('drag-mode'); drawerBackdrop.classList.remove('show'); }
+  $('folderBtn').classList.add('open');
+}
+function closeDrawer(){
+  state.drawerOpen = false; state.drawerByDrag = false;
+  drawer.classList.remove('open');
+  drawerBackdrop.classList.remove('show','drag-mode');
+  $('folderBtn').classList.remove('open');
+}
+function selectFolder(id){
+  state.activeFolder = id;
+  if (state.multi) exitMultiSelect();
+  renderList();
+  renderDrawer();
+  closeDrawer();
+}
+drawerBackdrop.addEventListener('pointerdown', () => closeDrawer());
+$('folderBtn').addEventListener('click', () => state.drawerOpen ? closeDrawer() : openDrawer(false));
+
+/* 抽屉内：点击选中 / 长按弹菜单 */
+drawerScroll.addEventListener('pointerdown', e => {
+  const item = e.target.closest('.folder-item');
+  if (!item || state.dragging) return;
+  const id = item.dataset.id;
+  state.fp = { id, x:e.clientX, y:e.clientY, moved:false, long:false, timer:null, isAll:id==='all' };
+  if (!state.fp.isAll){
+    state.fp.timer = setTimeout(() => {
+      if (!state.fp) return;
+      state.fp.long = true;
+      openFolderMenu(id);
+    }, 300);
+  }
+});
+document.addEventListener('pointermove', e => {
+  const fp = state.fp;
+  if (fp){
+    if (Math.hypot(e.clientX - fp.x, e.clientY - fp.y) > 10){
+      fp.moved = true;
+      clearTimeout(fp.timer);
+    }
+  }
+});
+document.addEventListener('pointerup', () => {
+  const fp = state.fp;
+  if (fp){
+    clearTimeout(fp.timer);
+    if (!fp.long && !fp.moved) selectFolder(fp.id);
+    state.fp = null;
+  }
+});
+
+/* ============================================================
+   文件夹菜单（长按/右键）：重命名 / 置顶 / 删除
+   ============================================================ */
+function openFolderMenu(fid){
+  const f = folders.find(x => x.id === fid);
+  if (!f) return;
+  openModal(`
+    <h3>${esc(f.name)}</h3>
+    <div class="mc-list">
+      <div class="mc-list-item" data-act="rename">${I.pencil}重命名</div>
+      <div class="mc-list-item" data-act="pin">${I.pin}${f.pinned ? '取消置顶' : '置顶'}</div>
+      <div class="mc-list-item danger" data-act="delete">${I.trash}删除文件夹</div>
+    </div>
+    <div class="mc-actions"><button class="mc-btn" data-close>取消</button></div>
+  `);
+  bindModal(e => {
+    const act = e.target.closest('[data-act]');
+    if (!act) return;
+    closeModal();
+    const a = act.dataset.act;
+    if (a === 'rename') openRenameDialog(fid);
+    if (a === 'pin'){ f.pinned = !f.pinned; renderDrawer(); toast(f.pinned ? `已将「${f.name}」置顶` : `已取消「${f.name}」置顶`); }
+    if (a === 'delete') openDeleteFolderDialog(fid);
+  });
+}
+function openRenameDialog(fid){
+  const f = folders.find(x => x.id === fid);
+  if (!f) return;
+  openModal(`
+    <h3>重命名文件夹</h3>
+    <input class="modal-input" id="renameInput" value="${esc(f.name)}" maxlength="20">
+    <div class="mc-actions">
+      <button class="mc-btn" data-close>取消</button>
+      <button class="mc-btn primary" id="renameOk">确定</button>
+    </div>
+  `);
+  const inp = $('renameInput');
+  inp.focus(); inp.select();
+  const commit = () => {
+    const v = inp.value.trim() || '未命名';
+    f.name = v;
+    renderDrawer();
+    closeModal();
+    toast(`已重命名为「${v}」`);
+  };
+  inp.addEventListener('keydown', e => { if (e.key === 'Enter') commit(); });
+  $('renameOk').addEventListener('click', commit);
+  bindModalClose();
+}
+function openDeleteFolderDialog(fid){
+  const f = folders.find(x => x.id === fid);
+  if (!f) return;
+  const cnt = folderCount(fid);
+  openModal(`
+    <h3>删除文件夹「${esc(f.name)}」</h3>
+    <p class="mc-desc">文件夹内有 ${cnt} 条笔记，如何处理？</p>
+    <div class="mc-list">
+      <div class="mc-list-item danger" data-mode="delete">${I.trash}同时删除笔记</div>
+      <div class="mc-list-item" data-mode="move">${I.move}笔记移到全部（未分类）</div>
+    </div>
+    <div class="mc-actions"><button class="mc-btn" data-close>取消</button></div>
+  `);
+  bindModal(e => {
+    const it = e.target.closest('[data-mode]');
+    if (!it) return;
+    closeModal();
+    if (it.dataset.mode === 'delete'){
+      notes = notes.filter(n => n.folder !== fid);
+      toast(`已删除文件夹「${f.name}」及其 ${cnt} 条笔记`);
+    } else {
+      notes.forEach(n => { if (n.folder === fid) n.folder = null; });
+      toast(`已删除文件夹「${f.name}」，笔记移到全部`);
+    }
+    folders = folders.filter(x => x.id !== fid);
+    if (state.activeFolder === fid) state.activeFolder = 'all';
+    renderAll();
+  });
+}
+
+/* ============================================================
+   弹窗工具
+   ============================================================ */
+function openModal(html){
+  modalLayer.innerHTML = `<div class="modal-card">${html}</div>`;
+  modalLayer.classList.add('open');
+}
+function closeModal(){
+  modalLayer.classList.remove('open');
+  setTimeout(() => { if (!modalLayer.classList.contains('open')) modalLayer.innerHTML = ''; }, 260);
+}
+function bindModal(handler){
+  modalLayer.querySelector('.modal-card').addEventListener('click', handler);
+  bindModalClose();
+}
+function bindModalClose(){
+  modalLayer.querySelectorAll('[data-close]').forEach(b => b.addEventListener('click', closeModal));
+}
+modalLayer.addEventListener('pointerdown', e => { if (e.target === modalLayer) closeModal(); });
+
+/* ============================================================
+   FAB 扇形菜单
+   ============================================================ */
+function toggleFab(force){
+  state.fabOpen = force !== undefined ? force : !state.fabOpen;
+  fabWrap.classList.toggle('open', state.fabOpen);
+}
+$('fabBtn').addEventListener('click', e => { e.stopPropagation(); toggleFab(); });
+fabWrap.addEventListener('click', e => {
+  const opt = e.target.closest('.fab-option');
+  if (!opt) return;
+  toggleFab(false);
+  if (opt.dataset.kind === 'folder') openCreateFolderDialog();
+  else createNote();
+});
+function openCreateFolderDialog(){
+  openModal(`
+    <h3>新建文件夹</h3>
+    <input class="modal-input" id="folderNameInput" placeholder="文件夹名称" maxlength="20">
+    <div class="mc-actions">
+      <button class="mc-btn" data-close>取消</button>
+      <button class="mc-btn primary" id="createFolderOk">创建</button>
+    </div>
+  `);
+  const inp = $('folderNameInput');
+  inp.focus();
+  const commit = () => {
+    const v = inp.value.trim() || '未命名';
+    const fid = createFolder(v);
+    renderDrawer();
+    closeModal();
+    toast(`已创建文件夹「${v}」`);
+    openDrawer(false);
+    setTimeout(()=>{ const el = drawerScroll.querySelector(`.folder-item[data-id="${fid}"]`); if (el) el.scrollIntoView({block:'nearest'}); }, 300);
+  };
+  inp.addEventListener('keydown', e => { if (e.key === 'Enter') commit(); });
+  $('createFolderOk').addEventListener('click', commit);
+  bindModalClose();
+}
+function createFolder(name){
+  const fid = 'f' + Date.now();
+  folders.push({ id:fid, name, pinned:false });
+  return fid;
+}
+function createNote(){
+  const fid = state.activeFolder === 'all' ? null : state.activeFolder;
+  const id = 'n' + Date.now();
+  notes.unshift({ id, title:'', excerpt:'', time:'刚刚', pinned:false, folder:fid });
+  renderList(id);
+  toast('已创建空白笔记');
+}
+
+/* ============================================================
+   多选模式：进入 / 更新 / 退出
+   ============================================================ */
+function beginMultiSelect(id, card){
+  if (state.multi) return;
+  state.multi = true;
+  state.selected = new Set([id]);
+  card.classList.add('lifting');
+  setTimeout(() => card.classList.remove('lifting'), 320);
+  screenEl.classList.add('multi-active');
+  listEl.classList.add('multi');
+  newFolderDrop.classList.add('show');
+  if (state.press){
+    const r = card.getBoundingClientRect();
+    state.press.canDrag = true;
+    state.press.offsetX = state.press.x - r.left;
+    state.press.offsetY = state.press.y - r.top;
+    state.press.pendingDeselect = false;
+  }
+  updateMultiUI();
+}
+function updateMultiUI(skipSheet){
+  if (!state.multi){
+    listEl.classList.remove('multi');
+    return;
+  }
+  const n = state.selected.size;
+  mbCount.textContent = `已选 ${n} 项`;
+  const visible = getVisibleNotes();
+  selectAllBtn.textContent = (state.selected.size === visible.length && visible.length > 0) ? '取消全选' : '全选';
+  // 卡片选中态（直接切 class，不重渲染）
+  document.querySelectorAll('.note-card').forEach(c => {
+    c.classList.toggle('selected', state.selected.has(c.dataset.id));
+  });
+  if (!skipSheet) renderSheet();
+}
+function toggleSelect(id){
+  if (state.selected.has(id)) state.selected.delete(id);
+  else state.selected.add(id);
+  updateMultiUI();
+  if (state.selected.size === 0) exitMultiSelect();
+}
+function selectAllToggle(){
+  const visible = getVisibleNotes();
+  const allSelected = visible.length > 0 && visible.every(n => state.selected.has(n.id));
+  if (allSelected) state.selected.clear();
+  else visible.forEach(n => state.selected.add(n.id));
+  updateMultiUI();
+}
+function exitMultiSelect(){
+  if (!state.multi) return;
+  state.multi = false;
+  state.selected.clear();
+  screenEl.classList.remove('multi-active');
+  listEl.classList.remove('multi');
+  newFolderDrop.classList.remove('show');
+  leftZone.classList.remove('show');
+  bottomSheet.classList.remove('open');
+  // 清理拖拽残留
+  document.querySelectorAll('.ghost').forEach(g => g.remove());
+  document.querySelectorAll('.note-card.drag-source').forEach(c => c.classList.remove('drag-source'));
+  document.body.style.touchAction = '';
+  state.dragging = false; state.drag = null; state.press = null;
+}
+$('doneBtn').addEventListener('click', exitMultiSelect);
+$('selectAllBtn').addEventListener('click', selectAllToggle);
+
+/* 底部玻璃菜单面板 */
+function renderSheet(){
+  const n = state.selected.size;
+  let html = '';
+  if (n === 1){
+    const id = [...state.selected][0];
+    const note = notes.find(x => x.id === id);
+    html += `<div class="sheet-item" data-action="pin">${I.pin}${note && note.pinned ? '取消置顶' : '置顶'}</div>`;
+  }
+  html += `<div class="sheet-item" data-action="move">${I.move}移动到</div>`;
+  html += `<div class="sheet-item danger" data-action="delete">${I.trash}删除</div>`;
+  bottomSheet.innerHTML = html;
+  bottomSheet.classList.add('open');
+  bottomSheet.querySelectorAll('[data-action]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const act = btn.dataset.action;
+      if (act === 'pin') pinSelected();
+      if (act === 'move') openMovePicker([...state.selected]);
+      if (act === 'delete') openMultiDeleteDialog();
+    });
+  });
+}
+function pinSelected(){
+  const id = [...state.selected][0];
+  const note = notes.find(x => x.id === id);
+  if (!note) return;
+  note.pinned = !note.pinned;
+  const msg = note.pinned ? '已置顶' : '已取消置顶';
+  exitMultiSelect();
+  renderList();
+  toast(msg);
+}
+function openMultiDeleteDialog(){
+  const n = state.selected.size;
+  openModal(`
+    <h3>移到回收站</h3>
+    <p class="mc-desc">将选中的 ${n} 条笔记移到回收站？可在回收站中恢复。</p>
+    <div class="mc-actions">
+      <button class="mc-btn" data-close>取消</button>
+      <button class="mc-btn danger" id="delOk">移到回收站</button>
+    </div>
+  `);
+  $('delOk').addEventListener('click', () => {
+    const ids = [...state.selected];
+    notes = notes.filter(x => !ids.includes(x.id));
+    exitMultiSelect();
+    closeModal();
+    renderAll();
+    toast(`已删除 ${ids.length} 条笔记`);
+  });
+  bindModalClose();
+}
+
+/* ============================================================
+   移动到：文件夹选择
+   ============================================================ */
+function openMovePicker(ids){
+  openModal(`
+    <h3>移动到</h3>
+    <div class="mc-list">
+      <div class="mc-list-item" data-fid="all">${I.folder}全部（未分类）<span class="ml-count">${notes.length}</span></div>
+      ${folders.map(f => `<div class="mc-list-item" data-fid="${f.id}">${I.folder}${esc(f.name)}<span class="ml-count">${folderCount(f.id)}</span></div>`).join('')}
+    </div>
+    <div class="mc-actions"><button class="mc-btn" data-close>取消</button></div>
+  `);
+  bindModal(e => {
+    const it = e.target.closest('[data-fid]');
+    if (!it) return;
+    const fid = it.dataset.fid;
+    closeModal();
+    exitMultiSelect();
+    moveNotesToFolder(ids, fid);
+  });
+}
+
+/* ============================================================
+   移动 / 渲染刷新
+   ============================================================ */
+function moveNotesToFolder(ids, fid){
+  ids.forEach(id => { const n = notes.find(x => x.id === id); if (n) n.folder = fid === 'all' ? null : fid; });
+  renderAll();
+  toast(`已移动 ${ids.length} 条笔记到「${folderName(fid)}」`);
+}
+function renderAll(){
+  renderList();
+  renderDrawer();
+}
+
+/* ============================================================
+   长按 + 拖拽（核心交互）
+   ============================================================ */
+notesC.addEventListener('pointerdown', e => {
+  if (state.dragging) return;
+  const card = e.target.closest('.note-card');
+  if (!card) return;
+  const id = card.dataset.id;
+  const r = card.getBoundingClientRect();
+  state.press = {
+    id, x:e.clientX, y:e.clientY, moved:false,
+    timer:null, canDrag:false, pendingDeselect:false,
+    offsetX:e.clientX - r.left, offsetY:e.clientY - r.top, card,
+  };
+  if (!state.multi){
+    state.press.timer = setTimeout(() => beginMultiSelect(id, card), 300);
+  } else {
+    // 多选模式下：已选卡可拖可取消；未选卡点选后即可拖
+    if (state.selected.has(id)){
+      state.press.canDrag = true;
+      state.press.pendingDeselect = true;
+    } else {
+      state.selected.add(id);
+      state.press.canDrag = true;
+      state.press.pendingDeselect = false;
+      updateMultiUI();
+    }
+  }
+});
+document.addEventListener('pointermove', e => {
+  const p = state.press;
+  if (!p) return;
+  const dist = Math.hypot(e.clientX - p.x, e.clientY - p.y);
+  if (dist > 10){
+    p.moved = true;
+    clearTimeout(p.timer);
+    if (state.multi && p.canDrag && !state.dragging) beginDrag(e);
+  }
+  if (state.dragging) moveDrag(e);
+});
+document.addEventListener('pointerup', e => {
+  const p = state.press;
+  if (!p){ if (state.dragging) endDrag(e); return; }
+  clearTimeout(p.timer);
+  if (state.dragging){ endDrag(e); state.press = null; return; }
+  if (state.multi && p.pendingDeselect && !p.moved){
+    state.selected.delete(p.id);
+    updateMultiUI();
+    if (state.selected.size === 0) exitMultiSelect();
+  }
+  state.press = null;
+});
+
+/* 拖拽开始：层叠 ghost */
+function beginDrag(e){
+  const p = state.press;
+  state.dragging = true;
+  document.body.style.touchAction = 'none';
+  leftZone.classList.add('show');
+  const ids = [...state.selected];
+  const src = cardEl(p.id);
+  const rect = src.getBoundingClientRect();
+  // 原卡片半透明
+  ids.forEach(id => { const c = cardEl(id); if (c) c.classList.add('drag-source'); });
+  // 主 ghost
+  const main = src.cloneNode(true);
+  main.classList.add('ghost','ghost-main');
+  main.style.width = rect.width + 'px';
+  main.style.left = rect.left + 'px';
+  main.style.top = rect.top + 'px';
+  document.body.appendChild(main);
+  // 阶梯 ghost（对角线依次偏移，第一张在上）
+  const rest = ids.filter(x => x !== p.id).slice(0, 4);
+  const stack = rest.map((id, i) => {
+    const g = cardEl(id).cloneNode(true);
+    g.classList.add('ghost','ghost-stack');
+    g.style.width = rect.width + 'px';
+    g.style.left = (rect.left + (i + 1) * 14) + 'px';
+    g.style.top = (rect.top + (i + 1) * 20) + 'px';
+    document.body.appendChild(g);
+    return g;
+  });
+  state.drag = {
+    ids, mainId:p.id, rect, main, stack,
+    offsetX:p.offsetX, offsetY:p.offsetY,
+    target:null,
+  };
+  moveDrag(e);
+}
+function moveDrag(e){
+  const d = state.drag;
+  const x = e.clientX - d.offsetX;
+  const y = e.clientY - d.offsetY;
+  d.main.style.left = x + 'px';
+  d.main.style.top = y + 'px';
+  d.stack.forEach((g, i) => {
+    g.style.left = (x + (i + 1) * 14) + 'px';
+    g.style.top = (y + (i + 1) * 20) + 'px';
+  });
+  // 左侧虚线区域 → 展开抽屉
+  const r = screenRect();
+  if (e.clientX - r.left < zoneWidth() && !state.drawerOpen) openDrawer(true);
+  // 命中检测
+  const el = document.elementFromPoint(e.clientX, e.clientY);
+  const fi = el && el.closest ? el.closest('.folder-item') : null;
+  const nf = el && el.closest ? el.closest('.newfolder-drop') : null;
+  clearDropHighlights();
+  if (fi){ fi.classList.add('drop-hover'); d.target = { kind:'folder', id:fi.dataset.id }; }
+  else if (nf){ nf.classList.add('drop-hover'); d.target = { kind:'newfolder' }; }
+  else d.target = null;
+}
+function clearDropHighlights(){
+  document.querySelectorAll('.folder-item.drop-hover, .newfolder-drop.drop-hover').forEach(el => el.classList.remove('drop-hover'));
+}
+function endDrag(e){
+  const d = state.drag;
+  document.body.style.touchAction = '';
+  leftZone.classList.remove('show');
+  clearDropHighlights();
+  const target = d.target;
+  if (target && target.kind === 'folder'){
+    const ids = [...state.selected];
+    const fid = target.id;
+    closeDrawer();
+    exitMultiSelect();
+    cleanupGhosts();
+    moveNotesToFolder(ids, fid);
+  } else if (target && target.kind === 'newfolder'){
+    const ids = [...state.selected];
+    const fid = createFolder('未命名');
+    closeDrawer();
+    exitMultiSelect();
+    cleanupGhosts();
+    moveNotesToFolder(ids, fid);
+    openRenameDialog(fid);   // 自动弹重命名框
+  } else {
+    // 回弹复位，多选保持
+    animateBack(d);
+    if (state.drawerByDrag) closeDrawer();
+  }
+  state.dragging = false;
+  state.drag = null;
+}
+function cleanupGhosts(){ document.querySelectorAll('.ghost').forEach(g => g.remove()); }
+function animateBack(d){
+  const rect = d.rect;
+  const setBack = (g, l, t) => {
+    g.style.transition = 'left .28s cubic-bezier(.32,.72,0,1), top .28s cubic-bezier(.32,.72,0,1)';
+    g.style.left = l + 'px';
+    g.style.top = t + 'px';
+  };
+  setBack(d.main, rect.left, rect.top);
+  d.stack.forEach((g, i) => {
+    const cid = d.ids.filter(x => x !== d.mainId)[i];
+    const c = cid && cardEl(cid);
+    const r = c ? c.getBoundingClientRect() : rect;
+    setBack(g, r.left, r.top);
+  });
+  setTimeout(() => {
+    cleanupGhosts();
+    d.ids.forEach(id => { const c = cardEl(id); if (c) c.classList.remove('drag-source'); });
+  }, 320);
+}
+
+/* ============================================================
+   桌面右键：笔记悬浮菜单 / 文件夹菜单
+   ============================================================ */
+document.addEventListener('contextmenu', e => {
+  if (state.view !== 'desktop'){
+    e.preventDefault();
+    return;
+  }
+  const r = screenRect();
+  const mx = e.clientX - r.left, my = e.clientY - r.top;
+  const card = e.target.closest('.note-card');
+  const fi = e.target.closest('.folder-item');
+  if (card && !state.dragging){
+    e.preventDefault();
+    showFloatMenu(mx, my, card.dataset.id);
+    return;
+  }
+  if (fi && fi.dataset.id !== 'all' && !state.dragging){
+    e.preventDefault();
+    openFolderMenu(fi.dataset.id);
+  }
+});
+function showFloatMenu(x, y, noteId){
+  const note = notes.find(n => n.id === noteId);
+  if (!note) return;
+  const items = [
+    { act:'pin', label: note.pinned ? '取消置顶' : '置顶', icon: I.pin },
+    { act:'move', label:'移动到', icon: I.move },
+    { act:'delete', label:'删除', icon: I.trash, danger:true },
+  ];
+  floatMenu.innerHTML = items.map(it =>
+    `<div class="fm-item${it.danger ? ' danger' : ''}" data-act="${it.act}">${it.icon}${it.label}</div>`
+  ).join('');
+  floatMenu.classList.add('open');
+  const w = 160, h = items.length * 38 + 12;
+  const sr = screenRect();
+  floatMenu.style.left = Math.min(Math.max(x, 8), sr.width - w - 8) + 'px';
+  floatMenu.style.top = Math.min(Math.max(y, 8), sr.height - h - 8) + 'px';
+  state.menuOpen = true;
+  floatMenu.querySelectorAll('[data-act]').forEach(b => {
+    b.addEventListener('click', () => {
+      closeFloatMenu();
+      const act = b.dataset.act;
+      if (act === 'pin'){ note.pinned = !note.pinned; renderList(); toast(note.pinned ? '已置顶' : '已取消置顶'); }
+      if (act === 'move') openMovePicker([noteId]);
+      if (act === 'delete') openSingleDeleteDialog(noteId);
+    });
+  });
+}
+function closeFloatMenu(){
+  floatMenu.classList.remove('open');
+  state.menuOpen = false;
+}
+function openSingleDeleteDialog(noteId){
+  const note = notes.find(n => n.id === noteId);
+  const title = (note && note.title.trim()) || '无标题';
+  openModal(`
+    <h3>移到回收站</h3>
+    <p class="mc-desc">将「${esc(title)}」移到回收站？可在回收站中恢复。</p>
+    <div class="mc-actions">
+      <button class="mc-btn" data-close>取消</button>
+      <button class="mc-btn danger" id="delOneOk">移到回收站</button>
+    </div>
+  `);
+  $('delOneOk').addEventListener('click', () => {
+    notes = notes.filter(x => x.id !== noteId);
+    closeModal();
+    renderAll();
+    toast('已删除 1 条笔记');
+  });
+  bindModalClose();
+}
+
+/* ============================================================
+   搜索框
+   ============================================================ */
+searchInput.addEventListener('input', () => {
+  state.search = searchInput.value.trim();
+  searchClear.classList.toggle('show', !!searchInput.value);
+  renderList();
+});
+searchClear.addEventListener('click', () => { searchInput.value = ''; state.search = ''; searchClear.classList.remove('show'); renderList(); });
+
+/* ============================================================
+   顶部按钮
+   ============================================================ */
+$('layoutBtn').addEventListener('click', toggleLayout);
+$('settingsBtn').addEventListener('click', () => toast('设置页（原型演示）'));
+$('syncBtn').addEventListener('click', () => toast('同步：已连接 2 台设备'));
+
+/* ============================================================
+   点外部收拢（抽屉 / FAB / 浮动菜单 / 退出多选）
+   ============================================================ */
+document.addEventListener('pointerdown', e => {
+  const t = e.target;
+  if (state.menuOpen && !floatMenu.contains(t)) closeFloatMenu();
+  if (state.fabOpen && !t.closest('.fab-wrap')) toggleFab(false);
+  // 多选模式点空白退出
+  if (state.multi && !state.dragging){
+    const inside = t.closest('.note-card, .bottom-sheet, .multibar, .drawer, .drawer-backdrop, .modal-layer, .fab-wrap, .topbar, .searchbar, .newfolder-drop');
+    if (!inside && t.id !== 'leftZone') exitMultiSelect();
+  }
+});
+
+/* ============================================================
+   键盘：Esc 退出多选 / 收拢
+   ============================================================ */
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape'){
+    exitMultiSelect();
+    closeDrawer();
+    toggleFab(false);
+    closeModal();
+    closeFloatMenu();
+  }
+});
+
+/* ============================================================
+   视图切换（手机 / 桌面）& 主题
+   ============================================================ */
+function setView(v){
+  state.view = v;
+  deviceEl.classList.toggle('desktop', v === 'desktop');
+  $('viewPhone').classList.toggle('active', v === 'phone');
+  $('viewDesktop').classList.toggle('active', v === 'desktop');
+  // 收拢所有浮层，避免跨尺寸错位
+  exitMultiSelect(); closeDrawer(); toggleFab(false); closeModal(); closeFloatMenu();
+}
+$('viewPhone').addEventListener('click', () => setView('phone'));
+$('viewDesktop').addEventListener('click', () => setView('desktop'));
+$('themeBtn').addEventListener('click', () => {
+  state.dark = !state.dark;
+  document.body.classList.toggle('dark', state.dark);
+  $('themeBtn').textContent = state.dark ? '切换亮色' : '切换暗色';
+});
+
+/* ============================================================
+   初始化
+   ============================================================ */
+renderAll();
+</script>
+</body>
+</html>

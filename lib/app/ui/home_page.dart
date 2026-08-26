@@ -6,19 +6,25 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../data/note.dart';
 import '../repository/app_settings.dart';
 import '../repository/providers.dart';
 import '../sync/sync_protocol.dart';
 import '../sync/sync_service.dart';
 import '../theme.dart';
+import 'widgets/folder_drawer.dart';
+import 'widgets/note_actions.dart';
 import 'widgets/notes_list.dart';
 
 /// 主页：笔记列表页。
 ///
-/// AppBar 含搜索框（绑定 [searchQueryProvider]，输入即过滤、支持清空）、
-/// 排列模式切换（单列/双列/四列瀑布流循环，持久化，task-26）、设置入口
-/// （跳 `/settings`）；同步、回收站入口已移入设置页（task-26）。
-/// 新建入口为右下角毛玻璃 FAB（照搬 EE _buildFrostedFab，task-26）。
+/// 布局（task-32 文件夹归类重构）：
+/// - 第一行 AppBar：普通态 = [文件夹按钮][同步状态点][排列][设置]；
+///   多选态 = [全选][已选 N 项][完成]；
+/// - 第二行搜索框独占一行（原 AppBar title 下移，用户确认）；
+/// - 标签筛选栏已移除（task-32，切换文件夹靠左侧抽屉）；
+/// - 右下角扇形新建菜单（文件夹/笔记）；新建入口经
+///   [NoteRepository.createNote]（选中文件夹时自动归入）。
 /// 路由见 docs/技术架构.md 第 5 节。
 class HomePage extends ConsumerWidget {
   const HomePage({super.key});
@@ -38,55 +44,241 @@ class HomePage extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final layoutMode = ref.watch(layoutModeProvider);
+    final selected = ref.watch(multiSelectProvider);
+    final multiActive = selected.isNotEmpty;
 
     return Scaffold(
       appBar: AppBar(
-        title: const _SearchField(),
-        actions: [
-          // 同步状态点（在线绿 / 离线灰），点击进同步页——不占列表空间。
-          const _SyncStatusDot(),
-          // 排列模式切换（EE 式图标：view_list / view_column / grid_view）
-          IconButton(
-            tooltip: '${switch (layoutMode) {
-              kLayoutModeSingle => '单列',
-              _ => '双列',
-            }}（点击切换排列）',
-            icon: switch (layoutMode) {
-              // 单列：1x2（上下堆叠）；双列：2x2（两列网格）——
-              // 现成 Cupertino 图标直接表达语义（用户确认）。
-              kLayoutModeSingle => const Icon(CupertinoIcons.rectangle_grid_1x2),
-              _ => const Icon(CupertinoIcons.rectangle_grid_2x2),
-            },
-            onPressed: () => _cycleLayout(ref),
-          ),
-          IconButton(
-            tooltip: '设置',
-            icon: const Icon(Icons.settings_outlined),
-            onPressed: () => context.push('/settings'),
-          ),
-        ],
+        // 多选模式：全选 + 已选 N 项 + 完成；普通模式：文件夹按钮 + 三按钮。
+        leading: multiActive
+            ? IconButton(
+                tooltip: '全选',
+                icon: const Icon(Icons.select_all),
+                onPressed: () {
+                  final ids = ref
+                          .read(notesStreamProvider)
+                          .value ??
+                      const <Note>[];
+                  ref
+                      .read(multiSelectProvider.notifier)
+                      .selectAll(ids.map((n) => n.id));
+                },
+              )
+            : IconButton(
+                tooltip: '文件夹',
+                icon: const Icon(Icons.folder_outlined),
+                onPressed: () {
+                  final open = ref.read(folderDrawerOpenProvider);
+                  ref.read(folderDrawerOpenProvider.notifier).state = !open;
+                  ref.read(folderDrawerByDragProvider.notifier).state = false;
+                },
+              ),
+        title: multiActive
+            ? Text(
+                '已选 ${selected.length} 项',
+                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+              )
+            : null,
+        actions: multiActive
+            ? [
+                TextButton(
+                  onPressed: () =>
+                      ref.read(multiSelectProvider.notifier).exit(),
+                  child: const Text('完成'),
+                ),
+              ]
+            : [
+                // 同步状态点（在线绿 / 离线灰），点击进同步页——不占列表空间。
+                const _SyncStatusDot(),
+                // 排列模式切换（EE 式图标：view_list / view_column / grid_view）
+                IconButton(
+                  tooltip: '${switch (layoutMode) {
+                    kLayoutModeSingle => '单列',
+                    _ => '双列',
+                  }}（点击切换排列）',
+                  icon: switch (layoutMode) {
+                    // 单列：1x2（上下堆叠）；双列：2x2（两列网格）——
+                    // 现成 Cupertino 图标直接表达语义（用户确认）。
+                    kLayoutModeSingle => const Icon(
+                        CupertinoIcons.rectangle_grid_1x2,
+                      ),
+                    _ => const Icon(CupertinoIcons.rectangle_grid_2x2),
+                  },
+                  onPressed: () => _cycleLayout(ref),
+                ),
+                IconButton(
+                  tooltip: '设置',
+                  icon: const Icon(Icons.settings_outlined),
+                  onPressed: () => context.push('/settings'),
+                ),
+              ],
       ),
-      body: Column(
+      body: Stack(
         children: [
-          // 标签筛选栏（task-28）：「全部」+ 聚合标签，横滑 chips。
-          const _TagFilterBar(),
-          const Expanded(child: NotesList()),
+          Column(
+            children: [
+              // 第二行：搜索框独占一行（task-32 布局重构）。
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 4, 12, 6),
+                child: const _SearchField(),
+              ),
+              const Expanded(child: NotesList()),
+            ],
+          ),
+          // 文件夹抽屉（玻璃面板，含全部/置顶区/普通区 + 拖放落点）。
+          const FolderDrawer(),
+          // 右下角扇形新建菜单（多选模式下隐藏）。
+          if (!multiActive)
+            Positioned(
+              right: 8,
+              bottom: 16,
+              child: _FabMenu(),
+            ),
         ],
       ),
-      // 毛玻璃新建按钮（照搬 EE _buildFrostedFab，task-26）：悬浮于列表
-      // 之上，与滚动共存；列表底部留白避免遮挡最后一张卡片。
-      floatingActionButton: Padding(
-        padding: const EdgeInsets.only(right: 8, bottom: 16),
-        child: _FrostedFab(
-          onPressed: () async {
-            // 方案B：点击直接创建空白笔记并进入编辑态（无「新建态」）；
-            // 返回时若未输入任何内容，编辑页会物理删除该空笔记。
-            final note = await ref
-                .read(noteRepositoryProvider)
-                .createNote(title: '', content: '');
-            if (!context.mounted || note.id.isEmpty) return;
-            context.push('/editor/${note.id}');
-          },
+    );
+  }
+}
+
+/// 右下角扇形新建菜单（task-32）：点击 FAB 展开两个 56px 圆形按钮
+/// （文件夹在上、笔记在左），再点 FAB 或点其他区域收回。
+///
+/// - 「文件夹」→ 弹命名框创建文件夹；
+/// - 「笔记」→ 直接创建空白笔记进编辑页（选中文件夹时自动归入）。
+class _FabMenu extends ConsumerStatefulWidget {
+  const _FabMenu();
+
+  @override
+  ConsumerState<_FabMenu> createState() => _FabMenuState();
+}
+
+class _FabMenuState extends ConsumerState<_FabMenu> {
+  bool _open = false;
+
+  /// 点击其他区域收回（全屏透明 barrier，FAB 与扇形按钮在其上层）。
+  void _close() {
+    if (_open) setState(() => _open = false);
+  }
+
+  /// 新建文件夹：命名框 → 创建。
+  Future<void> _createFolder() async {
+    _close();
+    if (!mounted) return;
+    final name = await showFolderNameDialog(context, title: '新建文件夹');
+    if (name == null || !mounted) return;
+    await ref.read(folderRepositoryProvider).createFolder(name);
+  }
+
+  /// 新建笔记：创建空白笔记进编辑页（当前选中文件夹时自动归入）。
+  Future<void> _createNote() async {
+    _close();
+    if (!mounted) return;
+    final folderId = ref.read(folderFilterProvider);
+    final note = await ref
+        .read(noteRepositoryProvider)
+        .createNote(title: '', content: '', folderId: folderId);
+    if (!mounted || note.id.isEmpty) return;
+    context.push('/editor/${note.id}');
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 132,
+      height: 132,
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          // 全屏收回区域（仅展开时存在，位于最底层）。
+          if (_open)
+            Positioned(
+              left: -132 - 8,
+              right: 132 + 8 - MediaQuery.sizeOf(context).width,
+              top: -132 - 16,
+              bottom: 132 + 16 - MediaQuery.sizeOf(context).height,
+              child: GestureDetector(
+                behavior: HitTestBehavior.translucent,
+                onTap: _close,
+              ),
+            ),
+          // 扇形按钮：文件夹（上方）、笔记（左侧）。
+          AnimatedPositioned(
+            duration: const Duration(milliseconds: 220),
+            curve: Curves.easeOutCubic,
+            right: _open ? 60 : 0,
+            bottom: _open ? 2 : 0,
+            child: IgnorePointer(
+              ignoring: !_open,
+              child: _FabOption(
+                icon: Icons.folder_outlined,
+                tooltip: '新建文件夹',
+                onTap: _createFolder,
+              ),
+            ),
+          ),
+          AnimatedPositioned(
+            duration: const Duration(milliseconds: 220),
+            curve: Curves.easeOutCubic,
+            right: _open ? 2 : 0,
+            bottom: _open ? 60 : 0,
+            child: IgnorePointer(
+              ignoring: !_open,
+              child: _FabOption(
+                icon: Icons.note_alt_outlined,
+                tooltip: '新建笔记',
+                onTap: _createNote,
+              ),
+            ),
+          ),
+          // FAB 主按钮：点击展开/收回。
+          Positioned(
+            right: 0,
+            bottom: 0,
+            child: _FrostedFab(
+              open: _open,
+              onPressed: () => setState(() => _open = !_open),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 扇形选项按钮（与 FAB 同尺寸 56px 圆形，玻璃样式）。
+class _FabOption extends StatelessWidget {
+  const _FabOption({
+    required this.icon,
+    required this.tooltip,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String tooltip;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return SizedBox(
+      width: 56,
+      height: 56,
+      child: ClipOval(
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
+          child: Material(
+            color: (isDark ? Colors.white : Colors.black)
+                .withValues(alpha: isDark ? 0.12 : 0.08),
+            shape: const CircleBorder(),
+            child: InkWell(
+              onTap: onTap,
+              customBorder: const CircleBorder(),
+              child: Tooltip(
+                message: tooltip,
+                child: Center(child: Icon(icon, size: 24)),
+              ),
+            ),
+          ),
         ),
       ),
     );
@@ -95,9 +287,11 @@ class HomePage extends ConsumerWidget {
 
 /// 右下角毛玻璃圆形新建按钮（照搬 EE home_screen._buildFrostedFab）：
 /// BackdropFilter blur 15 + add 图标 + 玻璃底色（暗色白 12% / 亮色黑 8%）。
+/// 展开时图标旋转 45°（+ → ×，常见展开状态提示）。
 class _FrostedFab extends StatelessWidget {
-  const _FrostedFab({required this.onPressed});
+  const _FrostedFab({required this.open, required this.onPressed});
 
+  final bool open;
   final VoidCallback onPressed;
 
   @override
@@ -116,7 +310,12 @@ class _FrostedFab extends StatelessWidget {
             child: InkWell(
               onTap: onPressed,
               customBorder: const CircleBorder(),
-              child: const Center(child: Icon(Icons.add, size: 28)),
+              child: AnimatedRotation(
+                turns: open ? 0.125 : 0,
+                duration: const Duration(milliseconds: 200),
+                curve: Curves.easeOutCubic,
+                child: const Center(child: Icon(Icons.add, size: 28)),
+              ),
             ),
           ),
         ),
@@ -331,81 +530,5 @@ class _OfflineStatusBarState extends ConsumerState<_OfflineStatusBar> {
   }
 }
 
-/// 列表页顶部标签筛选栏（task-28）：横滑 chips——「全部」+ 聚合标签列表。
-///
-/// 数据源 [tagsProvider]（从全部笔记流聚合去重）；点击切换
-/// [tagFilterProvider]，与搜索关键字并存（notesStreamProvider 同时过滤）。
-class _TagFilterBar extends ConsumerWidget {
-  const _TagFilterBar();
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final tags = ref.watch(tagsProvider);
-    final selected = ref.watch(tagFilterProvider);
-    if (tags.isEmpty && selected.isEmpty) {
-      // 无标签可筛选：不占高度（列表直接贴顶）。
-      return const SizedBox.shrink();
-    }
-    return SizedBox(
-      height: 44,
-      child: ListView(
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-        children: [
-          _buildChip(
-            context,
-            label: '全部',
-            selected: selected.isEmpty,
-            onTap: () =>
-                ref.read(tagFilterProvider.notifier).state = '',
-          ),
-          for (final tag in tags)
-            _buildChip(
-              context,
-              label: tag,
-              selected: selected == tag,
-              onTap: () => ref.read(tagFilterProvider.notifier).state = tag,
-            ),
-        ],
-      ),
-    );
-  }
-
-  /// 单个标签 pill：选中用强调色填充，未选中用表面低层色描边。
-  Widget _buildChip(
-    BuildContext context, {
-    required String label,
-    required bool selected,
-    required VoidCallback onTap,
-  }) {
-    final colorScheme = Theme.of(context).colorScheme;
-    return Padding(
-      padding: const EdgeInsets.only(right: 8),
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(16),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
-          decoration: BoxDecoration(
-            color: selected
-                ? colorScheme.primary
-                : colorScheme.surfaceContainerLow,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(
-              color: selected ? colorScheme.primary : colorScheme.outlineVariant,
-            ),
-          ),
-          child: Text(
-            label,
-            style: TextStyle(
-              fontSize: 13,
-              color: selected
-                  ? colorScheme.onPrimary
-                  : colorScheme.onSurfaceVariant,
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
+/// 列表页顶部标签筛选栏已移除（task-32：切换文件夹靠左侧抽屉，
+/// 用户确认移除标签栏；编辑页标签编辑保留）。

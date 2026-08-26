@@ -6,9 +6,11 @@ import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
 
 import '../data/database.dart' show TrustedDevice;
+import '../data/folder.dart';
 import '../data/note.dart';
 import '../repository/attachments.dart';
 import '../repository/device_identity.dart';
+import '../repository/folder_repository.dart';
 import '../repository/note_repository.dart';
 import 'discovery_service.dart';
 import 'sync_connection.dart';
@@ -210,15 +212,18 @@ class PeerDevice {
 /// 合并 + 向其他所有已就绪会话转发（多向广播）；devices_update 多向发送。
 ///
 /// 增量推送：订阅 [NoteRepository.changes]（本地变更事件），向所有已就绪
-/// 对端推送 note_upsert / note_delete。
+/// 对端推送 note_upsert / note_delete；订阅 [FolderRepository.changes]
+/// 推送 folder_upsert（task-32 文件夹归类）。
 ///
 /// 防回声：远端数据写库一律走 [NoteRepository.mergeRemoteNote] /
-/// [NoteRepository.mergeRemoteDelete]，这两个入口不经过 changes 通道
-/// （见 note_repository.dart 类注释约定），因此远端合并不会再次触发推送。
+/// [NoteRepository.mergeRemoteDelete] / [FolderRepository.mergeRemoteFolder]，
+/// 这些入口不经过 changes 通道（见 note_repository.dart 类注释约定），
+/// 因此远端合并不会再次触发推送。
 class SyncService {
   SyncService({
     required NoteRepository repository,
     required DeviceIdentityStore identity,
+    FolderRepository? folderRepository,
     DiscoveryService? discovery,
     AttachmentsStore? attachments,
     this.fileRequestTimeout = const Duration(seconds: 30),
@@ -230,10 +235,14 @@ class SyncService {
     this.heartbeatTimeout = const Duration(seconds: 5),
   })  : _repository = repository,
         _identity = identity,
+        _folderRepository = folderRepository,
         _discovery = discovery ?? DiscoveryService(),
         _attachments = attachments ?? AttachmentsStore() {
     // 本地变更 → 推送：订阅贯穿服务生命周期，无对端时推送为空操作。
     _changesSub = repository.changes.listen(_onLocalChange);
+    // 文件夹变更 → 推送（task-32 文件夹归类）：folder_upsert 消息。
+    _folderChangesSub =
+        folderRepository?.changes.listen(_onLocalFolderChange);
     // 发现 → 自动连接：扫描结果到达时，已配对且本机 deviceId 较小者自动
     // 发起连接（扫描按需触发：手动 [scanOnce] / 已配对断线退避扫描）。
     _discoverySub = _discovery.devices.listen((devices) {
@@ -275,6 +284,11 @@ class SyncService {
 
   final NoteRepository _repository;
 
+  /// 文件夹仓库（task-32 文件夹归类）：订阅本地文件夹变更推送
+  /// folder_upsert；远端合并走 [FolderRepository.mergeRemoteFolder]。
+  /// 可空——不注入时文件夹不参与同步（验证脚本/无文件夹场景）。
+  final FolderRepository? _folderRepository;
+
   /// 本机设备身份与信任列表（deviceId/设备名/信任列表统一入口）。
   final DeviceIdentityStore _identity;
 
@@ -314,6 +328,7 @@ class SyncService {
   final SyncServer _server = SyncServer();
 
   StreamSubscription<NoteChangeEvent>? _changesSub;
+  StreamSubscription<FolderChangeEvent>? _folderChangesSub;
   StreamSubscription<List<DiscoveredDevice>>? _discoverySub;
   StreamSubscription<SyncServerConnection>? _serverConnectedSub;
   StreamSubscription<SyncServerConnection>? _serverDisconnectedSub;
@@ -574,6 +589,7 @@ class SyncService {
     _manuallyDisconnected.clear(); // 重新开启同步 → 自动重连（会话级标记重置）
     await _identity.ensureLoaded(); // 身份就绪后再对外发布（持久化 deviceId/设备名）
     _repository.localDeviceId = deviceId; // task-32 v5：本地笔记 origin 标记用
+    _folderRepository?.localDeviceId = deviceId; // task-32：本地文件夹 origin 标记用
     await _refreshTrustedCache(); // 信任列表缓存（同步页已配对设备列表/发现标记）
     await _loadAddressCache(); // 地址缓存（v4 直连优先，跨重启有效）
     await _server.start(port: port);
@@ -1554,6 +1570,21 @@ class SyncService {
     }
   }
 
+  /// 本地文件夹变更 → 推送（task-32 文件夹归类）：新增/修改/置顶/排序/
+  /// 软删除均走 folder_upsert（deletedAt 非空即删除语义，与笔记同构）。
+  void _onLocalFolderChange(FolderChangeEvent event) {
+    switch (event) {
+      case FolderUpsertedEvent(folder: final folder):
+      case FolderTrashedEvent(folder: final folder):
+        _pushToAllPeers(
+          FolderUpsertMessage(
+            folder: folder,
+            origin: folder.origin ?? deviceId,
+          ).toJson(),
+        );
+    }
+  }
+
   /// 连接表变化 → 本地流 + 向所有已登记会话多向发送 devices_update；
   /// 同时刷新对端设备列表（[peerDevices]，同步页已配对设备卡数据源）。
   void _emitDevices() {
@@ -1821,6 +1852,7 @@ class SyncService {
   /// 释放资源（停止服务/连接/发现并关闭事件流）。
   Future<void> dispose() async {
     await _changesSub?.cancel();
+    await _folderChangesSub?.cancel();
     await _discoverySub?.cancel();
     await _serverConnectedSub?.cancel();
     await _serverDisconnectedSub?.cancel();
@@ -2348,8 +2380,12 @@ class _PeerSession {
         await _onChallengeResponse(nonce, hmac);
       case SyncRequestMessage():
         await _onSyncRequest();
-      case SyncDataMessage(notes: final notes, tombstones: final tombstones):
-        await _onSyncData(notes, tombstones);
+      case SyncDataMessage(
+        notes: final notes,
+        tombstones: final tombstones,
+        folders: final folders,
+      ):
+        await _onSyncData(notes, tombstones, folders);
       case NoteUpsertMessage(note: final note, origin: final upsertOrigin):
         await _onNoteUpsert(note, upsertOrigin);
       case NoteDeleteMessage(
@@ -2359,6 +2395,8 @@ class _PeerSession {
         origin: final deleteOrigin,
       ):
         await _onNoteDelete(id, version, deletedAt, deleteOrigin);
+      case FolderUpsertMessage(folder: final folder, origin: final folderOrigin):
+        await _onFolderUpsert(folder, folderOrigin);
       case DevicesUpdateMessage():
         // P2P：各端设备列表以本机连接表为准（devicesUpdates 由本机
         // 连接表变化驱动），对端广播仅作信息参考，本地忽略。
@@ -2688,20 +2726,26 @@ class _PeerSession {
   Future<void> _sendFullSnapshot() async {
     if (!ready) return;
     // 全量快照：笔记（含回收站条目，deletedAt 非空即软删除）+ 墓碑列表
-    // （docs/技术架构.md 7.2 节 v3 修订：sync_data 携带 tombstones，对端
-    // 先写墓碑再合并笔记，防离线旧数据复活）。
+    // + 文件夹（含软删除条目，task-32 v6）——对端先写墓碑再合并笔记/
+    // 文件夹，防离线旧数据复活（docs/技术架构.md 7.2 节）。
     final notes = await service._repository.getAll();
     final tombstones = await service._repository.getAllTombstones();
+    final folders = await service._folderRepository?.getAll() ?? const [];
     _send(SyncDataMessage(
       notes: notes,
       tombstones: tombstones
           .map((t) =>
               Tombstone(id: t.id, version: t.version, deletedAt: t.deletedAt))
           .toList(),
+      folders: folders,
     ).toJson());
   }
 
-  Future<void> _onSyncData(List<Note> notes, List<Tombstone> tombstones) async {
+  Future<void> _onSyncData(
+    List<Note> notes,
+    List<Tombstone> tombstones,
+    List<Folder> folders,
+  ) async {
     if (!ready) return; // 未配对前忽略数据（F14）。
     // 合并顺序（docs/技术架构.md 7.4 节 v3 修订）：先处理墓碑（写本地墓碑
     // + 拦截被墓碑覆盖的本地旧数据），再合并笔记——保证快照中携带的
@@ -2712,6 +2756,25 @@ class _PeerSession {
         version: tombstone.version,
         deletedAt: tombstone.deletedAt,
       );
+    }
+    // 文件夹全量合并（task-32 v6）：LWW 各自裁决（无墓碑，软删除语义），
+    // 逐条按 origin 过滤「从该设备同步」（同笔记语义）。
+    final folderRepo = service._folderRepository;
+    if (folderRepo != null) {
+      for (final folder in folders) {
+        final authorId = (folder.origin != null && folder.origin!.isNotEmpty)
+            ? folder.origin!
+            : peerDeviceId;
+        if (authorId != null &&
+            (service._syncFromByPeerId[authorId] ?? true) == false) {
+          continue;
+        }
+        if (authorId != null &&
+            !service._originAllowsTo(authorId, service.deviceId)) {
+          continue;
+        }
+        await folderRepo.mergeRemoteFolder(folder);
+      }
     }
     for (final note in notes) {
       // task-32 v5：全量快照逐条按笔记 origin 过滤「从该设备同步」——
@@ -2755,6 +2818,45 @@ class _PeerSession {
         origin: service.deviceId,
       ).toJson());
     }
+    // 双向对齐（task-32 v6）：本机全部文件夹回推对端（含软删除条目，
+    // 对端 LWW 合并维持各端文件夹状态一致）。
+    if (folderRepo != null) {
+      final localFolders = await folderRepo.getAll();
+      for (final folder in localFolders) {
+        _send(FolderUpsertMessage(
+          folder: folder,
+          origin: folder.origin ?? service.deviceId,
+        ).toJson());
+      }
+    }
+    service._markSyncCompleted();
+  }
+
+  /// 远端文件夹增/改推送处理（task-32 v6）：镜像 [NoteUpsertMessage] 链路
+  /// ——origin 过滤 → [FolderRepository.mergeRemoteFolder]（LWW）→ 实际变更
+  /// 才 fan-out 转发（未变更即回声丢弃，消息链收敛）。
+  Future<void> _onFolderUpsert(Folder folder, String origin) async {
+    if (!ready) return;
+    final folderRepo = service._folderRepository;
+    if (folderRepo == null) return;
+    // task-32 v5 语义：按原始作者检查「从该设备同步」与「向」开关。
+    final authorId = (folder.origin != null && folder.origin!.isNotEmpty)
+        ? folder.origin!
+        : (origin.isNotEmpty ? origin : peerDeviceId);
+    if (authorId != null &&
+        (service._syncFromByPeerId[authorId] ?? true) == false) {
+      return;
+    }
+    if (authorId != null &&
+        !service._originAllowsTo(authorId, service.deviceId)) {
+      return;
+    }
+    final changed = await folderRepo.mergeRemoteFolder(folder);
+    if (!changed) return; // 未实际变更本地（重复/过期消息）：丢弃
+    service._fanOutToOthers(
+      FolderUpsertMessage(folder: folder, origin: origin).toJson(),
+      this,
+    );
     service._markSyncCompleted();
   }
 

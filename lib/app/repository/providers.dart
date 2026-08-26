@@ -7,11 +7,13 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
 import '../data/database.dart';
+import '../data/folder.dart';
 import '../data/note.dart';
 import '../sync/sync_service.dart';
 import 'app_settings.dart';
 import 'attachments.dart';
 import 'device_identity.dart';
+import 'folder_repository.dart';
 import 'note_repository.dart';
 
 /// 全局数据库单例：drift_flutter 的 driftDatabase 跨平台统一初始化
@@ -32,10 +34,70 @@ final noteRepositoryProvider = Provider<NoteRepository>((ref) {
 /// 当前搜索关键字（空串 = 不过滤），列表页搜索框绑定。
 final searchQueryProvider = StateProvider<String>((ref) => '');
 
-/// 当前标签筛选（空串 = 全部，列表页顶部标签栏绑定，task-28）。
-///
-/// 与搜索并存：notesStreamProvider 同时应用关键字与标签过滤。
-final tagFilterProvider = StateProvider<String>((ref) => '');
+/// 当前选中文件夹 id（task-32 文件夹归类）：null = 「全部」——显示全部
+/// 笔记（含未分类与各文件夹内）；非 null = 仅显示该文件夹内笔记。
+/// 默认 null（打开软件默认选中「全部」）。
+final folderFilterProvider = StateProvider<String?>((ref) => null);
+
+/// 文件夹抽屉是否打开（task-32）。点击文件夹按钮打开 = 带 backdrop；
+/// 拖拽笔记进入左侧区域展开 = 无 backdrop（drag-mode，见
+/// [folderDrawerByDragProvider]）。
+final folderDrawerOpenProvider = StateProvider<bool>((ref) => false);
+
+/// 抽屉是否由拖拽展开（drag-mode）：无 backdrop，可穿透操作列表。
+final folderDrawerByDragProvider = StateProvider<bool>((ref) => false);
+
+/// 多选模式选中集合（task-32 长按多选）：非空 = 多选模式激活。
+/// 进入：长按卡片（默认选中该卡）；点击其他卡片切换选中；清空 = 退出。
+class MultiSelectNotifier extends StateNotifier<Set<String>> {
+  MultiSelectNotifier() : super(const {});
+
+  /// 多选模式是否激活（选中集合非空）。
+  bool get active => state.isNotEmpty;
+
+  /// 进入多选并默认选中 [id]（长按卡片）。
+  void enter(String id) => state = {id};
+
+  /// 切换选中（点击卡片）。全部取消时自动退出多选。
+  void toggle(String id) {
+    final next = Set<String>.of(state);
+    if (!next.add(id)) {
+      next.remove(id);
+    }
+    state = next;
+  }
+
+  /// 全选/取消全选（[all] 为当前全部可选项）。
+  void selectAll(Iterable<String> all) => state = all.toSet();
+
+  /// 退出多选（清空）。
+  void exit() => state = const {};
+}
+
+final multiSelectProvider =
+    StateNotifierProvider<MultiSelectNotifier, Set<String>>(
+      (ref) => MultiSelectNotifier(),
+    );
+
+/// 文件夹仓库：文件夹数据读写统一入口，UI 与同步层共用。
+final folderRepositoryProvider = Provider<FolderRepository>((ref) {
+  final db = ref.watch(databaseProvider);
+  final repo = FolderRepository(db.folderDao, ref.watch(noteRepositoryProvider));
+  ref.onDispose(repo.dispose);
+  return repo;
+});
+
+/// 活跃文件夹流（deletedAt IS NULL）：置顶优先 → sortOrder 升序
+/// （文件夹抽屉数据源，task-32）。
+final foldersStreamProvider = StreamProvider<List<Folder>>((ref) {
+  return ref.watch(folderRepositoryProvider).getActiveStream();
+});
+
+/// 全部活跃笔记流（不筛选，task-32）：文件夹抽屉计数 / 「全部」计数用
+/// （原 task-28 标签栏聚合数据源，标签栏移除后改作抽屉计数）。
+final activeNotesStreamProvider = StreamProvider<List<Note>>((ref) {
+  return ref.watch(noteRepositoryProvider).getStream();
+});
 
 /// UI 设置存储（列表布局模式 + 主题模式，task-26）：构造即触发加载
 /// （幂等，见 [AppSettingsStore.ensureLoaded]），加载完成前返回平台默认值。
@@ -54,47 +116,27 @@ final layoutModeProvider = StateProvider<int>((ref) {
   return ref.watch(appSettingsProvider).layoutMode;
 });
 
-/// 全部正常笔记流（不筛选）：标签栏聚合数据源（task-28）。
-///
-/// 与 [notesStreamProvider]（搜索+标签筛选后）分离——标签栏始终展示
-/// 全部笔记的标签全集，切换标签时其他标签不消失。
-final allNotesStreamProvider = StreamProvider<List<Note>>((ref) {
-  return ref.watch(noteRepositoryProvider).getStream();
-});
-
-/// 标签列表（task-28）：从全部笔记流聚合、去重、按名称排序。
-///
-/// 数据流：笔记增删改/标签变更写库 → drift 流推送 → 本 Provider 重建。
-final tagsProvider = Provider<List<String>>((ref) {
-  final notes = ref
-      .watch(allNotesStreamProvider)
-      .maybeWhen(data: (d) => d, orElse: () => const <Note>[]);
-  final tags = <String>{};
-  for (final note in notes) {
-    tags.addAll(note.tags);
-  }
-  final list = tags.toList()..sort();
-  return list;
-});
-
 /// 笔记列表流：drift 流式查询，置顶优先 → updatedAt 倒序；随搜索关键字
-/// 与标签筛选自动过滤（两者并存，task-28）。
+/// 与文件夹筛选自动过滤（并存，task-32）。
+///
+/// - [folderFilterProvider] 为 null（「全部」）= 所有活跃笔记（含未分类）；
+/// - 选中文件夹 = 仅该文件夹内笔记（folderId == 选中 id）；
+/// - 搜索在文件夹过滤结果内生效（与文件夹筛选并存）。
 ///
 /// UI 只消费此流渲染列表；变更一律经 NoteRepository 写库后由 drift 流
 /// 自动驱动刷新（单向数据流，见 docs/技术架构.md 第 6 节）。
 final notesStreamProvider = StreamProvider<List<Note>>((ref) {
   final keyword = ref.watch(searchQueryProvider);
-  final tag = ref.watch(tagFilterProvider);
+  final folderId = ref.watch(folderFilterProvider);
   final repo = ref.watch(noteRepositoryProvider);
-  if (tag.isEmpty) {
+  if (folderId == null) {
     return repo.search(keyword);
   }
-  // 标签筛选：在搜索流（置顶优先 → updatedAt 倒序）基础上按标签过滤。
-  // 个人笔记量级下 Dart 侧过滤开销可忽略；标签存 JSON 数组字符串，
-  // SQL LIKE 匹配需转义且易误匹配子串，故不落 SQL。
+  // 文件夹筛选：在搜索流基础上按 folderId 过滤（个人量级 Dart 侧过滤
+  // 开销可忽略）。
   return repo
       .search(keyword)
-      .map((notes) => notes.where((n) => n.tags.contains(tag)).toList());
+      .map((notes) => notes.where((n) => n.folderId == folderId).toList());
 });
 
 /// 回收站流：drift 流式查询，按 deletedAt 倒序（回收站页数据源）。
@@ -161,6 +203,7 @@ final syncServiceProvider = Provider<SyncService>((ref) {
   final service = SyncService(
     repository: ref.watch(noteRepositoryProvider),
     identity: ref.watch(deviceIdentityProvider),
+    folderRepository: ref.watch(folderRepositoryProvider),
     attachments: ref.watch(attachmentsStoreProvider),
   );
   ref.onDispose(service.dispose);

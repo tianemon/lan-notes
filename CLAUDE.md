@@ -162,6 +162,7 @@ flutter test              # 跑单元测试
 3. **version 单调递增**：任何笔记写库，凡采用远端数据后本地 version 必须取 max(本地, 远端)（只增不减，禁止回退；task-9 联调修订，原 max+1 会导致版本膨胀破坏删除防乱序，见 docs/技术架构.md 7.3 节）
 4. **UI 风格**：EE 风格（参考 EasyEdit）——灰白亮色（背景 #F2F2F7、卡片白 85% 半透明、强调色 #4F6EF7）/ 暗夜蓝暗色（背景 #0D1B2A、卡片 #1B2838、文字 #E0E0E0、强调色 #5B9BD5）+ 圆角 16 + 玻璃装饰（列表卡片半透明模拟零 GPU、弹窗/菜单 BackdropFilter blur 20）+ 表面分层（背景/卡片/浮层）。设计令牌与卡片工厂统一在 lib/app/theme.dart + lib/app/ui/widgets/glass_style.dart，全站卡片/弹窗一律走 GlassCard / showGlassDialog，禁止散落自定义 Card/AlertDialog（task-25 用户确认方向变更，原 Material 3 flat 已废弃）
 5. **单向数据流**：UI 只消费 Provider 流，变更一律走 NoteRepository，禁止在 Widget 里直接操作数据库
+6. **文件夹归类（task-32）**：Folders 表字段与 Notes 同构（LWW 全复用，无墓碑）；文件夹删除 = 软删除不可恢复（无回收站，删除前二选一确认）；排序 = isPinned DESC → sortOrder ASC（置顶区/普通区各自拖拽排序，跨区走菜单置顶/取消置顶，reorder 归一化 0..n-1）；notes.folderId null=未分类；协议 v6 起 folder_upsert 同步文件夹，改协议必须同步更新文档并重跑双端联调
 
 ## 4.5 关联文档
 

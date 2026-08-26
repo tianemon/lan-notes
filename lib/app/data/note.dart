@@ -33,6 +33,9 @@ class Note {
   /// 采用 = 消息 origin。全量/增量均按此过滤「从该设备同步」开关。
   final String? origin;
 
+  /// 所属文件夹 id（task-32 文件夹归类）：null=未分类。
+  final String? folderId;
+
   const Note({
     required this.id,
     required this.title,
@@ -44,6 +47,7 @@ class Note {
     this.isPinned = false,
     this.tags = const [],
     this.origin,
+    this.folderId,
   });
 
   Note copyWith({String? origin}) => Note(
@@ -57,6 +61,7 @@ class Note {
         isPinned: isPinned,
         tags: tags,
         origin: origin ?? this.origin,
+        folderId: folderId,
       );
 
   /// 从 drift 行数据转换（数据库读取 → 领域对象）。
@@ -72,6 +77,7 @@ class Note {
       isPinned: row.isPinned,
       tags: _decodeTags(row.tags),
       origin: row.origin,
+      folderId: row.folderId,
     );
   }
 
@@ -88,6 +94,7 @@ class Note {
       isPinned: isPinned,
       tags: jsonEncode(tags),
       origin: origin,
+      folderId: folderId,
     );
   }
 
@@ -104,6 +111,7 @@ class Note {
       'isPinned': isPinned,
       'tags': tags,
       if (origin != null) 'origin': origin,
+      if (folderId != null) 'folderId': folderId,
     };
   }
 
@@ -123,6 +131,7 @@ class Note {
       isPinned: (json['isPinned'] as bool?) ?? false,
       tags: _decodeTagsJson(json['tags']),
       origin: (json['origin'] as String?) ?? '',
+      folderId: json['folderId'] as String?,
     );
   }
 

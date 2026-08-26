@@ -31,7 +31,8 @@ class FolderDrawer extends ConsumerWidget {
     final selected = ref.watch(folderFilterProvider);
     final isDark = Theme.of(context).brightness == Brightness.dark;
     // 拖放注册表：每次 build 清空重建（子组件逐个注册最新 GlobalKey）。
-    ref.read(dropZoneRegistryProvider).reset();
+    final registry = ref.read(dropZoneRegistryProvider);
+    registry.reset();
 
     final folders =
         foldersAsync.maybeWhen(data: (d) => d, orElse: () => const <Folder>[]);
@@ -83,14 +84,45 @@ class FolderDrawer extends ConsumerWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  // 顶部虚线「+ 新建文件夹」拖放目标（仅多选时显示，
+                  // 文件夹按钮（用户确认：跟随侧边栏一起弹出——按钮在
+                  // 抽屉头部，抽屉滑入时按钮一起滑入；点击收起抽屉）。
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(10, 8, 10, 2),
+                    child: Row(
+                      children: [
+                        InkWell(
+                          onTap: () => ref
+                              .read(folderDrawerOpenProvider.notifier)
+                              .state = false,
+                          borderRadius: BorderRadius.circular(12),
+                          child: Padding(
+                            padding: const EdgeInsets.all(6),
+                            child: Icon(
+                              Icons.folder_outlined,
+                              size: 20,
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .onSurfaceVariant,
+                            ),
+                          ),
+                        ),
+                        const Spacer(),
+                      ],
+                    ),
+                  ),
+                  // 顶部虚线「+ 新建文件夹」拖放目标（常驻显示，
                   // 落点处理在 notes_list 拖拽收尾）。
                   const Padding(
-                    padding: EdgeInsets.fromLTRB(10, 10, 10, 4),
+                    padding: EdgeInsets.fromLTRB(10, 2, 10, 4),
                     child: _NewFolderDropTarget(),
                   ),
                   Expanded(
                     child: ListView(
+                      // auto-scroll（拖拽到抽屉边缘自动滚动）：controller +
+                      // 列表 key 由 DropZoneRegistry 持有，notes_list 拖拽时
+                      // 取可视区域矩形判边缘并驱动滚动。
+                      key: registry.drawerListKey,
+                      controller: registry.drawerScroll,
                       padding: const EdgeInsets.only(bottom: 24),
                       children: [
                         // 「全部」：固定置顶、不可操作、默认选中。
@@ -137,15 +169,7 @@ class FolderDrawer extends ConsumerWidget {
                             ),
                           ),
                         ],
-                        if (folders.isEmpty)
-                          const Padding(
-                            padding: EdgeInsets.fromLTRB(16, 24, 16, 0),
-                            child: Text(
-                              '还没有文件夹\n拖拽笔记到上方虚线按钮创建',
-                              style: TextStyle(fontSize: 12, height: 1.6),
-                              textAlign: TextAlign.center,
-                            ),
-                          ),
+
                       ],
                     ),
                   ),
@@ -200,7 +224,7 @@ class _SectionLabel extends StatelessWidget {
 
 /// 可拖拽排序区（置顶区 / 普通区）：ReorderableListView（shrinkWrap，
 /// 长按与拖拽手柄分离——长按 = 文件夹菜单，拖拽走手柄图标）。
-class _ReorderZone extends ConsumerWidget {
+class _ReorderZone extends ConsumerStatefulWidget {
   const _ReorderZone({
     super.key,
     required this.folders,
@@ -215,7 +239,18 @@ class _ReorderZone extends ConsumerWidget {
   final Future<void> Function(List<Folder> newOrder) onReorder;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_ReorderZone> createState() => _ReorderZoneState();
+}
+
+class _ReorderZoneState extends ConsumerState<_ReorderZone> {
+  /// 拖放命中注册：按文件夹 id 复用的稳定 GlobalKey（State 持有，
+  /// build 重建不更换实例——GlobalKey 每次新建会导致旧 element 卸载、
+  /// registry.rectOf 拿不到矩形，拖放命中失败，见 task-32 实测）。
+  final Map<String, GlobalKey> _keys = {};
+
+  @override
+  Widget build(BuildContext context) {
+    final folders = widget.folders;
     return ReorderableListView.builder(
       shrinkWrap: true,
       physics: const NeverScrollableScrollPhysics(),
@@ -226,21 +261,19 @@ class _ReorderZone extends ConsumerWidget {
         final list = List<Folder>.of(folders);
         final moved = list.removeAt(oldIndex);
         list.insert(newIndex, moved);
-        onReorder(list);
+        widget.onReorder(list);
       },
       itemBuilder: (context, index) {
         final folder = folders[index];
-        // 拖放命中注册：GlobalKey 每次 build 新建并覆盖注册（无状态项
-        // 重建无副作用），notes_list 拖拽时经 registry.rectOf 实时取矩形。
-        final zoneKey = GlobalKey();
+        final zoneKey = _keys[folder.id] ??= GlobalKey();
         ref.read(dropZoneRegistryProvider).register(folder.id, zoneKey);
         return _FolderItem(
           key: zoneKey,
           id: folder.id,
           name: folder.name,
           icon: Icons.folder_outlined,
-          count: countOf[folder.id] ?? 0,
-          selected: selected == folder.id,
+          count: widget.countOf[folder.id] ?? 0,
+          selected: widget.selected == folder.id,
           pinned: folder.isPinned,
           onTap: () {
             ref.read(folderFilterProvider.notifier).state = folder.id;
@@ -512,22 +545,31 @@ class _FolderItem extends ConsumerWidget {
 
 /// 顶部虚线「+ 新建文件夹」拖放目标（笔记拖拽落点，task-32）。
 ///
-/// 仅在多选模式激活时显示（原型：平时隐藏，多选拖拽时才出现）。
+/// 常驻显示（用户确认）：始终出现并注册拖放目标（__new__）。
 /// 落点命中与高亮经 [DropZoneRegistry]（id='__new__'）由 notes_list 驱动。
-class _NewFolderDropTarget extends ConsumerWidget {
+///
+/// 注意：GlobalKey 必须由 State 持有（每次 build 新建会导致旧 element
+/// 卸载、registry.rectOf 拿不到矩形——拖到按钮无反应的实测根因）。
+class _NewFolderDropTarget extends ConsumerStatefulWidget {
   const _NewFolderDropTarget();
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final multiActive = ref.watch(multiSelectProvider).isNotEmpty;
-    if (!multiActive) return const SizedBox.shrink();
+  ConsumerState<_NewFolderDropTarget> createState() =>
+      _NewFolderDropTargetState();
+}
+
+class _NewFolderDropTargetState extends ConsumerState<_NewFolderDropTarget> {
+  final GlobalKey _dropKey = GlobalKey();
+
+  @override
+  Widget build(BuildContext context) {
+    // 常驻显示（用户确认）：始终出现并注册拖放目标（__new__）。
     final registry = ref.watch(dropZoneRegistryProvider);
-    final dropKey = GlobalKey();
-    registry.register('__new__', dropKey);
+    registry.register('__new__', _dropKey);
     final hover = registry.highlighted.value == '__new__';
     final colorScheme = Theme.of(context).colorScheme;
     return Container(
-      key: dropKey,
+      key: _dropKey,
       height: 40,
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(12),

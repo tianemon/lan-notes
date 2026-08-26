@@ -47,7 +47,11 @@ class HomePage extends ConsumerWidget {
     final selected = ref.watch(multiSelectProvider);
     final multiActive = selected.isNotEmpty;
 
-    return Scaffold(
+    // 抽屉全屏覆盖（用户确认）：FolderDrawer 挂在 Scaffold 外层 Stack，
+    // 高度覆盖整个窗口（含 AppBar 区域），展开时盖住文件夹按钮。
+    return Stack(
+      children: [
+        Scaffold(
       appBar: AppBar(
         // 多选模式：全选 + 已选 N 项 + 完成；普通模式：文件夹按钮 + 三按钮。
         leading: multiActive
@@ -64,15 +68,9 @@ class HomePage extends ConsumerWidget {
                       .selectAll(ids.map((n) => n.id));
                 },
               )
-            : IconButton(
-                tooltip: '文件夹',
-                icon: const Icon(Icons.folder_outlined),
-                onPressed: () {
-                  final open = ref.read(folderDrawerOpenProvider);
-                  ref.read(folderDrawerOpenProvider.notifier).state = !open;
-                  ref.read(folderDrawerByDragProvider.notifier).state = false;
-                },
-              ),
+            // 普通态 leading 留空：文件夹按钮移到外层 Stack（z 序在
+            // 抽屉之上），抽屉展开时按钮在抽屉上层向左滑出（可见）。
+            : const SizedBox.shrink(),
         title: multiActive
             ? Text(
                 '已选 ${selected.length} 项',
@@ -125,8 +123,7 @@ class HomePage extends ConsumerWidget {
               const Expanded(child: NotesList()),
             ],
           ),
-          // 扇形菜单展开时的全屏收回区（在抽屉之下：点抽屉仍正常；
-          // FAB 在 Scaffold 槽位上层，点击 FAB 不触发收回）。
+          // 扇形菜单展开时的全屏收回区。
           if (ref.watch(fabOpenProvider))
             Positioned.fill(
               child: GestureDetector(
@@ -134,8 +131,6 @@ class HomePage extends ConsumerWidget {
                 onTap: () => ref.read(fabOpenProvider.notifier).state = false,
               ),
             ),
-          // 文件夹抽屉（玻璃面板，含全部/置顶区/普通区 + 拖放落点）。
-          const FolderDrawer(),
         ],
       ),
       // 新建入口：右下角扇形菜单（恢复 Scaffold 槽位，与改版前位置一致；
@@ -146,6 +141,32 @@ class HomePage extends ConsumerWidget {
               padding: const EdgeInsets.only(right: 8, bottom: 16),
               child: const _FabMenu(),
             ),
+      ),
+        // 文件夹抽屉（全屏玻璃面板：覆盖整个窗口高度）。
+        const FolderDrawer(),
+        // 文件夹按钮（z 序在抽屉之上）：抽屉展开时按钮**跟随抽屉向左
+        // 滑出屏幕**（动画可见，不被抽屉盖住），收回时滑回原位。
+        Positioned(
+          left: 4,
+          top: 4,
+          child: AnimatedSlide(
+            offset: ref.watch(folderDrawerOpenProvider)
+                ? const Offset(-4, 0)
+                : Offset.zero,
+            duration: const Duration(milliseconds: 260),
+            curve: Curves.easeOutCubic,
+            child: IconButton(
+              tooltip: '文件夹',
+              icon: const Icon(Icons.folder_outlined),
+              onPressed: () {
+                final open = ref.read(folderDrawerOpenProvider);
+                ref.read(folderDrawerOpenProvider.notifier).state = !open;
+                ref.read(folderDrawerByDragProvider.notifier).state = false;
+              },
+            ),
+          ),
+        ),
+      ],
     );
   }
 }

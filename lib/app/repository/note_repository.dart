@@ -350,7 +350,10 @@ class NoteRepository {
       isPinned: remote.isPinned,
       tags: remote.tags,
       origin: remote.origin ?? local.origin,
-      folderId: remote.folderId ?? local.folderId,
+      // task-32 实测 bug：folderId 必须直接用远端值（含 null=移出文件夹）——
+      // `remote.folderId ?? local.folderId` 会把 null 吞掉、保留本地旧值，
+      // 导致「移出文件夹」永远无法跨端同步。
+      folderId: remote.folderId,
     );
     await _dao.insertOrReplace(merged);
     return true;

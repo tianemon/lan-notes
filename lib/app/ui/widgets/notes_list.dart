@@ -73,10 +73,10 @@ class _DragState extends ChangeNotifier {
 }
 
 class _NotesListState extends ConsumerState<NotesList> {
-  /// 左侧梯形触发区参数（用户确认：宽 70px、高 75% 窗口、垂直居中、
-  /// 左宽右窄圆角梯形；拖拽动作开始后才出现）。
+  /// 左侧触发区参数（用户确认：宽 70px、高 90% 列表区域、垂直居中、
+  /// 矩形虚线蒙版；拖拽动作开始后才出现）。
   static const double zoneWidth = 70;
-  static const double zoneHeightRatio = 0.75;
+  static const double zoneHeightRatio = 0.9;
 
   _DragState? _drag;
 
@@ -244,9 +244,15 @@ class _NotesListState extends ConsumerState<NotesList> {
       // 抽卡：选中的卡片从列表抽走（其他卡片补位），松手恢复。
       _hiddenIds = Set<String>.of(selected);
       // 触发区：拖拽动作开始后才出现（用户确认）；矩形虚线蒙版，
-      // 不影响页面布局。
-      final size = MediaQuery.sizeOf(context);
-      _zoneRect = _buildZoneRect(size);
+      // 不影响页面布局。按 NotesList 实际区域尺寸（而非窗口）计算，
+      // 保证虚线区域在列表区域内垂直居中（用户确认）。
+      // **坐标系**：虚线按局部坐标绘制居中，但命中检测用全局坐标——
+      // 必须把局部 Rect 平移到全局（列表区域在屏幕上的偏移），
+      // 否则触发区与虚线不重叠（实测 bug）。
+      final box = context.findRenderObject() as RenderBox?;
+      final size = box?.size ?? MediaQuery.sizeOf(context);
+      final offset = box?.localToGlobal(Offset.zero) ?? Offset.zero;
+      _zoneRect = _buildZoneRect(size).shift(offset);
     });
     // ghost 层（Overlay 顶层渲染，不挤压列表；笔记数据快照传入）。
     // 必须包 Material（透明）——Overlay 顶层无 Material 上下文时，
@@ -292,15 +298,27 @@ class _NotesListState extends ConsumerState<NotesList> {
     d.update();
     // 矩形触发区命中 → 展开抽屉（drag-mode 无 backdrop）；
     // 移出触发区（且抽屉由拖拽展开）→ 收起（用户确认）。
+    // 展开判定：蓝色虚线区域命中（拖入虚线 → 抽屉展开）。
     final zoneHit = _zoneRect?.contains(globalPos) ?? false;
     final open = ref.read(folderDrawerOpenProvider);
     final byDrag = ref.read(folderDrawerByDragProvider);
     if (zoneHit && !open) {
       ref.read(folderDrawerOpenProvider.notifier).state = true;
       ref.read(folderDrawerByDragProvider.notifier).state = true;
-    } else if (!zoneHit && open && byDrag) {
-      ref.read(folderDrawerOpenProvider.notifier).state = false;
-      ref.read(folderDrawerByDragProvider.notifier).state = false;
+    } else if (open && byDrag) {
+      // 收起判定：**抽屉实际区域**（0~200px 全高）——抽屉已展开时，
+      // 卡片拖在抽屉上（70~200px 间）不收起，移出抽屉实际区域才收起。
+      //（用虚线区判定会导致拖到抽屉中部时误收起，实测 bug。）
+      final drawerRect = Rect.fromLTWH(
+        0,
+        0,
+        200,
+        MediaQuery.sizeOf(context).height,
+      );
+      if (!drawerRect.contains(globalPos)) {
+        ref.read(folderDrawerOpenProvider.notifier).state = false;
+        ref.read(folderDrawerByDragProvider.notifier).state = false;
+      }
     }
     // 落点命中检测（抽屉展开时）：新建文件夹按钮 + 各文件夹项。
     final registry = ref.read(dropZoneRegistryProvider);
@@ -318,6 +336,29 @@ class _NotesListState extends ConsumerState<NotesList> {
     if (target != d.target) {
       d.target = target;
       registry.highlighted.value = target;
+    }
+    // auto-scroll（用户需求：拖动时抽屉列表可滚动）：指针停在抽屉
+    // 列表可视区上下边缘 → 列表自动滚动，文件夹多时拖到目标不用
+    // 先松手再滚。仅在抽屉展开（拖拽展开）时生效。
+    if (ref.read(folderDrawerOpenProvider)) {
+      final listCtx = registry.drawerListKey.currentContext;
+      if (listCtx != null) {
+        final box = listCtx.findRenderObject() as RenderBox?;
+        if (box != null) {
+          final rect = box.localToGlobal(Offset.zero) & box.size;
+          const edge = 36.0;
+          const step = 10.0;
+          final sc = registry.drawerScroll;
+          if (sc.hasClients) {
+            final pos = sc.position;
+            if (globalPos.dy < rect.top + edge) {
+              sc.jumpTo((pos.pixels - step).clamp(0.0, pos.maxScrollExtent));
+            } else if (globalPos.dy > rect.bottom - edge) {
+              sc.jumpTo((pos.pixels + step).clamp(0.0, pos.maxScrollExtent));
+            }
+          }
+        }
+      }
     }
   }
 
@@ -1187,11 +1228,14 @@ class _MultiSelectSheet extends ConsumerWidget {
         child: child,
       ),
       child: Container(
-        margin: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+        // 底边贴紧窗口底部（用户确认：无底部间距、底部直角）。
+        margin: const EdgeInsets.fromLTRB(12, 0, 12, 0),
         constraints: const BoxConstraints(maxWidth: 480),
         decoration: BoxDecoration(
           color: isDark ? const Color(0xFF223344) : Colors.white,
-          borderRadius: BorderRadius.circular(20),
+          borderRadius: const BorderRadius.vertical(
+            top: Radius.circular(20),
+          ),
           border: Border.all(
             color: isDark
                 ? Colors.white.withValues(alpha: 0.08)
@@ -1207,9 +1251,8 @@ class _MultiSelectSheet extends ConsumerWidget {
         ),
         clipBehavior: Clip.antiAlias,
         // 横向排列（用户确认）：菜单项一行排开，图标上/文字下。
-        child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 10),
-          child: Row(
+        // 高度 = 按钮区域高度（无额外上下 padding，用户确认）。
+        child: Row(
             children: [
               // 置顶：仅单选时显示。
               if (single != null)
@@ -1281,7 +1324,6 @@ class _MultiSelectSheet extends ConsumerWidget {
               ),
             ],
           ),
-        ),
       ),
     );
   }
@@ -1359,11 +1401,18 @@ class _DropZoneRect extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
-    final size = MediaQuery.sizeOf(context);
-    final rect = _NotesListState._buildZoneRect(size, w: width);
-    return CustomPaint(
-      painter: _RectDashPainter(rect: rect, color: colorScheme.primary),
-      child: const SizedBox.expand(),
+    // 按实际约束高度垂直居中（与命中检测同一基准：NotesList 区域）。
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final rect = _NotesListState._buildZoneRect(
+          Size(width, constraints.maxHeight),
+          w: width,
+        );
+        return CustomPaint(
+          painter: _RectDashPainter(rect: rect, color: colorScheme.primary),
+          child: const SizedBox.expand(),
+        );
+      },
     );
   }
 }

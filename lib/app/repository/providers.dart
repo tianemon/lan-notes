@@ -90,8 +90,21 @@ final fabOpenProvider = StateProvider<bool>((ref) => false);
 class DropZoneRegistry {
   final Map<String, GlobalKey> _keys = {};
 
+  /// 抽屉列表滚动控制（task-32 拖拽 auto-scroll）：笔记拖拽到抽屉
+  /// 上下边缘时由 notes_list 驱动滚动，文件夹多时不用拖出抽屉找目标。
+  final ScrollController drawerScroll = ScrollController();
+
+  /// 抽屉列表根 key（auto-scroll 用：取列表可视区域矩形判边缘）。
+  final GlobalKey drawerListKey = GlobalKey();
+
   /// 当前高亮目标（'__new__' = 新建文件夹按钮；其他 = 文件夹 id；null 无）。
   final ValueNotifier<String?> highlighted = ValueNotifier(null);
+
+  /// 释放滚动控制器（provider onDispose 调用）。
+  void dispose() {
+    drawerScroll.dispose();
+    highlighted.dispose();
+  }
 
   /// 注册目标（FolderDrawer build 时逐个调用；重复注册幂等）。
   void register(String id, GlobalKey key) => _keys[id] = key;
@@ -112,9 +125,11 @@ class DropZoneRegistry {
   }
 }
 
-final dropZoneRegistryProvider = Provider<DropZoneRegistry>(
-  (ref) => DropZoneRegistry(),
-);
+final dropZoneRegistryProvider = Provider<DropZoneRegistry>((ref) {
+  final registry = DropZoneRegistry();
+  ref.onDispose(registry.dispose);
+  return registry;
+});
 
 /// 文件夹仓库：文件夹数据读写统一入口，UI 与同步层共用。
 final folderRepositoryProvider = Provider<FolderRepository>((ref) {

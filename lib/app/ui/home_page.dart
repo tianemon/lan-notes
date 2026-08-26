@@ -204,6 +204,9 @@ class _FabMenuState extends ConsumerState<_FabMenu> {
         clipBehavior: Clip.none,
         children: [
           // 扇形按钮：文件夹（上方）、笔记（左侧）。
+          // 收起时必须完全透明（AnimatedOpacity 0）——若仍渲染，选项按钮
+          // 与 FAB 重叠，其底色/阴影会被 FAB 的 BackdropFilter blur 进
+          // 背景，导致 FAB 颜色变深（用户反馈「颜色不对」的根因）。
           AnimatedPositioned(
             duration: const Duration(milliseconds: 280),
             curve: const Cubic(0.32, 0.72, 0, 1),
@@ -211,10 +214,14 @@ class _FabMenuState extends ConsumerState<_FabMenu> {
             top: _open ? 10 : 76,
             child: IgnorePointer(
               ignoring: !_open,
-              child: _FabOption(
-                icon: Icons.folder_outlined,
-                tooltip: '新建文件夹',
-                onTap: _createFolder,
+              child: AnimatedOpacity(
+                opacity: _open ? 1 : 0,
+                duration: const Duration(milliseconds: 180),
+                child: _FabOption(
+                  icon: Icons.folder_outlined,
+                  tooltip: '新建文件夹',
+                  onTap: _createFolder,
+                ),
               ),
             ),
           ),
@@ -225,10 +232,14 @@ class _FabMenuState extends ConsumerState<_FabMenu> {
             top: _open ? 72 : 76,
             child: IgnorePointer(
               ignoring: !_open,
-              child: _FabOption(
-                icon: Icons.note_alt_outlined,
-                tooltip: '新建笔记',
-                onTap: _createNote,
+              child: AnimatedOpacity(
+                opacity: _open ? 1 : 0,
+                duration: const Duration(milliseconds: 180),
+                child: _FabOption(
+                  icon: Icons.note_alt_outlined,
+                  tooltip: '新建笔记',
+                  onTap: _createNote,
+                ),
               ),
             ),
           ),
@@ -237,7 +248,6 @@ class _FabMenuState extends ConsumerState<_FabMenu> {
             right: 0,
             bottom: 0,
             child: _FrostedFab(
-              open: _open,
               onPressed: () => _setOpen(!_open),
             ),
           ),
@@ -285,6 +295,16 @@ class _FabOption extends StatelessWidget {
                         : Colors.black.withValues(alpha: 0.06),
                     width: 0.5,
                   ),
+                  // 原型 option 阴影（shadow-deep）。
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(
+                        alpha: isDark ? 0.34 : 0.12,
+                      ),
+                      blurRadius: 24,
+                      offset: const Offset(0, 8),
+                    ),
+                  ],
                 ),
                 child: Tooltip(
                   message: tooltip,
@@ -303,9 +323,8 @@ class _FabOption extends StatelessWidget {
 /// BackdropFilter blur 15 + add 图标 + 玻璃底色（暗色白 12% / 亮色黑 8%）。
 /// 展开时图标旋转 45°（+ → ×，常见展开状态提示）。
 class _FrostedFab extends StatelessWidget {
-  const _FrostedFab({required this.open, required this.onPressed});
+  const _FrostedFab({required this.onPressed});
 
-  final bool open;
   final VoidCallback onPressed;
 
   @override
@@ -318,30 +337,14 @@ class _FrostedFab extends StatelessWidget {
         child: BackdropFilter(
           filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
           child: Material(
-            // 原型色值：亮色黑 6% / 暗色白 10%（用户确认恢复）。
+            // 恢复改版前色值（用户确认）：暗色白 12% / 亮色黑 8%。
             color: (isDark ? Colors.white : Colors.black)
-                .withValues(alpha: isDark ? 0.10 : 0.06),
+                .withValues(alpha: isDark ? 0.12 : 0.08),
             shape: const CircleBorder(),
             child: InkWell(
               onTap: onPressed,
               customBorder: const CircleBorder(),
-              child: Container(
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  border: Border.all(
-                    color: isDark
-                        ? Colors.white.withValues(alpha: 0.10)
-                        : Colors.black.withValues(alpha: 0.06),
-                    width: 0.5,
-                  ),
-                ),
-                child: AnimatedRotation(
-                  turns: open ? 0.125 : 0,
-                  duration: const Duration(milliseconds: 200),
-                  curve: Curves.easeOutCubic,
-                  child: const Center(child: Icon(Icons.add, size: 28)),
-                ),
-              ),
+              child: const Center(child: Icon(Icons.add, size: 28)),
             ),
           ),
         ),

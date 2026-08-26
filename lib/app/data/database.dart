@@ -240,8 +240,21 @@ class AppDatabase extends _$AppDatabase {
             await m.addColumn(notes, notes.origin);
           }
           if (from < 11) {
-            await m.createTable(folders);
-            await m.addColumn(notes, notes.folderId);
+            // 幂等：表/列可能已存在（此前部分迁移残留——数据库 schemaVersion
+            // 未更新但表与列已建，实测用户库 duplicate column / table exists
+            // 报错）。建表前查 sqlite_master，加列前查 PRAGMA。
+            final tableExists = await customSelect(
+              "SELECT name FROM sqlite_master WHERE type='table' AND name='folders'",
+            ).get();
+            if (tableExists.isEmpty) {
+              await m.createTable(folders);
+            }
+            final cols = await customSelect('PRAGMA table_info(notes)').get();
+            final hasFolderId =
+                cols.any((c) => c.data['name'] == 'folder_id');
+            if (!hasFolderId) {
+              await m.addColumn(notes, notes.folderId);
+            }
           }
         },
       );

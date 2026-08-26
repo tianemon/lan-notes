@@ -1,7 +1,10 @@
 import 'dart:async';
 import 'dart:math' as math;
 
+import 'package:flutter/gestures.dart' show PointerRoute;
 import 'package:flutter/material.dart';
+import 'package:flutter/physics.dart' show SpringDescription, SpringSimulation;
+import 'package:flutter/scheduler.dart' show Ticker;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -80,14 +83,13 @@ class _NotesListState extends ConsumerState<NotesList> {
   /// 抽卡集合：拖拽中隐藏（其他卡片补位），松手恢复。
   Set<String> _hiddenIds = {};
 
-  /// 浮起动画信号（长按进入多选的卡片 + 序号）。
-  String? _liftId;
-  int _liftSeq = 0;
-
-  /// 梯形触发区 Path（beginDrag 时按窗口尺寸构建，命中检测用）。
-  Path? _zonePath;
+  /// 矩形触发区（beginDrag 时按窗口尺寸构建，命中检测用）。
+  Rect? _zoneRect;
 
   OverlayEntry? _ghostEntry;
+
+  /// 全局指针路由（拖拽中接管 move/up；抽卡卸载手势源卡片后仍能收尾）。
+  PointerRoute? _globalRoute;
 
   /// 左侧拖放区是否显示（拖拽中）。
   bool _dragging_ = false;
@@ -170,14 +172,15 @@ class _NotesListState extends ConsumerState<NotesList> {
               bottom: 0,
               width: zoneWidth,
               child: IgnorePointer(
-                child: _DropZoneTrapezoid(
+                child: _DropZoneRect(
                   heightRatio: zoneHeightRatio,
                   width: zoneWidth,
                 ),
               ),
             ),
-          // 底部多选操作面板（非模态：拖拽共存）。
-          if (multiActive)
+          // 底部多选操作面板：拖拽中隐藏、松手恢复（用户确认——
+          // 与长按弹菜单不冲突，拖拽时菜单不挡视线）。
+          if (multiActive && !_dragging_)
             Positioned(
               left: 0,
               right: 0,
@@ -194,11 +197,8 @@ class _NotesListState extends ConsumerState<NotesList> {
   void _beginMultiSelect(String id) {
     final notifier = ref.read(multiSelectProvider.notifier);
     if (notifier.active) return;
+    // 进入多选（无卡片放大动画，用户确认——多选时页面结构零变化）。
     notifier.enter(id);
-    setState(() {
-      _liftId = id;
-      _liftSeq++;
-    });
     // 长按后不松手：同一次手势延续为拖拽，由卡片的
     // onLongPressMoveUpdate 触发（_beginDrag）。
   }
@@ -243,9 +243,10 @@ class _NotesListState extends ConsumerState<NotesList> {
       _dragging_ = true;
       // 抽卡：选中的卡片从列表抽走（其他卡片补位），松手恢复。
       _hiddenIds = Set<String>.of(selected);
-      // 触发区：拖拽动作开始后才出现（用户确认）。
+      // 触发区：拖拽动作开始后才出现（用户确认）；矩形虚线蒙版，
+      // 不影响页面布局。
       final size = MediaQuery.sizeOf(context);
-      _zonePath = _buildZonePath(size);
+      _zoneRect = _buildZoneRect(size);
     });
     // ghost 层（Overlay 顶层渲染，不挤压列表；笔记数据快照传入）。
     final currentNotes =
@@ -258,6 +259,16 @@ class _NotesListState extends ConsumerState<NotesList> {
       ),
     );
     Overlay.of(context).insert(_ghostEntry!);
+    // 全局指针路由：抽卡会把拖拽源卡片（手势识别器所在）从树中卸载，
+    // 后续 move/up 由全局路由接管（否则 ghost 卡死、松手无响应）。
+    _globalRoute = (event) {
+      if (event is PointerMoveEvent) {
+        _moveDrag(event.position);
+      } else if (event is PointerUpEvent || event is PointerCancelEvent) {
+        _endDrag();
+      }
+    };
+    WidgetsBinding.instance.pointerRouter.addGlobalRoute(_globalRoute!);
   }
 
   /// 卡片 GlobalKey 注册表（回弹矩形用，首次创建后复用）。
@@ -274,12 +285,17 @@ class _NotesListState extends ConsumerState<NotesList> {
     if (d == null) return;
     d.position = globalPos - d.offsetInCard;
     d.update();
-    // 梯形触发区命中 → 展开抽屉（drag-mode 无 backdrop）。
-    if (_zonePath?.contains(globalPos) ?? false) {
-      if (!ref.read(folderDrawerOpenProvider)) {
-        ref.read(folderDrawerOpenProvider.notifier).state = true;
-        ref.read(folderDrawerByDragProvider.notifier).state = true;
-      }
+    // 矩形触发区命中 → 展开抽屉（drag-mode 无 backdrop）；
+    // 移出触发区（且抽屉由拖拽展开）→ 收起（用户确认）。
+    final zoneHit = _zoneRect?.contains(globalPos) ?? false;
+    final open = ref.read(folderDrawerOpenProvider);
+    final byDrag = ref.read(folderDrawerByDragProvider);
+    if (zoneHit && !open) {
+      ref.read(folderDrawerOpenProvider.notifier).state = true;
+      ref.read(folderDrawerByDragProvider.notifier).state = true;
+    } else if (!zoneHit && open && byDrag) {
+      ref.read(folderDrawerOpenProvider.notifier).state = false;
+      ref.read(folderDrawerByDragProvider.notifier).state = false;
     }
     // 落点命中检测（抽屉展开时）：新建文件夹按钮 + 各文件夹项。
     final registry = ref.read(dropZoneRegistryProvider);
@@ -305,11 +321,15 @@ class _NotesListState extends ConsumerState<NotesList> {
     if (d == null) return;
     _drag = null;
     _dragFromLongPress = false;
+    if (_globalRoute != null) {
+      WidgetsBinding.instance.pointerRouter.removeGlobalRoute(_globalRoute!);
+      _globalRoute = null;
+    }
     ref.read(dropZoneRegistryProvider).highlighted.value = null;
     final target = d.target;
     final wasDrawerByDrag = ref.read(folderDrawerByDragProvider);
     _dragging_ = false;
-    _zonePath = null;
+    _zoneRect = null;
 
     if (target != null) {
       // 落点命中：移除 ghost、关闭抽屉、恢复卡片、执行移动。
@@ -395,46 +415,12 @@ class _NotesListState extends ConsumerState<NotesList> {
     }
   }
 
-  /// 梯形触发区 Path：宽 [w]、高 = 窗口 75%（[heightRatio]）、垂直居中；
-  /// 左缘（贴屏幕边）= 底边全高（宽），右缘收窄（高 60% 居中）→ 左宽右窄
-  /// 圆角梯形（用户确认 Q1）。
-  static Path _buildZonePath(Size screen, {double w = zoneWidth}) {
+  /// 矩形触发区（用户确认：矩形虚线蒙版替代梯形）：宽 [w]、高 = 窗口
+  /// 75%（[heightRatio]）、垂直居中；纯视觉 overlay，不影响页面布局。
+  static Rect _buildZoneRect(Size screen, {double w = zoneWidth}) {
     final h = screen.height * zoneHeightRatio;
     final top = (screen.height - h) / 2;
-    final narrowH = h * 0.6;
-    final r = 14.0; // 圆角
-    final path = Path();
-    // 顺时针：左下 → 右下(收窄) → 右上 → 左上，四角圆角。
-    // 左下角
-    path.moveTo(0, top + h - r);
-    path.quadraticBezierTo(0, top + h, r, top + h);
-    // 右下角（窄边下端）
-    path.lineTo(w - r, top + h - (h - narrowH) / 2 - r + (h - narrowH));
-    // 简化：直接四边形 + 用 arcTo 圆角
-    // 重新构建：先画直角梯形，再手动圆角（用二次贝塞尔）。
-    path.reset();
-    final leftBottom = Offset(0, top + h);
-    final rightBottom = Offset(w, top + h - (h - narrowH) / 2);
-    final rightTop = Offset(w, top + (h - narrowH) / 2);
-    final leftTop = Offset(0, top);
-    // 圆角梯形 Path（每角 r 圆角，二次贝塞尔近似）
-    path
-      ..moveTo(leftTop.dx + r, leftTop.dy)
-      ..lineTo(rightTop.dx - r, rightTop.dy)
-      ..quadraticBezierTo(rightTop.dx, rightTop.dy, rightTop.dx, rightTop.dy + r)
-      ..lineTo(rightBottom.dx, rightBottom.dy - r)
-      ..quadraticBezierTo(
-        rightBottom.dx,
-        rightBottom.dy,
-        rightBottom.dx - r,
-        rightBottom.dy,
-      )
-      ..lineTo(leftBottom.dx + r, leftBottom.dy)
-      ..quadraticBezierTo(leftBottom.dx, leftBottom.dy, leftBottom.dx, leftBottom.dy - r)
-      ..lineTo(leftTop.dx, leftTop.dy + r)
-      ..quadraticBezierTo(leftTop.dx, leftTop.dy, leftTop.dx + r, leftTop.dy)
-      ..close();
-    return path;
+    return Rect.fromLTWH(0, top, w, h);
   }
 }
 
@@ -481,20 +467,12 @@ class _NoteListBody extends StatelessWidget {
           return NoteListItem(
             key: onRegisterCard(note.id),
             note: note,
-            liftSeq: _liftSeqOf(context),
-            isLift: _liftIdOf(context) == note.id,
           );
         },
       );
     }
     return _buildGrid(context);
   }
-
-  int? _liftSeqOf(BuildContext context) =>
-      context.findAncestorStateOfType<_NotesListState>()?._liftSeq;
-
-  String? _liftIdOf(BuildContext context) =>
-      context.findAncestorStateOfType<_NotesListState>()?._liftId;
 
   /// 多列瀑布流：SingleChildScrollView + Row + Expanded 多路拆列
   /// （参考 EE _buildGrid：i % columns 拆列，列间错落）。
@@ -538,8 +516,6 @@ class _NoteListBody extends StatelessWidget {
       key: onRegisterCard(note.id),
       note: note,
       maxSummaryLines: columns >= 4 ? 1 : 2,
-      liftSeq: _liftSeqOf(context),
-      isLift: _liftIdOf(context) == note.id,
     );
   }
 }
@@ -589,8 +565,6 @@ class NoteListItem extends ConsumerStatefulWidget {
     super.key,
     required this.note,
     this.maxSummaryLines = 2,
-    this.liftSeq,
-    this.isLift = false,
   });
 
   final Note note;
@@ -598,12 +572,6 @@ class NoteListItem extends ConsumerStatefulWidget {
 
   /// 摘要最大行数：单列/双列 2 行、四列 1 行（窄列适配，task-26）。
   final int maxSummaryLines;
-
-  /// 浮起动画信号（进入多选的长按卡片；_NotesListState 驱动）。
-  final int? liftSeq;
-
-  /// 本卡是否为本次长按进入多选的卡片。
-  final bool isLift;
 
   @override
   ConsumerState<NoteListItem> createState() => _NoteListItemState();
@@ -613,9 +581,6 @@ class _NoteListItemState extends ConsumerState<NoteListItem> {
   /// 入场动画标记：元素首次构建（新增/恢复）时播放淡入 + 上移；
   /// 滚动复用（同 id 元素重建，ValueKey 保证不换笔记）不重复动画。
   bool _animateIn = true;
-
-  /// 浮起动画已播放标记（liftSeq 变化时重置）。
-  int? _playedLiftSeq;
 
   @override
   void didUpdateWidget(NoteListItem oldWidget) {
@@ -630,10 +595,10 @@ class _NoteListItemState extends ConsumerState<NoteListItem> {
   @override
   Widget build(BuildContext context) {
     if (!_animateIn) {
-      return _wrapLift(_buildItem(context));
+      return _buildItem(context);
     }
     // 淡入 + 上移（320ms，easeOutCubic），播放完毕移除包装（_animateIn=false）
-    // 使滚动复用路径零动画开销。
+    // 使滚动复用路径零动画开销。长按进入多选无放大动画（用户确认）。
     return TweenAnimationBuilder<double>(
       tween: Tween(begin: 0, end: 1),
       duration: const Duration(milliseconds: 320),
@@ -648,23 +613,7 @@ class _NoteListItemState extends ConsumerState<NoteListItem> {
           child: child,
         ),
       ),
-      child: _wrapLift(_buildItem(context)),
-    );
-  }
-
-  /// 长按浮起动画：进入多选的卡片播放一次 scale 上浮（原型 liftUp）。
-  Widget _wrapLift(Widget child) {
-    final liftSeq = widget.liftSeq;
-    if (!widget.isLift || liftSeq == null || liftSeq == _playedLiftSeq) {
-      return child;
-    }
-    _playedLiftSeq = liftSeq;
-    return TweenAnimationBuilder<double>(
-      tween: Tween(begin: 1.0, end: 1.035),
-      duration: const Duration(milliseconds: 300),
-      curve: const Cubic(0.32, 0.72, 0, 1),
-      builder: (context, t, c) => Transform.scale(scale: t, child: c),
-      child: child,
+      child: _buildItem(context),
     );
   }
 
@@ -828,10 +777,9 @@ class _NoteListItemState extends ConsumerState<NoteListItem> {
         // 点击/长按全部由外层 GestureDetector 处理（避免双识别器冲突）。
         onTap: null,
         onLongPress: null,
-        // 多选时左侧留位给多选框。
-        padding: multiActive
-            ? const EdgeInsets.fromLTRB(44, 14, 16, 14)
-            : const EdgeInsets.fromLTRB(16, 14, 16, 14),
+        // 多选时页面结构零变化（用户确认）：padding 固定不变，多选框浮在
+        // 卡片右下角（Positioned，不占布局、不遮挡左下角时间）。
+        padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
         child: Stack(
           children: [
             Column(
@@ -883,11 +831,12 @@ class _NoteListItemState extends ConsumerState<NoteListItem> {
                 ),
               ],
             ),
-            // 多选框（左上角）：选中 = 强调色实心 + 勾。
+            // 多选框（右下角，用户确认）：选中 = 强调色实心 + 勾。
+            // 浮层渲染，不影响卡片内容布局。
             if (multiActive)
               Positioned(
-                left: 0,
-                top: 0,
+                right: 4,
+                bottom: 4,
                 child: _CheckCircle(checked: isSelected),
               ),
           ],
@@ -1249,71 +1198,81 @@ class _MultiSelectSheet extends ConsumerWidget {
           ],
         ),
         clipBehavior: Clip.antiAlias,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (single != null)
-              _SheetItem(
-                icon: single.isPinned
-                    ? Icons.push_pin
-                    : Icons.push_pin_outlined,
-                label: single.isPinned ? '取消置顶' : '置顶',
-                onTap: () async {
-                  await ref
-                      .read(noteRepositoryProvider)
-                      .setPinned(single.id, !single.isPinned);
-                  if (!context.mounted) return;
-                  ref.read(multiSelectProvider.notifier).exit();
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text(
-                        single.isPinned ? '已取消置顶' : '已置顶',
-                      ),
-                      behavior: SnackBarBehavior.floating,
-                      duration: const Duration(seconds: 2),
-                    ),
-                  );
-                },
-              ),
-            _SheetItem(
-              icon: Icons.drive_file_move_outlined,
-              label: '移动到',
-              onTap: () async {
-                await showMoveToPanel(
-                  context,
-                  ref,
-                  noteIds: List<String>.of(selected),
-                );
-                if (context.mounted) {
-                  ref.read(multiSelectProvider.notifier).exit();
-                }
-              },
-            ),
-            _SheetItem(
-              icon: Icons.delete_outline,
-              label: '删除',
-              color: colorScheme.error,
-              onTap: () async {
-                final confirmed = await showBatchDeleteConfirm(
-                  context,
-                  count: selected.length,
-                );
-                if (!confirmed || !context.mounted) return;
-                await ref
-                    .read(noteRepositoryProvider)
-                    .softDeleteNotes(List<String>.of(selected));
-                if (!context.mounted) return;
-                ref.read(multiSelectProvider.notifier).exit();
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text('已删除 ${selected.length} 条笔记'),
-                    behavior: SnackBarBehavior.floating,
-                    duration: const Duration(seconds: 2),
+        // 横向排列（用户确认）：菜单项一行排开，图标上/文字下。
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 10),
+          child: Row(
+            children: [
+              // 置顶：仅单选时显示。
+              if (single != null)
+                Expanded(
+                  child: _SheetItem(
+                    icon: single.isPinned
+                        ? Icons.push_pin
+                        : Icons.push_pin_outlined,
+                    label: single.isPinned ? '取消置顶' : '置顶',
+                    onTap: () async {
+                      await ref
+                          .read(noteRepositoryProvider)
+                          .setPinned(single.id, !single.isPinned);
+                      if (!context.mounted) return;
+                      ref.read(multiSelectProvider.notifier).exit();
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            single.isPinned ? '已取消置顶' : '已置顶',
+                          ),
+                          behavior: SnackBarBehavior.floating,
+                          duration: const Duration(seconds: 2),
+                        ),
+                      );
+                    },
                   ),
-                );
-              },
-            ),
-          ],
+                ),
+              Expanded(
+                child: _SheetItem(
+                  icon: Icons.drive_file_move_outlined,
+                  label: '移动到',
+                  onTap: () async {
+                    await showMoveToPanel(
+                      context,
+                      ref,
+                      noteIds: List<String>.of(selected),
+                    );
+                    if (context.mounted) {
+                      ref.read(multiSelectProvider.notifier).exit();
+                    }
+                  },
+                ),
+              ),
+              Expanded(
+                child: _SheetItem(
+                  icon: Icons.delete_outline,
+                  label: '删除',
+                  color: colorScheme.error,
+                  onTap: () async {
+                    final confirmed = await showBatchDeleteConfirm(
+                      context,
+                      count: selected.length,
+                    );
+                    if (!confirmed || !context.mounted) return;
+                    await ref
+                        .read(noteRepositoryProvider)
+                        .softDeleteNotes(List<String>.of(selected));
+                    if (!context.mounted) return;
+                    ref.read(multiSelectProvider.notifier).exit();
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text('已删除 ${selected.length} 条笔记'),
+                        behavior: SnackBarBehavior.floating,
+                        duration: const Duration(seconds: 2),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -1349,22 +1308,27 @@ class _SheetItemState extends State<_SheetItem> {
       onExit: (_) => setState(() => _hovered = false),
       child: InkWell(
         onTap: widget.onTap,
+        borderRadius: BorderRadius.circular(14),
         child: Container(
-          height: 46,
-          padding: const EdgeInsets.symmetric(horizontal: 18),
-          color: _hovered
-              ? Theme.of(context)
-                  .colorScheme
-                  .onSurface
-                  .withValues(alpha: 0.06)
-              : null,
-          child: Row(
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          decoration: BoxDecoration(
+            color: _hovered
+                ? Theme.of(context)
+                    .colorScheme
+                    .onSurface
+                    .withValues(alpha: 0.06)
+                : null,
+            borderRadius: BorderRadius.circular(14),
+          ),
+          // 横向排列的菜单项：图标在上、文字在下，居中。
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(widget.icon, size: 18, color: color),
-              const SizedBox(width: 12),
+              Icon(widget.icon, size: 20, color: color),
+              const SizedBox(height: 4),
               Text(
                 widget.label,
-                style: TextStyle(fontSize: 14, color: color),
+                style: TextStyle(fontSize: 12.5, color: color),
               ),
             ],
           ),
@@ -1374,10 +1338,12 @@ class _SheetItemState extends State<_SheetItem> {
   }
 }
 
-/// 左侧圆角梯形触发区（拖拽中显示）：左缘贴屏幕边 = 底边（全高），
-/// 右缘收窄 → 左宽右窄；半透明强调色 + 圆角 + 文件夹图标。
-class _DropZoneTrapezoid extends StatelessWidget {
-  const _DropZoneTrapezoid({required this.width, required this.heightRatio});
+/// 左侧矩形虚线触发区（拖拽中显示，用户确认：矩形蒙版替代梯形）。
+///
+/// 样式 = **虚线轮廓 + 极淡填充（6%）**：纯视觉提示，Overlay 渲染不参与
+/// 布局、不遮挡底下内容（用户确认「蒙版类视觉效果，不影响页面布局」）。
+class _DropZoneRect extends StatelessWidget {
+  const _DropZoneRect({required this.width, required this.heightRatio});
 
   final double width;
   final double heightRatio;
@@ -1386,46 +1352,54 @@ class _DropZoneTrapezoid extends StatelessWidget {
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
     final size = MediaQuery.sizeOf(context);
-    final path = _NotesListState._buildZonePath(size, w: width);
+    final rect = _NotesListState._buildZoneRect(size, w: width);
     return CustomPaint(
-      painter: _TrapezoidPainter(path: path, color: colorScheme.primary),
-      child: Center(
-        child: Padding(
-          padding: EdgeInsets.only(right: width * 0.3),
-          child: Icon(
-            Icons.folder_outlined,
-            size: 26,
-            color: colorScheme.primary,
-          ),
-        ),
-      ),
+      painter: _RectDashPainter(rect: rect, color: colorScheme.primary),
+      child: const SizedBox.expand(),
     );
   }
 }
 
-/// 梯形触发区绘制：半透明填充 + 圆角描边（虚线感由 alpha 层次体现）。
-class _TrapezoidPainter extends CustomPainter {
-  const _TrapezoidPainter({required this.path, required this.color});
+/// 矩形触发区绘制：四边虚线描边 + 6% 极淡填充（不遮挡内容）。
+class _RectDashPainter extends CustomPainter {
+  const _RectDashPainter({required this.rect, required this.color});
 
-  final Path path;
+  final Rect rect;
   final Color color;
 
   @override
   void paint(Canvas canvas, Size size) {
     final fill = Paint()
-      ..color = color.withValues(alpha: 0.12)
+      ..color = color.withValues(alpha: 0.06)
       ..style = PaintingStyle.fill;
-    canvas.drawPath(path, fill);
+    canvas.drawRect(rect, fill);
+    // 虚线描边：四边分段绘制（dash 6 / gap 4），半透明（用户确认）。
     final border = Paint()
-      ..color = color.withValues(alpha: 0.65)
+      ..color = color.withValues(alpha: 0.45)
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1.6;
-    canvas.drawPath(path, border);
+    const dash = 6.0;
+    const gap = 4.0;
+    void dashLine(Offset a, Offset b) {
+      final len = (b - a).distance;
+      final dir = (b - a) / len;
+      var d = 0.0;
+      while (d < len) {
+        final end = (d + dash).clamp(0.0, len);
+        canvas.drawLine(a + dir * d, a + dir * end, border);
+        d = end + gap;
+      }
+    }
+
+    dashLine(rect.topLeft, rect.topRight);
+    dashLine(rect.topRight, rect.bottomRight);
+    dashLine(rect.bottomRight, rect.bottomLeft);
+    dashLine(rect.bottomLeft, rect.topLeft);
   }
 
   @override
-  bool shouldRepaint(_TrapezoidPainter old) =>
-      old.path != path || old.color != color;
+  bool shouldRepaint(_RectDashPainter old) =>
+      old.rect != rect || old.color != color;
 }
 
 /// 拖拽 ghost 层（Overlay 顶层，不挤压列表布局）。
@@ -1464,9 +1438,68 @@ class _GhostLayerState extends State<_GhostLayer>
   /// 方形迷你卡尺寸（用户确认：近似方形）。
   static const double cardSize = 132;
 
+  // ---- 弹性跟手（SpringSimulation，Flutter 官方弹簧物理，参考 iOS/安卓
+  // 拖拽图标的 elastic follow）：ghost 显示位置由弹簧驱动向目标逼近——
+  // 拖动快时轻微滞后 + 到位微回弹，带拖动速度的惯性。 ----
+
+  /// 位置 ticker（每帧读弹簧模拟结果）。
+  late final Ticker _ticker = createTicker(_onTick);
+
+  /// 当前弹簧模拟（null = 静止在目标上）。
+  _Spring2D? _sim;
+
+  /// 弹簧已运行时间（秒，帧间隔累计；每次目标变化重置——ticker 的
+  /// elapsed 是启动以来时间、重启归零，不能直接当弹簧时间）。
+  double _simTime = 0;
+
+  /// 上一帧 ticker 时间（帧间隔计算用）。
+  Duration _lastElapsed = Duration.zero;
+
+  /// 当前显示位置（弹簧插值结果）。
+  Offset _displayPos = Offset.zero;
+
+  /// 链式跟随位置（安卓移动图标方案）：每张选中卡的当前显示位置，
+  /// 与 drag.ids 一一对应——主卡（[0]）由弹簧驱动，其余卡**按时间延迟
+  /// 依次启动**：卡 i 显示 = 主卡 (i×[delayPerLevel]) 前的历史位置 +
+  /// 固定层叠偏移——依次移动形成拖影、相对位置恒定（规则排列不交叉）。
+  final List<Offset> _chain = [];
+
+  /// 主卡位置历史（时间 → 位置，依次延迟采样用）：拖动中底层卡
+  /// 依次延迟跟随（第一张先动、底层依次移动的拖影动画，用户认可版）。
+  final List<_HistoryPoint> _history = [];
+
+  /// 每层延迟（卡2 晚 45ms、卡3 晚 90ms…依次启动）。
+  static const int _delayPerLevelMicros = 45 * 1000;
+
+  /// 历史保留时长（最长延迟 + 余量）。
+  static const int _historyLifetimeMicros = 600 * 1000;
+
+  /// 上一次目标与时间（拖动速度估算用；ticker 无公开 elapsed，
+  /// 用系统时钟微秒）。
+  Offset _lastTarget = Offset.zero;
+  int _lastTargetMicros = 0;
+  Offset _targetVelocity = Offset.zero;
+
+  /// 弹簧参数（成熟手感：较低刚度 + 低阻尼——拖拽滞后明显、有弹性回弹，
+  /// 配合动态拖影形成彗尾效果）。
+  static const SpringDescription _springDesc = SpringDescription(
+    mass: 1.0,
+    stiffness: 180,
+    damping: 16,
+  );
+
   @override
   void initState() {
     super.initState();
+    _displayPos = widget.drag.position;
+    _lastTarget = widget.drag.position;
+    // 链初始：主卡在指针处，其余卡依次层叠偏移（规则层叠初始态）。
+    _chain
+      ..clear()
+      ..add(_displayPos);
+    for (var i = 1; i < widget.drag.ids.length; i++) {
+      _chain.add(_displayPos + Offset(5.0 * i, 5.0 * i));
+    }
     if (widget.isFlyingBack) {
       // 回弹：从当前位置飞到各自原矩形，完成后移除。
       _controller.addStatusListener((status) {
@@ -1478,12 +1511,82 @@ class _GhostLayerState extends State<_GhostLayer>
     }
   }
 
+  /// 目标位置变化：创建新弹簧模拟（从当前显示位置+速度 → 新目标）。
+  void _onTargetChanged(Offset target) {
+    if (target == _lastTarget) return;
+    final nowMicros = DateTime.now().microsecondsSinceEpoch;
+    final dt = (nowMicros - _lastTargetMicros) / 1e6;
+    if (dt > 0 && dt < 0.5) {
+      // 拖动速度 = 目标位移/时间（传入弹簧作为初始速度，带惯性）。
+      _targetVelocity = (target - _lastTarget) / dt;
+    } else {
+      _targetVelocity = Offset.zero;
+    }
+    _lastTarget = target;
+    _lastTargetMicros = nowMicros;
+    _sim = _Spring2D(_springDesc, _displayPos, target, _targetVelocity);
+    _simTime = 0;
+    if (!_ticker.isActive) {
+      _lastElapsed = Duration.zero; // ticker 重启后 elapsed 从 0 起
+      _ticker.start();
+    }
+  }
+
+  void _onTick(Duration elapsed) {
+    // 帧间隔累计弹簧时间（ticker 重启 elapsed 归零，用间隔差不受影响）。
+    final dt = (elapsed - _lastElapsed).inMicroseconds / 1e6;
+    _lastElapsed = elapsed;
+    final sim = _sim;
+    if (sim == null) return;
+    _simTime += dt;
+    if (sim.isDone(_simTime)) {
+      _displayPos = sim.to; // 弹簧稳定：停在目标
+      _sim = null;
+      _ticker.stop();
+      // 停止：链强制收拢为精确 5px 阶梯（右下角露出面积完全一致）。
+      if (_chain.isNotEmpty) {
+        _chain[0] = _displayPos;
+        for (var i = 1; i < _chain.length; i++) {
+          _chain[i] = _displayPos + Offset(5.0 * i, 5.0 * i);
+        }
+      }
+    } else {
+      _displayPos = Offset(sim.x(_simTime), sim.y(_simTime));
+      // 动画（用户认可版）：历史采样时间延迟——卡 i = 主卡 (i×45ms)
+      // 前的位置 + 5px 阶梯（第一张先动、底层依次跟随的拖影）。
+      if (_chain.isNotEmpty) {
+        final now = DateTime.now().microsecondsSinceEpoch;
+        _history.add(_HistoryPoint(now, _displayPos));
+        _history.removeWhere(
+          (p) => now - p.micros > _historyLifetimeMicros,
+        );
+        _chain[0] = _displayPos;
+        for (var i = 1; i < _chain.length; i++) {
+          final sampled = _sampleHistory(now - i * _delayPerLevelMicros);
+          _chain[i] = sampled + Offset(5.0 * i, 5.0 * i);
+        }
+      }
+    }
+    if (mounted) setState(() {});
+  }
+
+  /// 从主卡位置历史采样目标时刻的位置（找最接近的时间点；
+  /// 历史按时间有序，从尾部倒查提高命中率）。
+  Offset _sampleHistory(int targetMicros) {
+    for (var i = _history.length - 1; i >= 0; i--) {
+      final p = _history[i];
+      if (p.micros <= targetMicros) return p.pos;
+    }
+    return _history.isEmpty ? _displayPos : _history.first.pos;
+  }
+
   void _removeSelf() {
     widget.onDone?.call();
   }
 
   @override
   void dispose() {
+    _ticker.dispose();
     _controller.dispose();
     super.dispose();
   }
@@ -1498,14 +1601,15 @@ class _GhostLayerState extends State<_GhostLayer>
     if (mainNote == null) return const SizedBox.shrink();
 
     if (!widget.isFlyingBack) {
-      // 跟随模式：位置由 drag.position 驱动。
+      // 跟随模式：拖拽目标位置变化 → 弹簧驱动显示位置。
       return SizedBox.expand(
         child: ListenableBuilder(
           listenable: drag,
           builder: (context, _) {
+            _onTargetChanged(drag.position);
             return _buildStack(
               context,
-              pos: drag.position,
+              pos: _displayPos,
               progress: null,
               notes: notes,
             );
@@ -1544,41 +1648,60 @@ class _GhostLayerState extends State<_GhostLayer>
     final cards = <Widget>[];
     final others =
         drag.ids.where((id) => id != drag.mainId).toList();
-    // 主卡残影（拖影效果：主卡后方两层渐隐残影，参考安卓移动图标）。
-    for (var s = 0; s < 2; s++) {
+    if (progress == null) {
+      // 跟随模式：链式位置渲染（安卓移动图标——底层卡依次延迟跟随，
+      // 制造拖影效果；静止时链收敛为规则层叠）。
+      // **z 序关键**：Stack 后 add 在上层——必须逆序 add（最底层卡先、
+      // 主卡最后），才能让每张卡露出上一层右下角的 7px 边缘，形成
+      // 规则阶梯（顺序 add 会让卡3 盖住卡2，卡2 露出左上条带，视觉
+      // 上「右下角露出面积不一致」）。
+      for (var i = others.length - 1; i >= 0 && i >= others.length - 4; i--) {
+        final note = notes.where((n) => n.id == others[i]).firstOrNull;
+        if (note == null) continue;
+        final pos = i + 1 < _chain.length ? _chain[i + 1] : _chain.last;
+        cards.add(_ghostCard(
+          context,
+          note: note,
+          offset: pos,
+          opacity: math.max(0.5, 0.95 - i * 0.15),
+          scale: 1.0,
+          isDark: isDark,
+        ));
+      }
+      // 主卡（最上层，放大 1.045 拿起感；弹簧跟手）。
       cards.add(_ghostCard(
         context,
         note: mainNote,
-        offset: _fly(
-          Offset((s + 1) * 10.0, (s + 1) * 10.0),
-          progress,
-          drag,
-          drag.mainId,
-        ),
-        opacity: 0.28 - s * 0.13,
-        scale: 1.0,
+        offset: _chain.isEmpty ? _displayPos : _chain[0],
+        opacity: 1.0,
+        scale: 1.045,
         isDark: isDark,
       ));
+      return Stack(
+        children: [
+          for (final c in cards) c,
+        ],
+      );
     }
-    // 其余选中卡：阶梯偏移 + 透明度递减（彗尾拖影感）。
-    for (var i = 0; i < others.length && i < 4; i++) {
+    // 回弹模式：各卡从当前位置飞回原矩形（依次归位；z 序同跟随模式，
+    // 逆序 add 保证规则阶梯）。
+    for (var i = others.length - 1; i >= 0 && i >= others.length - 4; i--) {
       final note = notes.where((n) => n.id == others[i]).firstOrNull;
       if (note == null) continue;
       cards.add(_ghostCard(
         context,
         note: note,
         offset: _fly(
-          Offset((i + 1) * 14.0, (i + 1) * 14.0),
+          Offset((i + 1) * 5.0, (i + 1) * 5.0),
           progress,
           drag,
           others[i],
         ),
-        opacity: math.max(0.45, 0.92 - i * 0.16),
+        opacity: math.max(0.5, 0.95 - i * 0.15),
         scale: 1.0,
         isDark: isDark,
       ));
     }
-    // 主卡（最上层，放大 1.045 拿起感）。
     cards.add(_ghostCard(
       context,
       note: mainNote,
@@ -1685,3 +1808,39 @@ class _GhostLayerState extends State<_GhostLayer>
   }
 
 }
+
+
+/// 主卡位置历史点（采样时刻 + 位置）。
+class _HistoryPoint {
+  const _HistoryPoint(this.micros, this.pos);
+
+  final int micros;
+  final Offset pos;
+}
+
+/// 双轴弹簧模拟（Flutter 官方 SpringSimulation 封装，x/y 独立同参）。
+///
+/// 成熟方案参考：iOS/安卓拖拽图标的 elastic follow——弹簧带质量/刚度/
+/// 阻尼，初始速度传入使运动带惯性；到位后轻微回弹后稳定。
+class _Spring2D {
+  _Spring2D(SpringDescription desc, Offset from, Offset to, Offset velocity)
+      : _x = SpringSimulation(desc, from.dx, to.dx, velocity.dx),
+        _y = SpringSimulation(desc, from.dy, to.dy, velocity.dy),
+        to = to;
+
+  final SpringSimulation _x;
+  final SpringSimulation _y;
+
+  /// 弹簧终点（稳定位置）。
+  final Offset to;
+
+  /// t 秒时 x 轴位置。
+  double x(double t) => _x.x(t);
+
+  /// t 秒时 y 轴位置。
+  double y(double t) => _y.x(t);
+
+  /// t 秒时是否已稳定（两轴都停）。
+  bool isDone(double t) => _x.isDone(t) && _y.isDone(t);
+}
+

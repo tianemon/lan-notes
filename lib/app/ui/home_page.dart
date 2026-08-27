@@ -213,6 +213,13 @@ class _FabMenuState extends ConsumerState<_FabMenu> {
 
   @override
   Widget build(BuildContext context) {
+    // 同步外部开关（HomePage 全屏收回区点按只改 provider，不经过
+    // _setOpen）——不监听则点外部后 provider 变 false 而 _open 仍 true，
+    // 子按钮不会收起（实测 bug，用户反馈）。ref.listen 必须在 build
+    // 中调用（Riverpod 限制）。
+    ref.listen(fabOpenProvider, (_, next) {
+      if (next != _open) setState(() => _open = next);
+    });
     // 容器 132×132：FAB 在右下角（中心 (104,104)）；选项按钮展开位置
     // 按原型精确坐标（fo-a 文件夹 上方 -4/-66；fo-b 笔记 左侧 -66/-4，
     // 相对 FAB 中心），收起时与 FAB 中心重合。

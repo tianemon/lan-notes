@@ -1,7 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
+
+import 'package:flutter/services.dart';
 
 /// UDP 广播发现端口。
 ///
@@ -165,6 +166,11 @@ class DiscoveryService {
   /// 接收通告的 socket（绑定 [kDiscoveryPort]，scanOnce 创建）。
   RawDatagramSocket? _receiveSocket;
 
+  /// iOS 常驻监听 socket（publish 时启动，独立于扫描 socket——
+  /// 扫描的 _receiveSocket 会被 _finishScan 关闭，不能混用）。
+  RawDatagramSocket? _residentListenSocket;
+
+
   /// 周期通告定时器（publish 启动，unpublish 停止）。
   Timer? _announceTimer;
 
@@ -176,6 +182,13 @@ class DiscoveryService {
 
   /// 扫描期间周期清理定时器（task-32：下线设备从列表移除）。
   Timer? _pruneTimer;
+
+  /// 扫描期间周期广播定时器（见 scanOnce：iOS 回播发现依赖对端广播）。
+  Timer? _scanAnnounceTimer;
+
+  /// 扫描期间周期广播间隔（5s：与「可被发现」广播周期一致）。
+  static const Duration _scanAnnounceInterval = Duration(seconds: 5);
+
 
   /// 扫描期间清理周期（task-32：1s 检查一次，下线设备及时移除）。
   static const Duration _scanPruneInterval = Duration(seconds: 1);
@@ -248,6 +261,35 @@ class DiscoveryService {
       interval,
       (_) => unawaited(_announceOnce()),
     );
+    // iOS 特例：常驻监听对端广播（其他平台按需扫描时才监听）。
+    // iOS 无法发送广播（需 multicast entitlement），发现依赖
+    // 「收到对端广播 → 单播回播」链路；若不在监听则永远收不到
+    // 对端广播、无法回播（用户实测：iPhone 开可被发现后其他设备
+    // 扫描不到——广播被拒 + 未监听）。其他平台无此问题，保持按需。
+    if (Platform.isIOS) {
+      unawaited(_bindResidentListen());
+    }
+  }
+
+  /// iOS 常驻监听接收 socket（publish 时启动、unpublish 关闭）：绑定
+  /// UDP [kDiscoveryPort] 持续接收对端广播，驱动单播回播发现链路。
+  Future<void> _bindResidentListen() async {
+    try {
+      final socket = await RawDatagramSocket.bind(
+        InternetAddress.anyIPv4,
+        kDiscoveryPort,
+        reuseAddress: true,
+        reusePort: true,
+      );
+      socket.broadcastEnabled = true;
+      _residentListenSocket = socket;
+      socket.listen((e) => _onDatagram(e, socket));
+      // ignore: avoid_print
+      print('[discovery] iOS 常驻监听已绑定 UDP $kDiscoveryPort');
+    } catch (e) {
+      // ignore: avoid_print
+      print('[discovery] iOS 常驻监听绑定失败: $e');
+    }
   }
 
   /// 停止发布（幂等）：取消通告定时器并关闭发送 socket（若扫描也停止）。
@@ -258,6 +300,12 @@ class DiscoveryService {
     _announceTimer = null;
     for (final timer in _initialAnnounceTimers) {
       timer.cancel();
+    }
+    // 关闭 iOS 常驻监听（独立于扫描 socket，不影响 _finishScan 的
+    // _receiveSocket 管理）。
+    if (Platform.isIOS) {
+      _residentListenSocket?.close();
+      _residentListenSocket = null;
     }
     _initialAnnounceTimers.clear();
     _localPort = null;
@@ -296,9 +344,18 @@ class DiscoveryService {
     _pushMerged();
     _scanCompleter = Completer<void>();
     unawaited(_bindScanSocket());
-    // 扫描开始补发一次通告：让正在扫描的对端及时收到本机（配合回播机制）。
+    // 扫描期间周期广播本机（每 5s 一次，替代仅开始一次）：iOS 的
+    // 「可被发现」依赖收到对端广播后单播回播——对端只在扫描瞬间广播
+    // 一次时，iOS 若晚开启监听就错过、无法回播（用户实测：安卓先扫描、
+    // iOS 后开可被发现 → 扫不到）。周期广播保证扫描窗口内 iOS 随时
+    // 开启都能收到本机通告。已发布才广播（无身份/端口时无可通告）。
+    _scanAnnounceTimer?.cancel();
     if (_publishing) {
       unawaited(_announceOnce());
+      _scanAnnounceTimer = Timer.periodic(_scanAnnounceInterval, (_) {
+        if (!_scanning) return;
+        unawaited(_announceOnce());
+      });
     }
     final effectiveWindow = window ?? _scanWindow;
     _scanTimer?.cancel();
@@ -329,7 +386,7 @@ class DiscoveryService {
       );
       socket.broadcastEnabled = true;
       _receiveSocket = socket;
-      socket.listen(_onDatagram);
+      socket.listen((e) => _onDatagram(e, socket));
       // ignore: avoid_print
       print('[discovery] 扫描监听已绑定 UDP $kDiscoveryPort');
     } catch (e) {
@@ -355,6 +412,8 @@ class DiscoveryService {
   void _finishScan() {
     _pruneTimer?.cancel();
     _pruneTimer = null;
+    _scanAnnounceTimer?.cancel();
+    _scanAnnounceTimer = null;
     _receiveSocket?.close();
     _receiveSocket = null;
     // task-32：扫描结束清空列表——不再定格旧设备（广播已停的设备
@@ -396,12 +455,38 @@ class DiscoveryService {
       'port': port,
       'ts': DateTime.now().millisecondsSinceEpoch,
     }));
+    // iOS 特例：无法发送 UDP 广播（需 multicast entitlement，无正式
+    // 开发者账号无法申请；dart socket send 返回成功但包不离开设备、
+    // 原生 Network.framework 报 Permission denied，均有实测）。改为
+    // **子网全 IP 单播**——枚举本机网段内所有主机地址逐个发送（UDP
+    // 单播在 iOS 上完全不受限），效果等同广播（网段内所有监听设备
+    // 都能收到）。其他平台保持广播（macOS/Android/Windows 正常）。
+    if (Platform.isIOS) {
+      final hosts = await _subnetHostAddresses();
+      // ignore: avoid_print
+      print('[discovery] iOS 子网单播 ${hosts.length} 目标');
+      final channel = const MethodChannel('easynote/udp_broadcast');
+      for (final target in hosts) {
+        try {
+          await channel.invokeMethod('send', {
+            'payload': Uint8List.fromList(payload),
+            'host': target.address,
+            'port': kDiscoveryPort,
+          });
+        } catch (e) {
+          stderr.writeln('[discovery] 子网单播发送失败 -> $target: $e');
+        }
+      }
+      return;
+    }
     final targets = await _broadcastTargets();
     // ignore: avoid_print
     print('[discovery] 广播发送 targets=${targets.map((t) => t.address).toList()}');
     for (final target in targets) {
       try {
         socket.send(payload, target, kDiscoveryPort);
+        // ignore: avoid_print
+        print('[discovery] 广播已发送 -> ${target.address}');
       } catch (e) {
         // 发送失败（网络抖动/网卡变化/路由不可达）容忍：不影响后续通告。
         stderr.writeln(
@@ -409,6 +494,54 @@ class DiscoveryService {
         );
       }
     }
+  }
+
+  /// iOS 子网单播目标：枚举本机 IPv4 所在网段的全部主机地址
+  /// （192.168.5.1 ~ 192.168.5.254，排除本机与广播地址），逐网卡收集
+  /// 去重。基于 [_subnetRangeFor] 的掩码推导（与广播地址同一套惯例）。
+  ///
+  /// 网络异常（网卡枚举失败/无有效 IPv4）返回空列表——上层容忍静默跳过。
+  Future<List<InternetAddress>> _subnetHostAddresses() async {
+    final hosts = <InternetAddress>{};
+    try {
+      final interfaces = await NetworkInterface.list(
+        includeLinkLocal: false,
+        type: InternetAddressType.IPv4,
+        includeLoopback: false,
+      );
+      for (final iface in interfaces) {
+        if (_looksLikeVirtualInterface(iface.name)) continue;
+        for (final address in iface.addresses) {
+          if (address.isLoopback || address.isLinkLocal) continue;
+          final range = _subnetRangeFor(address);
+          if (range == null) continue;
+          for (var i = range.$2; i <= range.$3; i++) {
+            final host = InternetAddress('${range.$1}.$i');
+            if (host.address == address.address) continue; // 排除本机
+            hosts.add(host);
+          }
+        }
+      }
+    } catch (_) {
+      return const [];
+    }
+    return hosts.toList();
+  }
+
+  /// 由接口 IP 推导子网主机范围：返回 (前缀, 起始, 结束)。
+  /// 与 [_broadcastAddressFor] 同一套掩码惯例：
+  /// `10/8` → 10.x.y.1~254（推导整个 A 段太大，实际按 /24 收敛）；
+  /// `172.16/12`、`192.168/16` 同理按 /24 收敛；其余按 /24 默认。
+  /// 返回 null 表示无法解析（非 IPv4 格式）。
+  ///
+  /// 注：/24 收敛是对「私有网段超大类」的务实简化——家用/办公路由器
+  /// 绝大多数是 /24 分配，枚举 254 个地址已足够；超大类全枚举开销过大
+  /// （10/8 有 1600 万地址）且无必要。
+  (String, int, int)? _subnetRangeFor(InternetAddress address) {
+    final parts = address.address.split('.').map(int.tryParse).toList();
+    if (parts.length != 4 || parts.any((p) => p == null)) return null;
+    final a = parts[0]!, b = parts[1]!, c = parts[2]!;
+    return ('$a.$b.$c', 1, 254); // 统一 /24：x.y.z.1 ~ x.y.z.254
   }
 
   /// 计算广播目标地址列表：逐网卡子网广播（IP+掩码推导）+ 255.255.255.255
@@ -474,12 +607,19 @@ class DiscoveryService {
     }
   }
 
-  /// 获取发送 socket（懒创建：anyIPv4:0 + SO_BROADCAST；多网卡广播共用）。
+  /// 获取发送 socket（懒创建：SO_BROADCAST；多网卡广播共用）。
+  ///
+  /// iOS 特例：绑定 anyIPv4 的 UDP socket 发送广播时，iOS 路由不把
+  /// 广播包送到具体接口（用户实测：iPhone 能发现别人但别人发现不了
+  /// iPhone——接收正常、发送丢包）。改为绑定本机第一个非回环 IPv4
+  /// 地址（Wi-Fi 接口），iOS 即按该接口路由广播。其他平台保持
+  /// anyIPv4（macOS/Android/Windows 无此问题）。
   Future<RawDatagramSocket> _ensureSendSocket() async {
     final existing = _sendSocket;
     if (existing != null) return existing;
+    final bindAddr = await _sendBindAddress();
     final socket = await RawDatagramSocket.bind(
-      InternetAddress.anyIPv4,
+      bindAddr,
       0,
       reuseAddress: true,
       reusePort: !Platform.isWindows,
@@ -487,6 +627,29 @@ class DiscoveryService {
     socket.broadcastEnabled = true; // SO_BROADCAST：允许发往广播地址
     _sendSocket = socket;
     return socket;
+  }
+
+  /// 发送 socket 绑定地址：iOS 取本机第一个非回环 IPv4（Wi-Fi 接口），
+  /// 其他平台 anyIPv4。取不到时回退 anyIPv4。
+  Future<InternetAddress> _sendBindAddress() async {
+    if (!Platform.isIOS) return InternetAddress.anyIPv4;
+    try {
+      final interfaces = await NetworkInterface.list(
+        includeLinkLocal: false,
+        type: InternetAddressType.IPv4,
+        includeLoopback: false,
+      );
+      for (final iface in interfaces) {
+        if (_looksLikeVirtualInterface(iface.name)) continue;
+        for (final addr in iface.addresses) {
+          if (addr.isLoopback || addr.isLinkLocal) continue;
+          return addr; // 第一个可用 IPv4（通常 en0 Wi-Fi）
+        }
+      }
+    } catch (_) {
+      // 枚举失败：回退 anyIPv4。
+    }
+    return InternetAddress.anyIPv4;
   }
 
   /// 发布与扫描都停止时关闭发送 socket（避免 enable/disable 循环泄漏 fd）。
@@ -499,11 +662,10 @@ class DiscoveryService {
 
   // ===== 通告接收 =====
 
-  void _onDatagram(RawSocketEvent event) {
+  void _onDatagram(RawSocketEvent event, RawDatagramSocket socket) {
     if (event != RawSocketEvent.read) return;
-    final socket = _receiveSocket;
-    final datagram = socket?.receive();
-    if (socket == null || datagram == null) return;
+    final datagram = socket.receive();
+    if (datagram == null) return;
     // ignore: avoid_print
     print('[discovery] 收到 UDP 包 ${datagram.address.address}:${datagram.port} len=${datagram.data.length}');
     final announcement = _parseAnnouncement(datagram.data);
@@ -528,7 +690,12 @@ class DiscoveryService {
     if (existing == null) {
       // 新设备：登记 + 立即回播自己的通告（LocalSend 式握手）。
       _devices[announcement.deviceId] = _DeviceEntry(device, now);
-      _maybeReplyAnnouncement(announcement.deviceId, now);
+      // iOS 不回播（用户确认）：子网单播扫描已周期覆盖全网段，
+      // 回播冗余且曾引入 cooldown 导致「重扫扫不到」。其他平台保留
+      // 广播回播（LocalSend 式握手，无此问题）。
+      if (!Platform.isIOS) {
+        _maybeReplyAnnouncement(announcement.deviceId, now, source);
+      }
     } else {
       existing.lastSeen = now; // 刷新最后可见时间（离线判定依据）
       if (existing.device.address.address != source.address ||
@@ -546,13 +713,24 @@ class DiscoveryService {
     }
   }
 
-  /// 新设备回播：收到新 deviceId 通告后立即广播一次自己的通告。
+  /// 新设备回播：收到新 deviceId 通告后立即发一次自己的通告。
+  ///
+  /// iOS 特例：**单播回复**来源设备（iOS 无法发送 UDP 广播——需要
+  /// multicast entitlement，见 AppDelegate/技术架构；但单播无需任何
+  /// entitlement，且对端正在监听 58888 能收到，效果等价——用户实测
+  /// 验证「iPhone 能被发现」）。其他平台保持广播（对端可能不在
+  /// 接收状态，广播更可靠）。
   ///
   /// 限频（防已收到风暴）：记录最近回播的 deviceId+时间，[_replyCooldown]
   /// 内不再对同一设备回播——周期性通告已由对端 lastSeen 维护，回播只在
   /// 设备首次出现/离线重来时触发一次。
-  void _maybeReplyAnnouncement(String deviceId, DateTime now) {
+  void _maybeReplyAnnouncement(
+    String deviceId,
+    DateTime now,
+    InternetAddress source,
+  ) {
     if (!_publishing) return; // 未发布（无身份/端口）：无通告可回播
+    // 仅非 iOS 平台调用（iOS 已去掉回播机制，见调用处）。
     final last = _lastReplyByDeviceId[deviceId];
     if (last != null && now.difference(last) < _replyCooldown) return;
     _lastReplyByDeviceId[deviceId] = now;

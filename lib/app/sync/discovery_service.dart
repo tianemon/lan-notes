@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-
 import 'package:flutter/services.dart';
 
 /// UDP 广播发现端口。
@@ -170,6 +169,11 @@ class DiscoveryService {
   /// 扫描的 _receiveSocket 会被 _finishScan 关闭，不能混用）。
   RawDatagramSocket? _residentListenSocket;
 
+  /// iOS 期望常驻监听标记：publish 置 true、unpublish 置 false。
+  /// _bindResidentListen 异步绑定完成后检查——若期间已 unpublish
+  /// （标记 false）则立即关闭新绑定的 socket，避免残留泄漏
+  /// （反复开关「可被发现」时的竞态，用户实测偶发失联）。
+  bool _wantResidentListen = false;
 
   /// 周期通告定时器（publish 启动，unpublish 停止）。
   Timer? _announceTimer;
@@ -188,7 +192,6 @@ class DiscoveryService {
 
   /// 扫描期间周期广播间隔（5s：与「可被发现」广播周期一致）。
   static const Duration _scanAnnounceInterval = Duration(seconds: 5);
-
 
   /// 扫描期间清理周期（task-32：1s 检查一次，下线设备及时移除）。
   static const Duration _scanPruneInterval = Duration(seconds: 1);
@@ -245,6 +248,7 @@ class DiscoveryService {
     required int port,
     String? deviceId,
     Duration? announceInterval,
+    bool initialAnnouncements = true,
   }) async {
     await unpublish();
     _publishing = true;
@@ -255,7 +259,14 @@ class DiscoveryService {
     if (name.isNotEmpty) _localDeviceName = name;
     _localPort = port;
     await _ensureSendSocket();
-    _scheduleInitialAnnouncements();
+    // 上线三连发（publish 时 100ms/500ms/2s 各发一次）：同步开启（enable）
+    // 保留（上线宣告）；「可被发现」（announceTemporarily）关闭——用户
+    // 确认：可被发现只靠 5s 周期广播，避免「开启瞬间三连发成功、之后
+    // 周期广播失效」的错觉与干扰（iOS 上 socket 刚创建瞬间 send 偶发
+    // 成功，与周期广播行为不一致）。
+    if (initialAnnouncements) {
+      _scheduleInitialAnnouncements();
+    }
     final interval = announceInterval ?? _announceInterval;
     _announceTimer = Timer.periodic(
       interval,
@@ -267,6 +278,7 @@ class DiscoveryService {
     // 对端广播、无法回播（用户实测：iPhone 开可被发现后其他设备
     // 扫描不到——广播被拒 + 未监听）。其他平台无此问题，保持按需。
     if (Platform.isIOS) {
+      _wantResidentListen = true;
       unawaited(_bindResidentListen());
     }
   }
@@ -282,6 +294,11 @@ class DiscoveryService {
         reusePort: true,
       );
       socket.broadcastEnabled = true;
+      // 绑定完成时若已不再需要监听（开关竞态）：立即关闭，不残留。
+      if (!_wantResidentListen) {
+        socket.close();
+        return;
+      }
       _residentListenSocket = socket;
       socket.listen((e) => _onDatagram(e, socket));
       // ignore: avoid_print
@@ -302,8 +319,10 @@ class DiscoveryService {
       timer.cancel();
     }
     // 关闭 iOS 常驻监听（独立于扫描 socket，不影响 _finishScan 的
-    // _receiveSocket 管理）。
+    // _receiveSocket 管理）。先置 _wantResidentListen=false 防绑定竞态
+    // 残留，再关闭已绑定的 socket。
     if (Platform.isIOS) {
+      _wantResidentListen = false;
       _residentListenSocket?.close();
       _residentListenSocket = null;
     }
@@ -455,28 +474,37 @@ class DiscoveryService {
       'port': port,
       'ts': DateTime.now().millisecondsSinceEpoch,
     }));
-    // iOS 特例：无法发送 UDP 广播（需 multicast entitlement，无正式
-    // 开发者账号无法申请；dart socket send 返回成功但包不离开设备、
-    // 原生 Network.framework 报 Permission denied，均有实测）。改为
-    // **子网全 IP 单播**——枚举本机网段内所有主机地址逐个发送（UDP
-    // 单播在 iOS 上完全不受限），效果等同广播（网段内所有监听设备
-    // 都能收到）。其他平台保持广播（macOS/Android/Windows 正常）。
+    // iOS 特例：无法发送 UDP **广播**（需 multicast entitlement，无正式
+    // 开发者账号无法申请；dart socket 发广播静默丢包、原生 Network.framework
+    // 报 Permission denied，均有实测）。改为 **子网全 IP 单播**——枚举本机
+    // 网段内所有主机地址逐个用 dart socket 发送（iOS 上单播完全不受限，
+    // 已有实测：单播回播 Mac 能收到），效果等同广播（网段内所有监听设备
+    // 都能收到）。dart socket 直发避免 MethodChannel 往返（253 个包毫秒级，
+    // 之前原生通道逐包调用一轮 ~15s）。其他平台保持广播。
     if (Platform.isIOS) {
       final hosts = await _subnetHostAddresses();
+      final stopwatch = Stopwatch()..start();
       // ignore: avoid_print
-      print('[discovery] iOS 子网单播 ${hosts.length} 目标');
-      final channel = const MethodChannel('easynote/udp_broadcast');
+      print('[discovery] iOS 子网单播 ${hosts.length} 目标开始');
+      // 每轮重建 socket（用户实测规律）：iOS 上 dart socket 的 UDP 发送
+      // 「仅 socket 新建后的首次/前几次成功，之后静默丢弃」（dart-lang/sdk
+      // #45824/#55564；表现：每次开可被发现保底扫到一次=新 socket 首次
+      // 成功，之后扫不到=同 socket 后续发送失败）。每轮 close 旧的并
+      // 重新 bind——每轮都是「新 socket 首次发送」，按规律应每轮成功。
+      // 代价：每轮多一次 bind/close（微秒级），可忽略。
+      await _maybeRecreateIOSSendSocket();
+      final freshSocket = _sendSocket;
+      if (freshSocket == null) return;
       for (final target in hosts) {
         try {
-          await channel.invokeMethod('send', {
-            'payload': Uint8List.fromList(payload),
-            'host': target.address,
-            'port': kDiscoveryPort,
-          });
+          freshSocket.send(payload, target, kDiscoveryPort);
         } catch (e) {
           stderr.writeln('[discovery] 子网单播发送失败 -> $target: $e');
         }
       }
+      stopwatch.stop();
+      // ignore: avoid_print
+      print('[discovery] iOS 子网单播 ${hosts.length} 目标完成，耗时 ${stopwatch.elapsedMilliseconds}ms');
       return;
     }
     final targets = await _broadcastTargets();
@@ -627,6 +655,33 @@ class DiscoveryService {
     socket.broadcastEnabled = true; // SO_BROADCAST：允许发往广播地址
     _sendSocket = socket;
     return socket;
+  }
+
+  /// iOS 每轮重建发送 socket（见 _announceOnce iOS 分支说明）：
+  /// 关闭现有并重新 bind，使每轮发送都是「新 socket 首次发送」。
+  Future<void> _maybeRecreateIOSSendSocket() async {
+    try {
+      _sendSocket?.close();
+      _sendSocket = null;
+      final bindAddr = await _sendBindAddress();
+      final socket = await RawDatagramSocket.bind(
+        bindAddr,
+        0,
+        reuseAddress: true,
+        reusePort: true,
+      );
+      socket.broadcastEnabled = true;
+      // 竞态防护：重建期间 unpublish 已执行（用户关闭可被发现）→
+      // 新 socket 无人管理，立即关闭，避免残留泄漏（反复开关场景）。
+      if (!_publishing) {
+        socket.close();
+        return;
+      }
+      _sendSocket = socket;
+    } catch (e) {
+      // 重建失败：保留旧 socket（可能仍可用）。
+      stderr.writeln('[discovery] iOS 发送 socket 重建失败: $e');
+    }
   }
 
   /// 发送 socket 绑定地址：iOS 取本机第一个非回环 IPv4（Wi-Fi 接口），

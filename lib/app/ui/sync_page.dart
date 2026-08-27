@@ -730,7 +730,10 @@ class _SyncPageState extends ConsumerState<SyncPage> {
   }
 
   /// 「可被发现」（task-31）：向外广播 30s（每 5s 一次），UI 同步倒计时。
+  /// 防重入：已 announcing 时忽略（快速连点会触发 publish/unpublish 竞态，
+  /// 偶发导致后续广播轮次失效——用户实测反复开关后有概率失联）。
   Future<void> _announceNow() async {
+    if (_announcing) return;
     setState(() => _announcing = true);
     try {
       await _service.announceTemporarily();

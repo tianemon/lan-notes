@@ -553,6 +553,8 @@ class SyncService {
       deviceId: deviceId,
       port: _server.port!,
       announceInterval: _announceTemporaryInterval,
+      // 可被发现不走上线三连发（用户确认）：只靠 5s 周期广播。
+      initialAnnouncements: false,
     );
     _announceTemporaryTimer = Timer(_announceTemporaryDuration, () {
       _announceTemporaryTimer = null;

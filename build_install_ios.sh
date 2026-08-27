@@ -15,18 +15,6 @@
 
 set -e
 
-# 颜色（仅终端输出时使用，管道/重定向时自动禁用）
-if [ -t 1 ]; then
-  GREEN='\033[0;32m'
-  YELLOW='\033[1;33m'
-  RED='\033[0;31m'
-  NC='\033[0m'
-else
-  GREEN=''
-  YELLOW=''
-  RED=''
-  NC=''
-fi
 
 LAUNCH=true
 if [ "$1" = "--no-launch" ]; then
@@ -43,32 +31,32 @@ echo "========================================"
 echo ""
 
 # ---------- 1. 查找已连接的真机 ----------
-echo -e "${GREEN}[1/4] 查找已连接的 iOS 设备...${NC}"
+echo -e "[1/4] 查找已连接的 iOS 设备..."
 # 优先取第一个已连接的 iPhone/iPad（排除模拟器）
 DEVICE_ID=$(flutter devices 2>/dev/null | grep -iE "iphone|ipad" | grep -v "simulator" | head -1 | grep -oE "[0-9a-fA-F-]{20,}" | head -1)
 if [ -z "$DEVICE_ID" ]; then
-  echo -e "${RED}未找到已连接的 iOS 真机。请通过 USB 连接并解锁设备（允许「信任此电脑」）。${NC}"
+  echo -e "未找到已连接的 iOS 真机。请通过 USB 连接并解锁设备（允许「信任此电脑」）。"
   exit 1
 fi
-echo -e "  设备 ID: ${GREEN}$DEVICE_ID${NC}"
+echo -e "  设备 ID: $DEVICE_ID"
 
 # ---------- 2. 构建 Release ----------
-echo -e "${GREEN}[2/4] 构建 iOS Release 版（约 1-2 分钟）...${NC}"
+echo -e "[2/4] 构建 iOS Release 版（约 1-2 分钟）..."
 flutter build ios --release
 APP_SOURCE="$PROJECT_DIR/build/ios/iphoneos/Runner.app"
 if [ ! -d "$APP_SOURCE" ]; then
-  echo -e "${RED}构建产物不存在: $APP_SOURCE${NC}"
+  echo -e "构建产物不存在: $APP_SOURCE"
   exit 1
 fi
-echo -e "  构建完成: ${GREEN}Runner.app${NC}"
+echo -e "  构建完成: Runner.app"
 
 # ---------- 3. 安装到设备 ----------
-echo -e "${GREEN}[3/4] 安装到设备...${NC}"
+echo -e "[3/4] 安装到设备..."
 xcrun devicectl device install app --device "$DEVICE_ID" "$APP_SOURCE"
 echo -e "  安装完成"
 
 # ---------- 4. 启动（可选） ----------
-echo -e "${GREEN}[4/4] 完成${NC}"
+echo -e "[4/4] 完成"
 BUNDLE_ID=$(defaults read "$APP_SOURCE/Info" CFBundleIdentifier 2>/dev/null || echo "com.example.lanNotes")
 if [ "$LAUNCH" = true ]; then
   echo "  启动应用（Bundle: $BUNDLE_ID）..."
@@ -79,5 +67,5 @@ fi
 
 echo ""
 echo "========================================"
-echo -e "${GREEN}iOS Release 构建安装完成${NC}"
+echo -e "iOS Release 构建安装完成"
 echo "========================================"

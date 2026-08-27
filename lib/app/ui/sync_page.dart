@@ -819,8 +819,14 @@ Widget _deviceLeading(String name) {
 /// 字体在 Windows 下部分字形空白，见 app_icons.dart 说明）。
 AppIconData? _deviceTypeIcon(String name) {
   final n = name.toLowerCase();
+  // 平板优先（ipad/tablet/平板），再判断手机——避免 ipad 落入手机分支。
+  if (n.contains('ipad') ||
+      n.contains('tablet') ||
+      n.contains('pad') ||
+      n.contains('平板')) {
+    return AppIconData.tablet;
+  }
   if (n.contains('iphone') ||
-      n.contains('ipad') ||
       n.contains('phone') ||
       n.contains('手机') ||
       n.contains('小米') ||
@@ -964,6 +970,22 @@ class _StatusDotState extends State<_StatusDot>
   }
 }
 
+/// 已配对设备行 leading：设备类型图标（按名称猜）+ 状态圆点。
+/// 猜不到类型时只返回状态圆点。图标颜色跟随连接状态（在线绿/离线灰，
+/// 用户确认：图标变绿表示在线）。
+List<Widget> _peerLeading(String name, Color statusColor) {
+  final icon = _deviceTypeIcon(name);
+  return [
+    if (icon != null) ...[
+      AppIcon(icon, size: 18, color: statusColor),
+      const SizedBox(width: 8),
+    ],
+    // 状态圆点：只留在线绿/离线灰（连接中按离线显示，不闪黄）。
+    _StatusDot(color: statusColor, pulse: false),
+    const SizedBox(width: 12),
+  ];
+}
+
 /// 已配对设备行（task-32）：状态彩色圆点 + 设备名 + 两个同步方向开关
 /// （向 B 同步 / 从 B 同步，上下排列）+ 更多菜单（取消配对）。
 ///
@@ -998,9 +1020,10 @@ class _PeerTile extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(16, 10, 4, 10),
       child: Row(
         children: [
-          // 状态圆点：只留在线绿/离线灰（连接中按离线显示，不闪黄）。
-          _StatusDot(color: statusColor, pulse: false),
-          const SizedBox(width: 12),
+          // 设备类型图标（手机/平板/笔记本/台式机，按名称猜测）+ 状态圆点。
+          // 手绘 AppIcon（MaterialIcons 字体 Windows 下部分字形空白，
+          // 见 app_icons.dart 说明）；猜不到类型只显示状态圆点。
+          ..._peerLeading(peer.deviceName, statusColor),
           Expanded(
             child: Text(
               peer.deviceName,

@@ -13,7 +13,7 @@ import 'package:flutter/material.dart';
 // `AppIcon(icon: AppIconData.folder, size: 17, color: ...)`。
 
 /// 手绘图标枚举（避免运行时 IconData 变量引用 + 不依赖字体）。
-enum AppIconData { folder, desktopWindows, smartphone, laptopMac }
+enum AppIconData { folder, desktopWindows, smartphone, laptopMac, tablet }
 
 /// 手绘图标组件：用法同 Icon，但走 CustomPainter。
 class AppIcon extends StatelessWidget {
@@ -63,9 +63,16 @@ class _AppIconPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
+    // folder 用描边（空心，与 Material folder_outlined 一致，用户确认）；
+    // 设备图标用填充（原 Icons.smartphone/laptop_mac/desktop_windows 均
+    // 为实心 baseline 变体）。
+    final isStroke = icon == AppIconData.folder;
     final paint = Paint()
       ..color = color
-      ..style = PaintingStyle.fill
+      ..style = isStroke ? PaintingStyle.stroke : PaintingStyle.fill
+      ..strokeWidth = 2.0
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round
       ..isAntiAlias = true;
     canvas.save();
     canvas.scale(size.width / 24.0, size.height / 24.0);
@@ -156,6 +163,30 @@ class _AppIconPainter extends CustomPainter {
         p.lineTo(20, 16);
         p.lineTo(4, 16);
         p.lineTo(4, 6);
+        p.close();
+      case AppIconData.tablet:
+        // material tablet: M21,4H3C1.9,4 1,4.9 1,6v12c0,1.1 0.9,2 2,2h18c1.1,0 2,-0.9 2,-2V6C23,4.9 22.1,4 21,4zM7,18H3V6h4V18zM21,18h-4V6h4V18z
+        p.moveTo(21, 4);
+        p.lineTo(3, 4);
+        p.cubicTo(1.9, 4, 1, 4.9, 1, 6);
+        p.lineTo(1, 18);
+        p.cubicTo(1, 19.1, 1.9, 20, 3, 20);
+        p.lineTo(21, 20);
+        p.cubicTo(22.1, 20, 23, 19.1, 23, 18);
+        p.lineTo(23, 6);
+        p.cubicTo(23, 4.9, 22.1, 4, 21, 4);
+        p.close();
+        p.moveTo(7, 18);
+        p.lineTo(3, 18);
+        p.lineTo(3, 6);
+        p.lineTo(7, 6);
+        p.lineTo(7, 18);
+        p.close();
+        p.moveTo(21, 18);
+        p.lineTo(17, 18);
+        p.lineTo(17, 6);
+        p.lineTo(21, 6);
+        p.lineTo(21, 18);
         p.close();
     }
     return p;

@@ -211,7 +211,8 @@ class _SectionLabel extends StatelessWidget {
       child: Text(
         label,
         style: TextStyle(
-          fontSize: 11,
+          // 手机端加大（用户反馈：抽屉内容偏小）。
+          fontSize: isDesktopPlatform ? 11 : 12.5,
           color: Theme.of(context).colorScheme.outline,
         ),
       ),
@@ -403,14 +404,15 @@ class _FolderItemState extends ConsumerState<_FolderItem> {
             // 项高度：桌面 36、手机 40（用户确认：手机端内容略小，
             // 整体放大一档；桌面保持紧凑）。
             final isMobile = !isDesktopPlatform;
+            // 手机端触屏目标 ≥44pt（用户反馈仍偏小，加大一档）。
             final content = Container(
-              height: isMobile ? 40 : 36,
+              height: isMobile ? 46 : 36,
               padding: const EdgeInsets.symmetric(horizontal: 10),
               child: Row(
                 children: [
                   IconTheme(
                     data: IconThemeData(
-                      size: isMobile ? 18 : 17,
+                      size: isMobile ? 20 : 17,
                       color: selected && !isDragging
                           ? colorScheme.primary
                           : colorScheme.onSurfaceVariant,
@@ -424,7 +426,7 @@ class _FolderItemState extends ConsumerState<_FolderItem> {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
-                        fontSize: isMobile ? 14.5 : 13.5,
+                        fontSize: isMobile ? 15.5 : 13.5,
                         fontWeight: selected && !isDragging
                             ? FontWeight.w600
                             : FontWeight.w400,
@@ -444,7 +446,7 @@ class _FolderItemState extends ConsumerState<_FolderItem> {
                   Text(
                     '$count',
                     style: TextStyle(
-                      fontSize: isMobile ? 12 : 11,
+                      fontSize: isMobile ? 13 : 11,
                       color: colorScheme.outline,
                     ),
                   ),
@@ -690,8 +692,8 @@ class _NewFolderDropTargetState extends ConsumerState<_NewFolderDropTarget> {
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 180),
                 curve: Curves.easeOutCubic,
-                // 手机端整体放大一档（用户确认：抽屉内容略小）。
-                height: isDesktopPlatform ? 32 : 36,
+                // 手机端触屏目标 ≥44pt（用户反馈仍偏小，加大一档）。
+                height: isDesktopPlatform ? 32 : 42,
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(10),
                   color: dropHover
@@ -720,7 +722,7 @@ class _NewFolderDropTargetState extends ConsumerState<_NewFolderDropTarget> {
                   children: [
                     Icon(
                       Icons.add,
-                      size: isDesktopPlatform ? 15 : 17,
+                      size: isDesktopPlatform ? 15 : 19,
                       color: (dropHover || _mouseHover)
                           ? colorScheme.primary
                           : colorScheme.onSurfaceVariant,
@@ -729,7 +731,7 @@ class _NewFolderDropTargetState extends ConsumerState<_NewFolderDropTarget> {
                     Text(
                       '新建文件夹',
                       style: TextStyle(
-                        fontSize: isDesktopPlatform ? 12.5 : 14,
+                        fontSize: isDesktopPlatform ? 12.5 : 15,
                         color: (dropHover || _mouseHover)
                             ? colorScheme.primary
                             : colorScheme.onSurfaceVariant,

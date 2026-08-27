@@ -279,12 +279,13 @@ class _ReorderZoneState extends ConsumerState<_ReorderZone> {
               ref.read(multiSelectProvider.notifier).exit();
             }
           },
-          // 拖拽手柄：拖动排序（长按保留给菜单）。
+          // 拖拽手柄：拖动排序（长按保留给菜单）。细三条横线
+          // （用户确认：Material drag_handle 偏粗，换手绘细线）。
           dragHandle: ReorderableDragStartListener(
             index: index,
             child: const Padding(
               padding: EdgeInsets.symmetric(horizontal: 4),
-              child: Icon(Icons.drag_handle, size: 16),
+              child: _DragHandleIcon(size: 16),
             ),
           ),
         );
@@ -398,15 +399,17 @@ class _FolderItemState extends ConsumerState<_FolderItem> {
                     : null);
             // 选中/悬停背景左右各缩进 10px（用户确认：看起来窄一些），
             // 内容同步缩进（与新建按钮水平 padding 对齐）。
-            // 项高度 36（用户确认：比之前扁一点，避免两个选中项紧贴）。
+            // 项高度：桌面 36、手机 40（用户确认：手机端内容略小，
+            // 整体放大一档；桌面保持紧凑）。
+            final isMobile = !isDesktopPlatform;
             final content = Container(
-              height: 36,
+              height: isMobile ? 40 : 36,
               padding: const EdgeInsets.symmetric(horizontal: 10),
               child: Row(
                 children: [
                   Icon(
                     icon,
-                    size: 17,
+                    size: isMobile ? 18 : 17,
                     color: selected && !isDragging
                         ? colorScheme.primary
                         : colorScheme.onSurfaceVariant,
@@ -418,7 +421,7 @@ class _FolderItemState extends ConsumerState<_FolderItem> {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
-                        fontSize: 13.5,
+                        fontSize: isMobile ? 14.5 : 13.5,
                         fontWeight: selected && !isDragging
                             ? FontWeight.w600
                             : FontWeight.w400,
@@ -437,7 +440,10 @@ class _FolderItemState extends ConsumerState<_FolderItem> {
                     ),
                   Text(
                     '$count',
-                    style: TextStyle(fontSize: 11, color: colorScheme.outline),
+                    style: TextStyle(
+                      fontSize: isMobile ? 12 : 11,
+                      color: colorScheme.outline,
+                    ),
                   ),
                   if (dragHandle != null) ...[const SizedBox(width: 2), dragHandle!],
                 ],
@@ -681,7 +687,8 @@ class _NewFolderDropTargetState extends ConsumerState<_NewFolderDropTarget> {
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 180),
                 curve: Curves.easeOutCubic,
-                height: 32,
+                // 手机端整体放大一档（用户确认：抽屉内容略小）。
+                height: isDesktopPlatform ? 32 : 36,
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(10),
                   color: dropHover
@@ -710,7 +717,7 @@ class _NewFolderDropTargetState extends ConsumerState<_NewFolderDropTarget> {
                   children: [
                     Icon(
                       Icons.add,
-                      size: 15,
+                      size: isDesktopPlatform ? 15 : 17,
                       color: (dropHover || _mouseHover)
                           ? colorScheme.primary
                           : colorScheme.onSurfaceVariant,
@@ -719,7 +726,7 @@ class _NewFolderDropTargetState extends ConsumerState<_NewFolderDropTarget> {
                     Text(
                       '新建文件夹',
                       style: TextStyle(
-                        fontSize: 12.5,
+                        fontSize: isDesktopPlatform ? 12.5 : 14,
                         color: (dropHover || _mouseHover)
                             ? colorScheme.primary
                             : colorScheme.onSurfaceVariant,
@@ -781,4 +788,54 @@ class _MenuButton extends StatelessWidget {
       ),
     );
   }
+}
+
+/// 拖拽手柄图标：手绘细三条横线（用户确认：Material drag_handle 偏粗，
+/// 换细圆头三条线，观感更轻盈）。线宽 1.4/24 相对缩放，任意尺寸清晰。
+class _DragHandleIcon extends StatelessWidget {
+  const _DragHandleIcon({this.size = 16});
+
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    return CustomPaint(
+      size: Size.square(size),
+      painter: _DragHandlePainter(
+        Theme.of(context).colorScheme.onSurfaceVariant,
+      ),
+    );
+  }
+}
+
+class _DragHandlePainter extends CustomPainter {
+  _DragHandlePainter(this.color);
+
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..strokeWidth = size.width * 1.4 / 24
+      ..strokeCap = StrokeCap.round
+      ..style = PaintingStyle.stroke;
+    final w = size.width;
+    final h = size.height;
+    // 三条短横线：居中，线长 14/24，间隔 3.5/24，圆头。
+    const lineLen = 14.0;
+    const gap = 3.5;
+    final startX = (w - w * lineLen / 24) / 2;
+    for (var i = 0; i < 3; i++) {
+      final y = h / 2 + (i - 1) * (h * gap / 24);
+      canvas.drawLine(
+        Offset(startX, y),
+        Offset(startX + w * lineLen / 24, y),
+        paint,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(_DragHandlePainter old) => old.color != color;
 }

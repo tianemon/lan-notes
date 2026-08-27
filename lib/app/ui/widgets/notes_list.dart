@@ -394,13 +394,7 @@ class _NotesListState extends ConsumerState<NotesList> {
         // 拖到「全部」= 移动到未分类（用户确认）。
         await ref.read(noteRepositoryProvider).moveNotesToFolder(d.ids, null);
         if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('已移动 ${d.ids.length} 条笔记到「全部」'),
-            behavior: SnackBarBehavior.floating,
-            duration: const Duration(seconds: 2),
-          ),
-        );
+        showAppSnackBar('已移动 ${d.ids.length} 条笔记到「全部」');
       } else {
         await _moveToFolder(d.ids, target);
       }
@@ -452,13 +446,7 @@ class _NotesListState extends ConsumerState<NotesList> {
         ?.name;
     await ref.read(noteRepositoryProvider).moveNotesToFolder(ids, folderId);
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('已移动 ${ids.length} 条笔记到「${folderName ?? '文件夹'}」'),
-        behavior: SnackBarBehavior.floating,
-        duration: const Duration(seconds: 2),
-      ),
-    );
+    showAppSnackBar('已移动 ${ids.length} 条笔记到「${folderName ?? '文件夹'}」');
   }
 
   /// 拖到「+ 新建文件夹」：创建「未命名」→ 批量移入 → 立即弹重命名。
@@ -1040,13 +1028,7 @@ class _NoteListItemState extends ConsumerState<NoteListItem> {
         .read(noteRepositoryProvider)
         .setPinned(widget.note.id, pinned);
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(pinned ? '已置顶' : '已取消置顶'),
-        behavior: SnackBarBehavior.floating,
-        duration: const Duration(seconds: 2),
-      ),
-    );
+    showAppSnackBar(pinned ? '已置顶' : '已取消置顶');
   }
 
   /// 弹出「移到回收站」玻璃确认框；确认后调 [noteRepositoryProvider]
@@ -1288,15 +1270,7 @@ class _MultiSelectSheet extends ConsumerWidget {
                           .setPinned(single.id, !single.isPinned);
                       if (!context.mounted) return;
                       ref.read(multiSelectProvider.notifier).exit();
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text(
-                            single.isPinned ? '已取消置顶' : '已置顶',
-                          ),
-                          behavior: SnackBarBehavior.floating,
-                          duration: const Duration(seconds: 2),
-                        ),
-                      );
+                      showAppSnackBar(single.isPinned ? '已取消置顶' : '已置顶');
                     },
                   ),
                 ),
@@ -1332,13 +1306,7 @@ class _MultiSelectSheet extends ConsumerWidget {
                         .softDeleteNotes(List<String>.of(selected));
                     if (!context.mounted) return;
                     ref.read(multiSelectProvider.notifier).exit();
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text('已删除 ${selected.length} 条笔记'),
-                        behavior: SnackBarBehavior.floating,
-                        duration: const Duration(seconds: 2),
-                      ),
-                    );
+                    showAppSnackBar('已删除 ${selected.length} 条笔记');
                   },
                 ),
               ),

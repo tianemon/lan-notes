@@ -16,6 +16,7 @@ import '../data/note.dart';
 import '../repository/attachments.dart';
 import '../repository/providers.dart';
 import 'widgets/glass_style.dart';
+import '../theme.dart';
 
 /// 保存状态：保存中 / 已保存 / 保存失败。
 ///
@@ -246,14 +247,13 @@ class _EditorPageState extends ConsumerState<EditorPage> {
 
   /// 保存图片到本地：移动端存系统相册（gal），桌面端选择目录复制。
   Future<void> _saveToLocal(BuildContext context, File file) async {
-    final messenger = ScaffoldMessenger.of(context);
     final fileName = file.uri.pathSegments.last;
     try {
       if (Platform.isAndroid || Platform.isIOS) {
         // 移动端：保存到系统相册（gal 包；Android 13+ 免权限，iOS 需相册权限）。
         final bytes = await file.readAsBytes();
         await Gal.putImageBytes(bytes, name: fileName);
-        messenger.showSnackBar(const SnackBar(content: Text('已保存到相册')));
+        showAppSnackBar('已保存到相册');
       } else if (Platform.isMacOS) {
         // macOS：自研原生保存面板（NSOpenPanel 中文按钮"保存"，替代
         // file_picker 的英文 "Open" 面板——App 无中文本地化导致回退英文，
@@ -263,7 +263,7 @@ class _EditorPageState extends ConsumerState<EditorPage> {
         if (dir == null || dir.isEmpty) return; // 用户取消
         final target = File('$dir/$fileName');
         await file.copy(target.path);
-        messenger.showSnackBar(SnackBar(content: Text('已保存到 $dir')));
+        showAppSnackBar('已保存到 $dir');
       } else {
         // Windows 等桌面端：file_picker 选择目录并复制。
         final dir = await FilePicker.platform.getDirectoryPath(
@@ -272,10 +272,10 @@ class _EditorPageState extends ConsumerState<EditorPage> {
         if (dir == null) return; // 用户取消
         final target = File('$dir/$fileName');
         await file.copy(target.path);
-        messenger.showSnackBar(SnackBar(content: Text('已保存到 $dir')));
+        showAppSnackBar('已保存到 $dir');
       }
     } catch (e) {
-      messenger.showSnackBar(SnackBar(content: Text('保存失败：$e')));
+      showAppSnackBar('保存失败：$e');
     }
   }
 

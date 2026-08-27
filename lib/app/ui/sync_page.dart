@@ -272,9 +272,7 @@ class _SyncPageState extends ConsumerState<SyncPage> {
     // 防御：页面卸载瞬间 ScaffoldMessenger.of(context) 可能抛
     // 「Looking up a deactivated widget's ancestor」（task-32 排查）。
     try {
-      ScaffoldMessenger.of(context)
-        ..hideCurrentSnackBar()
-        ..showSnackBar(SnackBar(content: Text(message)));
+      showAppSnackBar(message);
     } catch (_) {
       // 页面正在销毁：跳过提示，不崩溃。
     }

@@ -7,6 +7,7 @@ import '../repository/providers.dart';
 import '../sync/sync_service.dart';
 import '../navigation.dart';
 import 'widgets/glass_style.dart';
+import '../theme.dart';
 
 /// 全局配对弹窗控制器（Provider 单例）：App 根组件 watch 保持存活。
 ///
@@ -213,11 +214,7 @@ class PairingDialogController {
   }
 
   void _showSnack(String message) {
-    final nav = _navigatorKey.currentState;
-    if (nav == null) return;
-    ScaffoldMessenger.of(nav.context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(content: Text(message)));
+    showAppSnackBar(message);
   }
 
   void dispose() {

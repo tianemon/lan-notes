@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../data/folder.dart';
 import '../../repository/providers.dart';
 import 'glass_style.dart';
+import '../../theme.dart';
 
 /// 文件夹命名弹窗（新建/重命名共用，task-32）：玻璃输入框。
 ///
@@ -104,13 +105,7 @@ Future<void> showMoveToPanel(
   final target = folderId.isEmpty
       ? '全部'
       : (folders.where((f) => f.id == folderId).firstOrNull?.name ?? '全部');
-  ScaffoldMessenger.of(context).showSnackBar(
-    SnackBar(
-      content: Text('已移动 ${noteIds.length} 条笔记到「$target」'),
-      behavior: SnackBarBehavior.floating,
-      duration: const Duration(seconds: 2),
-    ),
-  );
+  showAppSnackBar('已移动 ${noteIds.length} 条笔记到「$target」');
 }
 
 /// 移动选择面板内容（玻璃底部面板：标题 + 全部 + 文件夹列表）。
@@ -223,13 +218,7 @@ Future<void> showDeleteFolderDialog(
     ref.read(folderFilterProvider.notifier).state = null;
   }
   if (!context.mounted) return;
-  ScaffoldMessenger.of(context).showSnackBar(
-    SnackBar(
-      content: Text('已删除文件夹「${folder.name}」'),
-      behavior: SnackBarBehavior.floating,
-      duration: const Duration(seconds: 2),
-    ),
-  );
+  showAppSnackBar('已删除文件夹「${folder.name}」');
 }
 
 /// 批量删除确认（task-32 多选删除）：确认后软删除进回收站。

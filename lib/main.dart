@@ -9,6 +9,7 @@ import 'app/router.dart';
 import 'app/theme.dart';
 import 'app/ui/pairing_dialog_controller.dart';
 
+
 void main() async {
   // 首帧前加载持久化 UI 设置（主题模式等）：本地 SQLite 毫秒级完成，
   // 保证启动首帧即应用用户选择的深/亮主题，避免「启动亮→暗闪烁」
@@ -134,6 +135,7 @@ class _LanNotesAppState extends ConsumerState<LanNotesApp>
       builder: (context, mode, _) => MaterialApp.router(
         title: 'EasyNote',
         debugShowCheckedModeBanner: false,
+        scaffoldMessengerKey: scaffoldMessengerKey,
         theme: buildLightTheme(),
         darkTheme: buildDarkTheme(),
         themeMode: mode,

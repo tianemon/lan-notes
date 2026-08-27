@@ -350,3 +350,28 @@ ThemeData buildDarkTheme() {
 
 /// 兼容入口：默认亮色主题（main.dart 已改为 theme/darkTheme + themeMode）。
 ThemeData buildAppTheme() => buildLightTheme();
+
+// ============================================================
+// 全局横幅通知（SnackBar 固定锚点）
+// ============================================================
+
+/// 全局 ScaffoldMessenger key（横幅通知固定锚点）：所有 SnackBar 经
+/// [showAppSnackBar] 弹在根 messenger 上——不随页面转场位移（用户
+/// 反馈：横幅有时随页面切换被迫位移）。main.dart 的 MaterialApp 传入。
+final GlobalKey<ScaffoldMessengerState> scaffoldMessengerKey =
+    GlobalKey<ScaffoldMessengerState>();
+
+/// 在根 ScaffoldMessenger 上弹横幅（fixed 位置，不随页面切换移动）。
+/// 所有页面统一走这里，不再用 ScaffoldMessenger.of(context)（那会锚定
+/// 到页面上下文，页面切换时横幅可能跟着转场位移）。主题已配置
+/// floating 行为，无需重复传。
+void showAppSnackBar(String message, {Duration? duration}) {
+  scaffoldMessengerKey.currentState
+    ?..hideCurrentSnackBar()
+    ..showSnackBar(
+      SnackBar(
+        content: Text(message),
+        duration: duration ?? const Duration(seconds: 2),
+      ),
+    );
+}

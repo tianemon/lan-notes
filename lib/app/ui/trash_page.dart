@@ -6,6 +6,7 @@ import '../repository/providers.dart';
 import 'widgets/empty_hint.dart';
 import 'widgets/format.dart';
 import 'widgets/glass_style.dart';
+import '../theme.dart';
 
 /// 回收站页：展示软删除（deletedAt 非 null）的笔记，按删除时间倒序。
 ///
@@ -150,16 +151,7 @@ class _TrashItem extends ConsumerWidget {
 Future<void> _restoreNote(BuildContext context, WidgetRef ref, Note note) async {
   await ref.read(noteRepositoryProvider).restoreNote(note.id);
   if (!context.mounted) return;
-  final messenger = ScaffoldMessenger.of(context);
-  messenger
-    ..hideCurrentSnackBar()
-    ..showSnackBar(
-      const SnackBar(
-        content: Text('已恢复'),
-        duration: Duration(seconds: 1),
-        behavior: SnackBarBehavior.floating,
-      ),
-    );
+  showAppSnackBar('已恢复', duration: const Duration(seconds: 1));
 }
 
 /// 单条清空：二次确认后调 [NoteRepository.purgeNote]（物理删除 + 写墓碑）。

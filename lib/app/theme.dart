@@ -28,9 +28,9 @@ const Color kLightTextPrimary = Color(0xFF1D1B16);
 const Color kLightTextSecondary = Color(0xFF6E6A63);
 
 /// 亮色主题悬浮按钮玻璃底（FAB/扇形选项，用户确认：暖奶油色——
-/// 比卡片 #FDFCF9 更暖（红蓝差 15）但比 #F5EFE3 更亮（用户反馈
-/// 略深后回调），与卡片拉开层次又不发灰）。
-const Color kLightFabGlass = Color(0xFFF9F4EA);
+/// 比卡片 #FDFCF9 更暖（红蓝差 12）但比 #F5EFE3 亮，多次微调后
+/// 取「浅一点点的暖」：与卡片拉开层次又不发灰发深）。
+const Color kLightFabGlass = Color(0xFFFBF7EF);
 
 /// 暗色（暗夜蓝）：背景 #0D1B2A、卡片 #1B2838、强调色 #5B9BD5。
 const Color kDarkBackground = Color(0xFF0D1B2A);

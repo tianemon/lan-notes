@@ -5,6 +5,7 @@ import '../../data/folder.dart';
 import '../../data/note.dart';
 import '../../repository/folder_repository.dart';
 import '../../repository/providers.dart';
+import '../../theme.dart';
 import 'note_actions.dart';
 
 /// 文件夹抽屉（task-32）：左侧滑出玻璃面板。
@@ -315,7 +316,7 @@ class _AllFolderDropTargetState extends ConsumerState<_AllFolderDropTarget> {
 /// - [id] 为 null = 「全部」固定项（不可操作：无菜单、无拖拽手柄）；
 /// - 普通项：点击选中；长按/右键 → 玻璃悬浮菜单（重命名/置顶/删除）；
 /// - 包裹 DragTarget：笔记拖拽落点（批量移动）。
-class _FolderItem extends ConsumerWidget {
+class _FolderItem extends ConsumerStatefulWidget {
   const _FolderItem({
     super.key,
     required this.id,
@@ -338,7 +339,24 @@ class _FolderItem extends ConsumerWidget {
   final Widget? dragHandle;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_FolderItem> createState() => _FolderItemState();
+}
+
+class _FolderItemState extends ConsumerState<_FolderItem> {
+  /// 桌面鼠标悬浮（驱动 hover 背景；仅桌面平台生效）。
+  bool _hovered = false;
+
+  String? get id => widget.id;
+  String get name => widget.name;
+  IconData get icon => widget.icon;
+  int get count => widget.count;
+  bool get selected => widget.selected;
+  bool get pinned => widget.pinned;
+  VoidCallback get onTap => widget.onTap;
+  Widget? get dragHandle => widget.dragHandle;
+
+  @override
+  Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
     final isAll = id == null;
     // 笔记拖拽落点高亮：ValueListenableBuilder 监听 highlighted 变化
@@ -361,8 +379,18 @@ class _FolderItem extends ConsumerWidget {
             // 用默认 hover 效果；背景再浅一档——亮色 surfaceContainer，
             // 暗色保持 surfaceContainerHighest）；选中态额外保留强调色
             // 图标 + 加粗文字。拖拽中选中背景隐藏，仅落点高亮显示。
+            // 桌面鼠标悬浮：仅无选中/无落点高亮时显示更浅一档背景
+            // （surfaceContainerLow，与选中态区分）。
             final highlightedBg =
                 dropHover || (selected && !isDragging);
+            final isDark = Theme.of(context).brightness == Brightness.dark;
+            final bgColor = highlightedBg
+                ? (isDark
+                    ? colorScheme.surfaceContainerHighest
+                    : colorScheme.surfaceContainer)
+                : (_hovered && isDesktopPlatform
+                    ? colorScheme.surfaceContainerLow
+                    : null);
             // 选中/悬停背景左右各缩进 10px（用户确认：看起来窄一些），
             // 内容同步缩进（与新建按钮水平 padding 对齐）。
             // 项高度 36（用户确认：比之前扁一点，避免两个选中项紧贴）。
@@ -420,18 +448,26 @@ class _FolderItem extends ConsumerWidget {
               margin: const EdgeInsets.symmetric(horizontal: 10),
               decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(12),
-                color: highlightedBg
-                    ? (Theme.of(context).brightness == Brightness.dark
-                        ? colorScheme.surfaceContainerHighest
-                        : colorScheme.surfaceContainer)
-                    : null,
+                color: bgColor,
               ),
               child: content,
             );
 
+            // 桌面鼠标悬浮：MouseRegion 驱动 _hovered（仅桌面平台
+            // 生效，移动端无鼠标语义）。
+            Widget interactive = wrapped;
+            if (isDesktopPlatform) {
+              interactive = MouseRegion(
+                cursor: SystemMouseCursors.click,
+                onEnter: (_) => setState(() => _hovered = true),
+                onExit: (_) => setState(() => _hovered = false),
+                child: wrapped,
+              );
+            }
+
             // 「全部」：可拖放落点（id null，注册 '__all__'），无菜单/手柄。
             if (isAll) {
-              return GestureDetector(onTap: onTap, child: wrapped);
+              return GestureDetector(onTap: onTap, child: interactive);
             }
             // 普通项：长按/右键菜单（拖拽落点由注册表 + notes_list 命中处理）。
             return GestureDetector(
@@ -439,7 +475,7 @@ class _FolderItem extends ConsumerWidget {
               onSecondaryTapUp: (d) =>
                   _showContextMenu(context, ref, d.globalPosition),
               onLongPress: () => _showContextMenu(context, ref, null),
-              child: wrapped,
+              child: interactive,
             );
           },
         );

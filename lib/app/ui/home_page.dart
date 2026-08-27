@@ -298,9 +298,10 @@ class _FabOption extends StatelessWidget {
         child: BackdropFilter(
           filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
           child: Material(
-            // 原型色值：亮色黑 6% / 暗色白 10%（与 FAB 主按钮一致）。
-            color: (isDark ? Colors.white : Colors.black)
-                .withValues(alpha: isDark ? 0.10 : 0.06),
+            // 暖色玻璃（用户确认）：亮色用主题暖黑 #1D1B16 替代纯黑
+            // 半透明，与 FAB 主按钮一致（纯黑叠暖背景会压灰）。
+            color: (isDark ? Colors.white : kLightTextPrimary)
+                .withValues(alpha: isDark ? 0.10 : 0.08),
             shape: const CircleBorder(),
             child: InkWell(
               onTap: onTap,
@@ -311,7 +312,7 @@ class _FabOption extends StatelessWidget {
                   border: Border.all(
                     color: isDark
                         ? Colors.white.withValues(alpha: 0.10)
-                        : Colors.black.withValues(alpha: 0.06),
+                        : kLightTextPrimary.withValues(alpha: 0.06),
                     width: 0.5,
                   ),
                   // 原型 option 阴影（shadow-deep）。
@@ -356,9 +357,11 @@ class _FrostedFab extends StatelessWidget {
         child: BackdropFilter(
           filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
           child: Material(
-            // 恢复改版前色值（用户确认）：暗色白 12% / 亮色黑 8%。
-            color: (isDark ? Colors.white : Colors.black)
-                .withValues(alpha: isDark ? 0.12 : 0.08),
+            // 暖色玻璃（用户确认）：亮色用主题暖黑 #1D1B16（红>绿>蓝）
+            // 替代纯黑半透明——纯黑是中性色，叠在暖背景上会把暖色压灰；
+            // 暖黑让玻璃底色带暖调，与暖白主题协调。暗色保持白 12%。
+            color: (isDark ? Colors.white : kLightTextPrimary)
+                .withValues(alpha: isDark ? 0.12 : 0.10),
             shape: const CircleBorder(),
             child: InkWell(
               onTap: onPressed,

@@ -92,7 +92,7 @@ class FolderDrawer extends ConsumerWidget {
                   // 顶部虚线「+ 新建文件夹」拖放目标（常驻显示，
                   // 落点处理在 notes_list 拖拽收尾）。
                   const Padding(
-                    padding: EdgeInsets.fromLTRB(10, 10, 10, 4),
+                    padding: EdgeInsets.fromLTRB(10, 10, 10, 9),
                     child: _NewFolderDropTarget(),
                   ),
                   Expanded(
@@ -139,7 +139,10 @@ class FolderDrawer extends ConsumerWidget {
                           ),
                         ],
                         if (normal.isNotEmpty) ...[
-                          const _SectionLabel('文件夹'),
+                          // 普通区标题已去掉（用户确认：普通文件夹与置顶
+                          // 文件夹连续排列，不显示「文件夹」分区标签；
+                          // 分区逻辑保留——置顶在前、普通在后，区内拖拽
+                          // 排序、跨区走菜单置顶/取消置顶）。
                           _ReorderZone(
                             key: const ValueKey('normal'),
                             folders: normal,
@@ -185,7 +188,10 @@ class FolderDrawer extends ConsumerWidget {
 
 }
 
-/// 分区标题（置顶 / 文件夹）。
+/// 分区标题（置顶）。
+///
+/// 左 padding 20 与文件夹项内容起点对齐（项 = 水平 margin 10 +
+/// 内容 padding 10）；上下间距保持原节奏。
 class _SectionLabel extends StatelessWidget {
   const _SectionLabel(this.label);
 
@@ -194,7 +200,7 @@ class _SectionLabel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
+      padding: const EdgeInsets.fromLTRB(20, 14, 16, 6),
       child: Text(
         label,
         style: TextStyle(
@@ -345,8 +351,12 @@ class _FolderItem extends ConsumerWidget {
       builder: (context, highlighted, _) {
         final dropHover = highlighted == (isAll ? '__all__' : id);
         // 选中 / 拖拽悬停：统一浅灰高亮（用户确认：取消蓝色与边框，
-        // 用默认 hover 效果）；选中态额外保留强调色图标 + 加粗文字。
+        // 用默认 hover 效果；背景再浅一档——亮色 surfaceContainer，
+        // 暗色保持 surfaceContainerHighest）；选中态额外保留强调色
+        // 图标 + 加粗文字。
         final highlightedBg = selected || dropHover;
+        // 选中/悬停背景左右各缩进 10px（用户确认：看起来窄一些），
+        // 内容同步缩进（与新建按钮水平 padding 对齐）。
         final content = Container(
           height: 40,
           padding: const EdgeInsets.symmetric(horizontal: 10),
@@ -391,13 +401,19 @@ class _FolderItem extends ConsumerWidget {
         );
 
         // 高亮容器（选中/悬停背景统一在此一层定义，与内容分离——
-        // 避免双层样式重复定义导致不同步）。
+        // 避免双层样式重复定义导致不同步）。水平 margin 10：背景
+        // 左右缩进，视觉更紧凑（用户确认）。
         final wrapped = AnimatedContainer(
           duration: const Duration(milliseconds: 150),
           curve: Curves.easeOutCubic,
+          margin: const EdgeInsets.symmetric(horizontal: 10),
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(12),
-            color: highlightedBg ? colorScheme.surfaceContainerHighest : null,
+            color: highlightedBg
+                ? (Theme.of(context).brightness == Brightness.dark
+                    ? colorScheme.surfaceContainerHighest
+                    : colorScheme.surfaceContainer)
+                : null,
           ),
           child: content,
         );

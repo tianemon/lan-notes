@@ -473,11 +473,19 @@ class _EditorPageState extends ConsumerState<EditorPage> {
   /// - idle 防抖 1s：停手即存；
   /// - max interval 5s：持续输入时强制落盘一次，避免长期不落盘、闪退丢稿。
   ///
-  /// 状态语义：变更瞬间不亮「保存中」（此前每字符都 saving，观感卡死）；
-  /// 「保存中」仅在 _performSave 真正写库期间显示，写库间隙回到「已保存」。
+  /// 状态语义（用户确认）：编辑期间（存在未保存变更）始终显示转圈
+  /// 「刷新」图标——表达「尚未落盘完成」；停手防抖保存完成 → 对勾。
+  /// 相比此前「仅写库瞬间转圈、编辑中显示对勾」，语义更准确：
+  /// 编辑中 = 未完成态，停手保存后 = 完成态。
   void _onChanged() {
     if (_suppressChanges) return;
     _dirty = true;
+    // 编辑中：状态切到「保存中」（转圈）。已有未保存变更时保持不变；
+    // 保存失败（error）时保留错误提示，不覆盖。
+    if (_saveStatus != _SaveStatus.saving &&
+        _saveStatus != _SaveStatus.error) {
+      _setStatus(_SaveStatus.saving);
+    }
     _wordCountCache = _titleController.text.length +
         _contentController.document.toPlainText().length;
     // idle 防抖重置。

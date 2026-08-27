@@ -34,7 +34,7 @@ cd "$PROJECT_DIR"
 
 echo ""
 echo "========================================"
-echo "  EasyNote 一键构建安装"
+echo -e "  ${GREEN}EasyNote 一键构建安装${NC}"
 echo "========================================"
 echo ""
 
@@ -43,11 +43,11 @@ UNAME=$(uname -s)
 case "$UNAME" in
   Darwin)  PLATFORM="macos" ;;
   MINGW*|MSYS*|CYGWIN*) PLATFORM="windows" ;;
-  *)       echo -e "不支持的平台: $UNAME（仅支持 macOS / Windows）"; exit 1 ;;
+  *)       echo -e "${RED}不支持的平台: $UNAME（仅支持 macOS / Windows）${NC}"; exit 1 ;;
 esac
 
 # ---------- 构建 ----------
-echo -e "[1/3] 构建 Release 版: $PLATFORM"
+echo -e "${GREEN}[1/3] 构建 Release 版: $PLATFORM${NC}"
 if [ "$PLATFORM" = "macos" ]; then
   flutter build macos --release
   APP_SOURCE="$PROJECT_DIR/build/macos/Build/Products/Release/EasyNote.app"
@@ -59,12 +59,12 @@ else
 fi
 
 if [ ! -e "$APP_SOURCE" ]; then
-  echo -e "构建产物不存在: $APP_SOURCE"
+  echo -e "${RED}构建产物不存在: $APP_SOURCE${NC}"
   exit 1
 fi
 
 # ---------- 安装 ----------
-echo -e "[2/3] 安装到系统..."
+echo -e "${GREEN}[2/3] 安装到系统...${NC}"
 if [ "$PLATFORM" = "macos" ]; then
   # 若应用正在运行，先退出（否则替换会失败）
   if pgrep -f "$APP_DEST/Contents/MacOS/EasyNote" >/dev/null 2>&1; then
@@ -77,7 +77,7 @@ if [ "$PLATFORM" = "macos" ]; then
   cp -R "$APP_SOURCE" "$APP_DEST"
   # 移除隔离属性（否则首次打开可能被 Gatekeeper 拦截）
   xattr -dr com.apple.quarantine "$APP_DEST" 2>/dev/null || true
-  echo -e "  已安装到 $APP_DEST"
+  echo -e "  已安装到 ${GREEN}$APP_DEST${NC}"
 else
   # Windows：整目录复制（含 exe + 依赖 dll + data）
   if [ -d "$APP_DEST" ]; then
@@ -85,11 +85,11 @@ else
   fi
   mkdir -p "$APP_DEST"
   cp -r "$APP_SOURCE"/. "$APP_DEST"/
-  echo -e "  已安装到 $APP_DEST"
+  echo -e "  已安装到 ${GREEN}$APP_DEST${NC}"
 fi
 
 # ---------- 启动（可选） ----------
-echo -e "[3/3] 完成"
+echo -e "${GREEN}[3/3] 完成${NC}"
 if [ "$LAUNCH" = true ]; then
   echo "  启动 EasyNote..."
   if [ "$PLATFORM" = "macos" ]; then
@@ -103,5 +103,5 @@ fi
 
 echo ""
 echo "========================================"
-echo -e "构建安装完成"
+echo -e "${GREEN}构建安装完成${NC}"
 echo "========================================"

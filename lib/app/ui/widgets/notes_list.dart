@@ -324,7 +324,7 @@ class _NotesListState extends ConsumerState<NotesList> {
     final registry = ref.read(dropZoneRegistryProvider);
     String? target;
     if (ref.read(folderDrawerOpenProvider)) {
-      final candidates = ['__new__', ...registry.keys];
+      final candidates = ['__new__', '__all__', ...registry.keys];
       for (final id in candidates) {
         final r = registry.rectOf(id);
         if (r != null && r.inflate(6).contains(globalPos)) {
@@ -386,6 +386,17 @@ class _NotesListState extends ConsumerState<NotesList> {
       ref.read(multiSelectProvider.notifier).exit();
       if (target == '__new__') {
         await _createFolderAndMove(d.ids);
+      } else if (target == '__all__') {
+        // 拖到「全部」= 移动到未分类（用户确认）。
+        await ref.read(noteRepositoryProvider).moveNotesToFolder(d.ids, null);
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('已移动 ${d.ids.length} 条笔记到「全部」'),
+            behavior: SnackBarBehavior.floating,
+            duration: const Duration(seconds: 2),
+          ),
+        );
       } else {
         await _moveToFolder(d.ids, target);
       }

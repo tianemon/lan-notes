@@ -146,26 +146,29 @@ class HomePage extends ConsumerWidget {
         const FolderDrawer(),
         // 文件夹按钮（z 序在抽屉之上）：抽屉展开时按钮**跟随抽屉向左
         // 滑出屏幕**（动画可见，不被抽屉盖住），收回时滑回原位。
-        Positioned(
-          left: 4,
-          top: 4,
-          child: AnimatedSlide(
-            offset: ref.watch(folderDrawerOpenProvider)
-                ? const Offset(-4, 0)
-                : Offset.zero,
-            duration: const Duration(milliseconds: 260),
-            curve: Curves.easeOutCubic,
-            child: IconButton(
-              tooltip: '文件夹',
-              icon: const Icon(Icons.folder_outlined),
-              onPressed: () {
-                final open = ref.read(folderDrawerOpenProvider);
-                ref.read(folderDrawerOpenProvider.notifier).state = !open;
-                ref.read(folderDrawerByDragProvider.notifier).state = false;
-              },
+        // 多选模式隐藏（用户确认：避免与多选框重叠）；top 含状态栏
+        // 高度（手机端 SafeArea，用户确认：不与系统通知栏重叠）。
+        if (!multiActive)
+          Positioned(
+            left: 4,
+            top: MediaQuery.paddingOf(context).top + 4,
+            child: AnimatedSlide(
+              offset: ref.watch(folderDrawerOpenProvider)
+                  ? const Offset(-4, 0)
+                  : Offset.zero,
+              duration: const Duration(milliseconds: 260),
+              curve: Curves.easeOutCubic,
+              child: IconButton(
+                tooltip: '文件夹',
+                icon: const Icon(Icons.folder_outlined),
+                onPressed: () {
+                  final open = ref.read(folderDrawerOpenProvider);
+                  ref.read(folderDrawerOpenProvider.notifier).state = !open;
+                  ref.read(folderDrawerByDragProvider.notifier).state = false;
+                },
+              ),
             ),
           ),
-        ),
       ],
     );
   }

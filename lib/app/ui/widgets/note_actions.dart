@@ -15,31 +15,64 @@ Future<String?> showFolderNameDialog(
   String initial = '',
   String confirmLabel = '创建',
 }) async {
-  final controller = TextEditingController(text: initial);
-  final name = await showGlassDialog<String>(
+  final fieldKey = GlobalKey<_FolderNameFieldState>();
+  final result = await showGlassDialog<String>(
     context: context,
     title: Text(title),
-    content: TextField(
-      controller: controller,
-      autofocus: true,
-      maxLength: 20,
-      decoration: const InputDecoration(hintText: '文件夹名称'),
-      onSubmitted: (v) => Navigator.of(context).pop(v.trim()),
-    ),
+    content: _FolderNameField(key: fieldKey, initial: initial),
     actions: [
       TextButton(
         onPressed: () => Navigator.of(context).pop(),
         child: const Text('取消'),
       ),
       FilledButton(
-        onPressed: () => Navigator.of(context).pop(controller.text.trim()),
+        onPressed: () =>
+            Navigator.of(context).pop(fieldKey.currentState?.text.trim()),
         child: Text(confirmLabel),
       ),
     ],
   );
-  controller.dispose();
-  if (name == null || name.isEmpty) return null;
-  return name;
+  if (result == null || result.isEmpty) return null;
+  return result;
+}
+
+/// 命名输入框（State 持有 controller，dispose 时释放——controller 生命周期
+/// 与 TextField element 一致，避免 showDialog future 在 pop 时即完成、
+/// 退出动画期间 controller 被先 dispose 导致的
+/// “TextEditingController was used after being disposed”崩溃，
+/// 见 folder_drawer_test 实测）。
+class _FolderNameField extends StatefulWidget {
+  const _FolderNameField({super.key, required this.initial});
+
+  final String initial;
+
+  @override
+  State<_FolderNameField> createState() => _FolderNameFieldState();
+}
+
+class _FolderNameFieldState extends State<_FolderNameField> {
+  late final TextEditingController _controller =
+      TextEditingController(text: widget.initial);
+
+  /// 当前输入文本（确认按钮经 GlobalKey 读取）。
+  String get text => _controller.text;
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return TextField(
+      controller: _controller,
+      autofocus: true,
+      maxLength: 20,
+      decoration: const InputDecoration(hintText: '文件夹名称'),
+      onSubmitted: (v) => Navigator.of(context).pop(v.trim()),
+    );
+  }
 }
 
 /// 「移动到」选择面板（task-32）：模态玻璃底部面板，列出「全部（未分类）」

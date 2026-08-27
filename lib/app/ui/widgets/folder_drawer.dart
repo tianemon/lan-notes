@@ -30,9 +30,12 @@ class FolderDrawer extends ConsumerWidget {
     final notesAsync = ref.watch(activeNotesStreamProvider);
     final selected = ref.watch(folderFilterProvider);
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    // 拖放注册表：每次 build 清空重建（子组件逐个注册最新 GlobalKey）。
+    // 拖放注册表：子组件各自在 build 时注册 GlobalKey（register 幂等）。
+    // 不在此处 reset()——FolderDrawer 每次 rebuild 会清空注册表，
+    // 但 const 子组件（_NewFolderDropTarget）不随之重建、无法重新注册，
+    // 导致 __new__ 被清掉后永远丢失（拖到按钮无反应的根因）。
+    // stale 条目（已删除文件夹）由 rectOf 返回 null 自动跳过。
     final registry = ref.read(dropZoneRegistryProvider);
-    registry.reset();
 
     final folders =
         foldersAsync.maybeWhen(data: (d) => d, orElse: () => const <Folder>[]);
@@ -125,19 +128,24 @@ class FolderDrawer extends ConsumerWidget {
                       controller: registry.drawerScroll,
                       padding: const EdgeInsets.only(bottom: 24),
                       children: [
-                        // 「全部」：固定置顶、不可操作、默认选中。
-                        _FolderItem(
-                          id: null,
-                          name: '全部',
-                          icon: Icons.folder_off_outlined,
-                          count: notes.length,
-                          selected: selected == null,
-                          onTap: () {
-                            ref.read(folderFilterProvider.notifier).state = null;
-                            ref
-                                .read(folderDrawerOpenProvider.notifier)
-                                .state = false;
-                          },
+                        // 「全部」：默认选中；可拖放落点（用户确认：样式
+                        // 与普通文件夹一致、图标一致、可拖入=移出文件夹）。
+                        _AllFolderDropTarget(
+                          child: _FolderItem(
+                            id: null,
+                            name: '全部',
+                            icon: Icons.folder_outlined,
+                            count: notes.length,
+                            selected: selected == null,
+                            onTap: () {
+                              ref
+                                  .read(folderFilterProvider.notifier)
+                                  .state = null;
+                              ref
+                                  .read(folderDrawerOpenProvider.notifier)
+                                  .state = false;
+                            },
+                          ),
                         ),
                         if (pinned.isNotEmpty) ...[
                           const _SectionLabel('置顶'),
@@ -297,6 +305,29 @@ class _ReorderZoneState extends ConsumerState<_ReorderZone> {
   }
 }
 
+/// 「全部」项拖放注册包装：id 为 null 无法直接注册，这里用特殊 id
+/// '__all__' 注册稳定 GlobalKey（State 持有，build 重建不换实例）。
+/// 拖到「全部」= 移动到未分类（notes_list 落点处理，用户确认）。
+class _AllFolderDropTarget extends ConsumerStatefulWidget {
+  const _AllFolderDropTarget({required this.child});
+
+  final Widget child;
+
+  @override
+  ConsumerState<_AllFolderDropTarget> createState() =>
+      _AllFolderDropTargetState();
+}
+
+class _AllFolderDropTargetState extends ConsumerState<_AllFolderDropTarget> {
+  final GlobalKey _dropKey = GlobalKey();
+
+  @override
+  Widget build(BuildContext context) {
+    ref.read(dropZoneRegistryProvider).register('__all__', _dropKey);
+    return KeyedSubtree(key: _dropKey, child: widget.child);
+  }
+}
+
 /// 单个文件夹项 / 「全部」项。
 ///
 /// - [id] 为 null = 「全部」固定项（不可操作：无菜单、无拖拽手柄）；
@@ -328,90 +359,96 @@ class _FolderItem extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final colorScheme = Theme.of(context).colorScheme;
     final isAll = id == null;
-    // 笔记拖拽落点高亮（自绘拖拽经注册表驱动，见 DropZoneRegistry）。
-    final dropHover =
-        !isAll && ref.watch(dropZoneRegistryProvider).highlighted.value == id;
-    final content = Container(
-      height: 40,
-      padding: const EdgeInsets.symmetric(horizontal: 10),
-      decoration: BoxDecoration(
-        color: selected
-            ? colorScheme.primary.withValues(alpha: 0.14)
-            : (dropHover
-                ? colorScheme.primary.withValues(alpha: 0.16)
-                : null),
-        borderRadius: BorderRadius.circular(12),
-        border: dropHover
-            ? Border.all(color: colorScheme.primary, width: 1.4)
-            : null,
-      ),
-      child: Row(
-        children: [
-          Icon(
-            icon,
-            size: 17,
-            color: dropHover
-                ? colorScheme.primary
-                : (selected
+    // 笔记拖拽落点高亮：ValueListenableBuilder 监听 highlighted 变化
+    // （ref.watch(provider).highlighted.value 只 watch provider 实例，
+    // ValueNotifier 内部变化不触发 rebuild——hover 不生效的实测根因）。
+    // 「全部」也参与高亮与拖放（用户确认：样式与普通文件夹一致）。
+    final registry = ref.watch(dropZoneRegistryProvider);
+    return ValueListenableBuilder<String?>(
+      valueListenable: registry.highlighted,
+      builder: (context, highlighted, _) {
+        final dropHover = highlighted == (isAll ? '__all__' : id);
+        final content = Container(
+          height: 40,
+          padding: const EdgeInsets.symmetric(horizontal: 10),
+          decoration: BoxDecoration(
+            color: selected
+                ? colorScheme.primary.withValues(alpha: 0.14)
+                : (dropHover
+                    ? colorScheme.primary.withValues(alpha: 0.16)
+                    : null),
+            borderRadius: BorderRadius.circular(12),
+            border: dropHover
+                ? Border.all(color: colorScheme.primary, width: 1.4)
+                : null,
+          ),
+          child: Row(
+            children: [
+              Icon(
+                icon,
+                size: 17,
+                color: dropHover
                     ? colorScheme.primary
-                    : colorScheme.onSurfaceVariant),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              name,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                fontSize: 13.5,
-                fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
-                color: colorScheme.onSurface,
+                    : (selected
+                        ? colorScheme.primary
+                        : colorScheme.onSurfaceVariant),
               ),
-            ),
-          ),
-          if (pinned)
-            Padding(
-              padding: const EdgeInsets.only(right: 2),
-              child: Icon(
-                Icons.push_pin,
-                size: 12,
-                color: colorScheme.primary,
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 13.5,
+                    fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+                    color: colorScheme.onSurface,
+                  ),
+                ),
               ),
-            ),
-          Text(
-            '$count',
-            style: TextStyle(fontSize: 11, color: colorScheme.outline),
+              if (pinned)
+                Padding(
+                  padding: const EdgeInsets.only(right: 2),
+                  child: Icon(
+                    Icons.push_pin,
+                    size: 12,
+                    color: colorScheme.primary,
+                  ),
+                ),
+              Text(
+                '$count',
+                style: TextStyle(fontSize: 11, color: colorScheme.outline),
+              ),
+              if (dragHandle != null) ...[const SizedBox(width: 2), dragHandle!],
+            ],
           ),
-          if (dragHandle != null) ...[
-            const SizedBox(width: 2),
-            dragHandle!,
-          ],
-        ],
-      ),
-    );
+        );
 
-    // 「全部」不可操作：无菜单、无拖放。
-    if (isAll) {
-      return GestureDetector(onTap: onTap, child: content);
-    }
-    // 普通项：长按/右键菜单（拖拽落点由注册表 + notes_list 命中处理）。
-    return GestureDetector(
-      onTap: onTap,
-      onSecondaryTapUp: (d) => _showContextMenu(context, ref, d.globalPosition),
-      onLongPress: () => _showContextMenu(context, ref, null),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 150),
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(12),
-          color: dropHover
-              ? colorScheme.primary.withValues(alpha: 0.16)
-              : null,
-          border: dropHover
-              ? Border.all(color: colorScheme.primary, width: 1.4)
-              : null,
-        ),
-        child: content,
-      ),
+        // 「全部」：可拖放落点（id null，注册 '__all__'），无菜单/手柄。
+        if (isAll) {
+          return GestureDetector(onTap: onTap, child: content);
+        }
+        // 普通项：长按/右键菜单（拖拽落点由注册表 + notes_list 命中处理）。
+        return GestureDetector(
+          onTap: onTap,
+          onSecondaryTapUp: (d) =>
+              _showContextMenu(context, ref, d.globalPosition),
+          onLongPress: () => _showContextMenu(context, ref, null),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 150),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(12),
+              color: dropHover
+                  ? colorScheme.primary.withValues(alpha: 0.16)
+                  : null,
+              border: dropHover
+                  ? Border.all(color: colorScheme.primary, width: 1.4)
+                  : null,
+            ),
+            child: content,
+          ),
+        );
+      },
     );
   }
 
@@ -561,45 +598,64 @@ class _NewFolderDropTarget extends ConsumerStatefulWidget {
 class _NewFolderDropTargetState extends ConsumerState<_NewFolderDropTarget> {
   final GlobalKey _dropKey = GlobalKey();
 
+  /// 点击创建文件夹（用户确认：按钮可点击，弹命名框；与 FAB 扇形菜单
+  /// 的「文件夹」同语义）。点击目标与拖放落点同一注册 key——点击时
+  /// 命中在按钮上、无拖拽，直接走命名创建。
+  Future<void> _onTap() async {
+    final name = await showFolderNameDialog(context, title: '新建文件夹');
+    if (name == null || !mounted) return;
+    await ref.read(folderRepositoryProvider).createFolder(name);
+  }
+
   @override
   Widget build(BuildContext context) {
     // 常驻显示（用户确认）：始终出现并注册拖放目标（__new__）。
-    final registry = ref.watch(dropZoneRegistryProvider);
+    final registry = ref.read(dropZoneRegistryProvider);
     registry.register('__new__', _dropKey);
-    final hover = registry.highlighted.value == '__new__';
+    // hover 高亮：ValueListenableBuilder 监听（watch provider 实例不
+    // 随 ValueNotifier 变化 rebuild——同 _FolderItem 根因）。
     final colorScheme = Theme.of(context).colorScheme;
-    return Container(
-      key: _dropKey,
-      height: 40,
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: hover ? colorScheme.primary : colorScheme.outlineVariant,
-          width: 1.4,
-          style: BorderStyle.solid,
-        ),
-        color: hover ? colorScheme.primary.withValues(alpha: 0.12) : null,
-      ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(
-            Icons.add,
-            size: 16,
-            color: hover
-                ? colorScheme.primary
-                : colorScheme.onSurfaceVariant,
-          ),
-          const SizedBox(width: 4),
-          Text(
-            '新建文件夹',
-            style: TextStyle(
-              fontSize: 13,
-              color: colorScheme.onSurfaceVariant,
+    return ValueListenableBuilder<String?>(
+      valueListenable: registry.highlighted,
+      builder: (context, highlighted, _) {
+        final hover = highlighted == '__new__';
+        return GestureDetector(
+          key: _dropKey,
+          onTap: _onTap,
+          child: Container(
+            height: 40,
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: hover ? colorScheme.primary : colorScheme.outlineVariant,
+                width: 1.4,
+                style: BorderStyle.solid,
+              ),
+              color: hover ? colorScheme.primary.withValues(alpha: 0.12) : null,
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(
+                  Icons.add,
+                  size: 16,
+                  color: hover
+                      ? colorScheme.primary
+                      : colorScheme.onSurfaceVariant,
+                ),
+                const SizedBox(width: 4),
+                Text(
+                  '新建文件夹',
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
             ),
           ),
-        ],
-      ),
+        );
+      },
     );
   }
 }

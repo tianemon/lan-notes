@@ -80,9 +80,6 @@ final multiSelectProvider =
       (ref) => MultiSelectNotifier(),
     );
 
-/// FAB 扇形菜单展开状态（task-32）：HomePage 据此显示全屏收回 barrier。
-final fabOpenProvider = StateProvider<bool>((ref) => false);
-
 /// 拖放目标注册表（task-32 自绘拖拽）：FolderDrawer 注册各文件夹项 /
 /// 「新建文件夹」按钮的 GlobalKey 与高亮状态，笔记拖拽命中检测用
 /// [rectOf] 实时取矩形（拖拽中抽屉动画/滚动后仍准确），高亮由

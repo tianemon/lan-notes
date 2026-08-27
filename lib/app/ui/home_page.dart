@@ -14,7 +14,6 @@ import '../sync/sync_service.dart';
 import '../theme.dart';
 import 'widgets/app_icons.dart';
 import 'widgets/folder_drawer.dart';
-import 'widgets/note_actions.dart';
 import 'widgets/notes_list.dart';
 
 /// 主页：笔记列表页。
@@ -24,7 +23,7 @@ import 'widgets/notes_list.dart';
 ///   多选态 = [全选][已选 N 项][完成]；
 /// - 第二行搜索框独占一行（原 AppBar title 下移，用户确认）；
 /// - 标签筛选栏已移除（task-32，切换文件夹靠左侧抽屉）；
-/// - 右下角扇形新建菜单（文件夹/笔记）；新建入口经
+/// - 右下角圆形新建按钮：点击直接新建笔记；新建入口经
 ///   [NoteRepository.createNote]（选中文件夹时自动归入）。
 /// 路由见 docs/技术架构.md 第 5 节。
 class HomePage extends ConsumerWidget {
@@ -124,23 +123,24 @@ class HomePage extends ConsumerWidget {
               const Expanded(child: NotesList()),
             ],
           ),
-          // 扇形菜单展开时的全屏收回区。
-          if (ref.watch(fabOpenProvider))
-            Positioned.fill(
-              child: GestureDetector(
-                behavior: HitTestBehavior.translucent,
-                onTap: () => ref.read(fabOpenProvider.notifier).state = false,
-              ),
-            ),
         ],
       ),
-      // 新建入口：右下角扇形菜单（恢复 Scaffold 槽位，与改版前位置一致；
-      // 多选模式下隐藏）。
+      // 新建入口：右下角圆形按钮，点击直接新建笔记（task-32 曾改为扇形
+      // 菜单，用户确认简化回直接新建；多选模式下隐藏）。
       floatingActionButton: multiActive
           ? null
           : Padding(
               padding: const EdgeInsets.only(right: 8, bottom: 16),
-              child: const _FabMenu(),
+              child: _FrostedFab(
+                onPressed: () async {
+                  final folderId = ref.read(folderFilterProvider);
+                  final note = await ref
+                      .read(noteRepositoryProvider)
+                      .createNote(title: '', content: '', folderId: folderId);
+                  if (!context.mounted || note.id.isEmpty) return;
+                  context.push('/editor/${note.id}');
+                },
+              ),
             ),
       ),
         // 文件夹按钮（静止，用户确认：去掉跟随抽屉滑出的动画）。
@@ -170,196 +170,9 @@ class HomePage extends ConsumerWidget {
   }
 }
 
-/// 右下角扇形新建菜单（task-32）：点击 FAB 展开两个 56px 圆形按钮
-/// （文件夹在上、笔记在左），再点 FAB 或点其他区域收回。
-///
-/// - 「文件夹」→ 弹命名框创建文件夹；
-/// - 「笔记」→ 直接创建空白笔记进编辑页（选中文件夹时自动归入）。
-class _FabMenu extends ConsumerStatefulWidget {
-  const _FabMenu();
-
-  @override
-  ConsumerState<_FabMenu> createState() => _FabMenuState();
-}
-
-class _FabMenuState extends ConsumerState<_FabMenu> {
-  bool _open = false;
-
-  /// 展开/收回：同步 fabOpenProvider（HomePage 全屏收回区据此显示）。
-  void _setOpen(bool v) {
-    setState(() => _open = v);
-    ref.read(fabOpenProvider.notifier).state = v;
-  }
-
-  /// 新建文件夹：命名框 → 创建。
-  Future<void> _createFolder() async {
-    _setOpen(false);
-    if (!mounted) return;
-    final name = await showFolderNameDialog(context, title: '新建文件夹');
-    if (name == null || !mounted) return;
-    await ref.read(folderRepositoryProvider).createFolder(name);
-  }
-
-  /// 新建笔记：创建空白笔记进编辑页（当前选中文件夹时自动归入）。
-  Future<void> _createNote() async {
-    _setOpen(false);
-    if (!mounted) return;
-    final folderId = ref.read(folderFilterProvider);
-    final note = await ref
-        .read(noteRepositoryProvider)
-        .createNote(title: '', content: '', folderId: folderId);
-    if (!mounted || note.id.isEmpty) return;
-    context.push('/editor/${note.id}');
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    // 同步外部开关（HomePage 全屏收回区点按只改 provider，不经过
-    // _setOpen）——不监听则点外部后 provider 变 false 而 _open 仍 true，
-    // 子按钮不会收起（实测 bug，用户反馈）。ref.listen 必须在 build
-    // 中调用（Riverpod 限制）。
-    ref.listen(fabOpenProvider, (_, next) {
-      if (next != _open) setState(() => _open = next);
-    });
-    // 容器 132×132：FAB 在右下角（中心 (104,104)）；选项按钮展开位置
-    // 按原型精确坐标（fo-a 文件夹 上方 -4/-66；fo-b 笔记 左侧 -66/-4，
-    // 相对 FAB 中心），收起时与 FAB 中心重合。
-    return SizedBox(
-      width: 132,
-      height: 132,
-      child: Stack(
-        clipBehavior: Clip.none,
-        children: [
-          // 扇形按钮：文件夹（上方）、笔记（左侧）。
-          // 收起时必须完全透明（AnimatedOpacity 0）——若仍渲染，选项按钮
-          // 与 FAB 重叠，其底色/阴影会被 FAB 的 BackdropFilter blur 进
-          // 背景，导致 FAB 颜色变深（用户反馈「颜色不对」的根因）。
-          AnimatedPositioned(
-            duration: const Duration(milliseconds: 280),
-            curve: const Cubic(0.32, 0.72, 0, 1),
-            left: _open ? 72 : 76,
-            top: _open ? 10 : 76,
-            child: IgnorePointer(
-              ignoring: !_open,
-              child: AnimatedOpacity(
-                opacity: _open ? 1 : 0,
-                duration: const Duration(milliseconds: 180),
-                child: _FabOption(
-                  icon: const AppFolderIcon(),
-                  tooltip: '新建文件夹',
-                  onTap: _createFolder,
-                ),
-              ),
-            ),
-          ),
-          AnimatedPositioned(
-            duration: const Duration(milliseconds: 280),
-            curve: const Cubic(0.32, 0.72, 0, 1),
-            left: _open ? 10 : 76,
-            top: _open ? 72 : 76,
-            child: IgnorePointer(
-              ignoring: !_open,
-              child: AnimatedOpacity(
-                opacity: _open ? 1 : 0,
-                duration: const Duration(milliseconds: 180),
-                child: _FabOption(
-                  icon: const Icon(Icons.note_alt_outlined),
-                  tooltip: '新建笔记',
-                  onTap: _createNote,
-                ),
-              ),
-            ),
-          ),
-          // FAB 主按钮：点击展开/收回（图标旋转 45°，原型同款）。
-          Positioned(
-            right: 0,
-            bottom: 0,
-            child: _FrostedFab(
-              onPressed: () => _setOpen(!_open),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/// 扇形选项按钮（与 FAB 同尺寸 56px 圆形，玻璃样式）。
-class _FabOption extends StatelessWidget {
-  const _FabOption({
-    required this.icon,
-    required this.tooltip,
-    required this.onTap,
-  });
-
-  final Widget icon;
-  final String tooltip;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    return SizedBox(
-      width: 56,
-      height: 56,
-      child: ClipOval(
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
-          child: Material(
-            // 暖奶油玻璃（用户确认）：亮色 = kLightFabGlass #F5EFE3
-            // 90% 半透明（比卡片 #FDFCF9 更暖一档，拉开层次避免糊色）
-            // + 暖黑图标；暗色保持白 10%。
-            color: isDark
-                ? Colors.white.withValues(alpha: 0.10)
-                : kLightFabGlass.withValues(alpha: 0.90),
-            shape: const CircleBorder(),
-            child: InkWell(
-              onTap: onTap,
-              customBorder: const CircleBorder(),
-              child: Container(
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  border: Border.all(
-                    color: isDark
-                        ? Colors.white.withValues(alpha: 0.10)
-                        : kLightTextPrimary.withValues(alpha: 0.08),
-                    width: 0.5,
-                  ),
-                  // 原型 option 阴影（shadow-deep）。
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withValues(
-                        alpha: isDark ? 0.34 : 0.12,
-                      ),
-                      blurRadius: 24,
-                      offset: const Offset(0, 8),
-                    ),
-                  ],
-                ),
-                child: Tooltip(
-                  message: tooltip,
-                  child: Center(
-                    child: IconTheme(
-                      data: IconThemeData(
-                        size: 24,
-                        color: isDark ? kDarkTextPrimary : kLightTextPrimary,
-                      ),
-                      child: icon,
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
 /// 右下角毛玻璃圆形新建按钮（照搬 EE home_screen._buildFrostedFab）：
 /// BackdropFilter blur 15 + add 图标 + 玻璃底色（暗色白 12% / 亮色黑 8%）。
-/// 展开时图标旋转 45°（+ → ×，常见展开状态提示）。
+/// 点击直接新建笔记（用户确认：不再弹出扇形菜单）。
 class _FrostedFab extends StatelessWidget {
   const _FrostedFab({required this.onPressed});
 

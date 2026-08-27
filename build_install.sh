@@ -17,18 +17,11 @@
 
 set -e
 
-# 颜色：仅真实终端输出时使用（面板/管道自动禁用，避免 ANSI 乱码）
-if [ -t 1 ]; then
-  RED='\033[0;31m'
-  GREEN='\033[0;32m'
-  YELLOW='\033[1;33m'
-  NC='\033[0m'
-else
-  RED=''
-  GREEN=''
-  YELLOW=''
-  NC=''
-fi
+# 颜色（em 面板已支持 ANSI 渲染，始终输出）
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
 
 LAUNCH=false
 if [ "$1" = "--launch" ]; then

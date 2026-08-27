@@ -1,7 +1,10 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+
+import 'navigation.dart';
 
 // ============================================================
 // 设计令牌（EE 风格，参考 EasyEdit ui_style.dart，task-25）
@@ -352,26 +355,127 @@ ThemeData buildDarkTheme() {
 ThemeData buildAppTheme() => buildLightTheme();
 
 // ============================================================
-// 全局横幅通知（SnackBar 固定锚点）
+// 全局横幅通知（Overlay 自绘，不随页面切换移动）
 // ============================================================
 
-/// 全局 ScaffoldMessenger key（横幅通知固定锚点）：所有 SnackBar 经
-/// [showAppSnackBar] 弹在根 messenger 上——不随页面转场位移（用户
-/// 反馈：横幅有时随页面切换被迫位移）。main.dart 的 MaterialApp 传入。
-final GlobalKey<ScaffoldMessengerState> scaffoldMessengerKey =
-    GlobalKey<ScaffoldMessengerState>();
+/// 全局横幅通知：Overlay 自绘浮动条，挂在根 Overlay 上（经
+/// [rootNavigatorKey] 获取），**固定屏幕底部、不随页面切换移动**。
+///
+/// 之前用 ScaffoldMessenger（即使锚定根 key）——SnackBar 仍会显示在
+/// 当前活跃 Scaffold 上，页面切换时重新锚定导致位置跳动（用户实测：
+/// 配对通知在底部，返回首页后上移）。Overlay 方案彻底脱离 Scaffold。
+///
+/// 视觉对齐 SnackBar 主题（深色圆角条 + 浮出动画）。
+///
+/// 当前显示的横幅（OverlayEntry 生命周期管理）。
+OverlayEntry? _appSnackBarEntry;
 
-/// 在根 ScaffoldMessenger 上弹横幅（fixed 位置，不随页面切换移动）。
-/// 所有页面统一走这里，不再用 ScaffoldMessenger.of(context)（那会锚定
-/// 到页面上下文，页面切换时横幅可能跟着转场位移）。主题已配置
-/// floating 行为，无需重复传。
+/// 横幅自动消失定时器。
+Timer? _appSnackBarTimer;
+
+/// 在根 Overlay 上弹横幅（固定底部，不随页面切换移动）。
 void showAppSnackBar(String message, {Duration? duration}) {
-  scaffoldMessengerKey.currentState
-    ?..hideCurrentSnackBar()
-    ..showSnackBar(
-      SnackBar(
-        content: Text(message),
-        duration: duration ?? const Duration(seconds: 2),
+  final overlay = rootNavigatorKey.currentState?.overlay;
+  if (overlay == null) return; // 导航未挂载（启动早期）：跳过
+
+  // 移除旧横幅（不等待动画，直接清）。
+  _appSnackBarEntry?.remove();
+  _appSnackBarEntry = null;
+  _appSnackBarTimer?.cancel();
+
+  late final OverlayEntry entry;
+  entry = OverlayEntry(
+    builder: (context) => _AppSnackBarHost(message: message),
+  );
+  _appSnackBarEntry = entry;
+  overlay.insert(entry);
+
+  _appSnackBarTimer = Timer(duration ?? const Duration(seconds: 2), () {
+    if (_appSnackBarEntry == entry) {
+      entry.remove();
+      _appSnackBarEntry = null;
+    }
+  });
+}
+
+/// 横幅本体：底部固定 + SafeArea + 浮出动画 + 自动消失后回调。
+class _AppSnackBarHost extends StatefulWidget {
+  const _AppSnackBarHost({required this.message});
+
+  final String message;
+
+  @override
+  State<_AppSnackBarHost> createState() => _AppSnackBarHostState();
+}
+
+class _AppSnackBarHostState extends State<_AppSnackBarHost>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 220),
+  )..forward();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    // 对齐 SnackBar 主题外观（深色圆角条）。
+    final bg = isDark ? const Color(0xFF2A3A4A) : kLightTextPrimary;
+    final fg = isDark ? kDarkTextPrimary : Colors.white;
+
+    return Positioned(
+      left: 16,
+      right: 16,
+      // 固定底部：SafeArea 上沿 + 16（避开系统手势区，不随页面变化）。
+      bottom: MediaQuery.paddingOf(context).bottom + 16,
+      child: SafeArea(
+        top: false,
+        child: FadeTransition(
+          opacity: CurvedAnimation(parent: _controller, curve: Curves.easeOut),
+          child: SlideTransition(
+            position: Tween<Offset>(
+              begin: const Offset(0, 0.4),
+              end: Offset.zero,
+            ).animate(CurvedAnimation(
+              parent: _controller,
+              curve: Curves.easeOutCubic,
+            )),
+            child: Material(
+              type: MaterialType.transparency,
+              child: Container(
+                constraints: const BoxConstraints(maxWidth: 480),
+                margin: const EdgeInsets.symmetric(horizontal: 8),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                decoration: BoxDecoration(
+                  color: bg,
+                  borderRadius: BorderRadius.circular(12),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.2),
+                      blurRadius: 16,
+                      offset: const Offset(0, 6),
+                    ),
+                  ],
+                ),
+                child: Center(
+                  child: Text(
+                    widget.message,
+                    style: TextStyle(fontSize: 14, color: fg),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
       ),
     );
+  }
 }

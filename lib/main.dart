@@ -135,7 +135,6 @@ class _LanNotesAppState extends ConsumerState<LanNotesApp>
       builder: (context, mode, _) => MaterialApp.router(
         title: 'EasyNote',
         debugShowCheckedModeBanner: false,
-        scaffoldMessengerKey: scaffoldMessengerKey,
         theme: buildLightTheme(),
         darkTheme: buildDarkTheme(),
         themeMode: mode,

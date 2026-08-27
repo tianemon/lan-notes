@@ -9,6 +9,7 @@ import '../sync/discovery_service.dart';
 import '../sync/sync_protocol.dart';
 import '../sync/sync_service.dart';
 import '../theme.dart';
+import 'widgets/app_icons.dart';
 import 'widgets/glass_style.dart';
 
 /// 同步管理页：开启/关闭同步（P2P 总开关）、设备发现与对端连接管理、
@@ -807,13 +808,16 @@ class _DeviceTile extends StatelessWidget {
 /// 设备列表 leading：图标（按名称猜类型）/ 冲突错误图标 / 默认绿点。
 Widget _deviceLeading(String name) {
   final icon = _deviceTypeIcon(name);
-  if (icon != null) return Icon(icon, color: kStatusConnected, size: 20);
+  if (icon != null) {
+    return AppIcon(icon, size: 20, color: kStatusConnected);
+  }
   return const _StatusDot(color: kStatusConnected);
 }
 
 /// 按设备名猜测设备类型图标（task-32）：手机 / 笔记本 / 台式机；
-/// 猜不到返回 null（UI 回退显示绿点）。
-IconData? _deviceTypeIcon(String name) {
+/// 猜不到返回 null（UI 回退显示绿点）。手绘 AppIconData（MaterialIcons
+/// 字体在 Windows 下部分字形空白，见 app_icons.dart 说明）。
+AppIconData? _deviceTypeIcon(String name) {
   final n = name.toLowerCase();
   if (n.contains('iphone') ||
       n.contains('ipad') ||
@@ -827,21 +831,21 @@ IconData? _deviceTypeIcon(String name) {
       n.contains('oppo') ||
       n.contains('vivo') ||
       n.contains('realme')) {
-    return Icons.smartphone;
+    return AppIconData.smartphone;
   }
   if (n.contains('mac') ||
       n.contains('book') ||
       n.contains('laptop') ||
       n.contains('笔记本') ||
       n.contains('air')) {
-    return Icons.laptop_mac;
+    return AppIconData.laptopMac;
   }
   if (n.contains('pc') ||
       n.contains('desktop') ||
       n.contains('台式') ||
       n.contains('windows') ||
       n.contains('win')) {
-    return Icons.desktop_windows;
+    return AppIconData.desktopWindows;
   }
   return null;
 }

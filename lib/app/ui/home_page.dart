@@ -12,6 +12,7 @@ import '../repository/providers.dart';
 import '../sync/sync_protocol.dart';
 import '../sync/sync_service.dart';
 import '../theme.dart';
+import 'widgets/app_icons.dart';
 import 'widgets/folder_drawer.dart';
 import 'widgets/note_actions.dart';
 import 'widgets/notes_list.dart';
@@ -153,7 +154,7 @@ class HomePage extends ConsumerWidget {
             top: MediaQuery.paddingOf(context).top + 4,
             child: IconButton(
               tooltip: '文件夹',
-              icon: const Icon(Icons.folder_outlined),
+              icon: const AppFolderIcon(),
               onPressed: () {
                 final open = ref.read(folderDrawerOpenProvider);
                 ref.read(folderDrawerOpenProvider.notifier).state = !open;
@@ -244,7 +245,7 @@ class _FabMenuState extends ConsumerState<_FabMenu> {
                 opacity: _open ? 1 : 0,
                 duration: const Duration(milliseconds: 180),
                 child: _FabOption(
-                  icon: Icons.folder_outlined,
+                  icon: const AppFolderIcon(),
                   tooltip: '新建文件夹',
                   onTap: _createFolder,
                 ),
@@ -262,7 +263,7 @@ class _FabMenuState extends ConsumerState<_FabMenu> {
                 opacity: _open ? 1 : 0,
                 duration: const Duration(milliseconds: 180),
                 child: _FabOption(
-                  icon: Icons.note_alt_outlined,
+                  icon: const Icon(Icons.note_alt_outlined),
                   tooltip: '新建笔记',
                   onTap: _createNote,
                 ),
@@ -291,7 +292,7 @@ class _FabOption extends StatelessWidget {
     required this.onTap,
   });
 
-  final IconData icon;
+  final Widget icon;
   final String tooltip;
   final VoidCallback onTap;
 
@@ -338,10 +339,12 @@ class _FabOption extends StatelessWidget {
                 child: Tooltip(
                   message: tooltip,
                   child: Center(
-                    child: Icon(
-                      icon,
-                      size: 24,
-                      color: isDark ? kDarkTextPrimary : kLightTextPrimary,
+                    child: IconTheme(
+                      data: IconThemeData(
+                        size: 24,
+                        color: isDark ? kDarkTextPrimary : kLightTextPrimary,
+                      ),
+                      child: icon,
                     ),
                   ),
                 ),

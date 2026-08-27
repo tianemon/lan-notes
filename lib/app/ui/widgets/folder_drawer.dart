@@ -6,6 +6,7 @@ import '../../data/note.dart';
 import '../../repository/folder_repository.dart';
 import '../../repository/providers.dart';
 import '../../theme.dart';
+import 'app_icons.dart';
 import 'note_actions.dart';
 
 /// 文件夹抽屉（task-32）：左侧滑出玻璃面板。
@@ -115,7 +116,7 @@ class FolderDrawer extends ConsumerWidget {
                           child: _FolderItem(
                             id: null,
                             name: '全部',
-                            icon: Icons.folder_outlined,
+                            icon: const AppFolderIcon(),
                             count: notes.length,
                             selected: selected == null,
                             onTap: () {
@@ -267,7 +268,7 @@ class _ReorderZoneState extends ConsumerState<_ReorderZone> {
           key: zoneKey,
           id: folder.id,
           name: folder.name,
-          icon: Icons.folder_outlined,
+          icon: const AppFolderIcon(),
           count: widget.countOf[folder.id] ?? 0,
           selected: widget.selected == folder.id,
           pinned: folder.isPinned,
@@ -337,7 +338,7 @@ class _FolderItem extends ConsumerStatefulWidget {
 
   final String? id;
   final String name;
-  final IconData icon;
+  final Widget icon;
   final int count;
   final bool selected;
   final bool pinned;
@@ -354,7 +355,7 @@ class _FolderItemState extends ConsumerState<_FolderItem> {
 
   String? get id => widget.id;
   String get name => widget.name;
-  IconData get icon => widget.icon;
+  Widget get icon => widget.icon;
   int get count => widget.count;
   bool get selected => widget.selected;
   bool get pinned => widget.pinned;
@@ -407,12 +408,14 @@ class _FolderItemState extends ConsumerState<_FolderItem> {
               padding: const EdgeInsets.symmetric(horizontal: 10),
               child: Row(
                 children: [
-                  Icon(
-                    icon,
-                    size: isMobile ? 18 : 17,
-                    color: selected && !isDragging
-                        ? colorScheme.primary
-                        : colorScheme.onSurfaceVariant,
+                  IconTheme(
+                    data: IconThemeData(
+                      size: isMobile ? 18 : 17,
+                      color: selected && !isDragging
+                          ? colorScheme.primary
+                          : colorScheme.onSurfaceVariant,
+                    ),
+                    child: icon,
                   ),
                   const SizedBox(width: 8),
                   Expanded(

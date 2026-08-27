@@ -533,6 +533,12 @@ class _EditorPageState extends ConsumerState<EditorPage> {
       _savedTitle = updated.title;
       _savedContent = updated.content;
       if (!mounted) return;
+      // 让出一个事件循环：drift 变更流触发 SyncService._onLocalChange
+      // 完成增量推送（局域网 fire-and-forget，微秒级）后，才显示对勾
+      // ——对勾语义 = 已保存 + 已触发同步（单机时推送循环 0 次即完成，
+      // 对勾同样成立，用户确认）。
+      await Future<void>.delayed(Duration.zero);
+      if (!mounted) return;
       final changedDuringSave = _titleController.text != title ||
           _contentDelta != content;
       _dirty = changedDuringSave;

@@ -100,10 +100,16 @@ class DropZoneRegistry {
   /// 当前高亮目标（'__new__' = 新建文件夹按钮；其他 = 文件夹 id；null 无）。
   final ValueNotifier<String?> highlighted = ValueNotifier(null);
 
+  /// 笔记拖拽是否进行中（notes_list _beginDrag 置 true / _endDrag 置
+  /// false）。拖拽期间抽屉隐藏所有文件夹的选中背景（用户确认：两个
+  /// 文件夹同时出现选中效果时紧贴不好看，拖拽中只显示落点高亮）。
+  final ValueNotifier<bool> dragging = ValueNotifier(false);
+
   /// 释放滚动控制器（provider onDispose 调用）。
   void dispose() {
     drawerScroll.dispose();
     highlighted.dispose();
+    dragging.dispose();
   }
 
   /// 注册目标（FolderDrawer build 时逐个调用；重复注册幂等）。

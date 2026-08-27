@@ -239,6 +239,8 @@ class _NotesListState extends ConsumerState<NotesList> {
       position: globalPos - const Offset(halfCard, halfCard),
     );
     _drag = drag;
+    // 拖拽中：抽屉隐藏所有文件夹选中背景（拖到目标才显示高亮）。
+    ref.read(dropZoneRegistryProvider).dragging.value = true;
     setState(() {
       _dragging_ = true;
       // 抽卡：选中的卡片从列表抽走（其他卡片补位），松手恢复。
@@ -372,6 +374,8 @@ class _NotesListState extends ConsumerState<NotesList> {
       _globalRoute = null;
     }
     ref.read(dropZoneRegistryProvider).highlighted.value = null;
+    // 拖拽结束：恢复文件夹选中背景显示。
+    ref.read(dropZoneRegistryProvider).dragging.value = false;
     final target = d.target;
     final wasDrawerByDrag = ref.read(folderDrawerByDragProvider);
     _dragging_ = false;

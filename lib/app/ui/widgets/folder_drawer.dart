@@ -350,85 +350,98 @@ class _FolderItem extends ConsumerWidget {
       valueListenable: registry.highlighted,
       builder: (context, highlighted, _) {
         final dropHover = highlighted == (isAll ? '__all__' : id);
-        // 选中 / 拖拽悬停：统一浅灰高亮（用户确认：取消蓝色与边框，
-        // 用默认 hover 效果；背景再浅一档——亮色 surfaceContainer，
-        // 暗色保持 surfaceContainerHighest）；选中态额外保留强调色
-        // 图标 + 加粗文字。
-        final highlightedBg = selected || dropHover;
-        // 选中/悬停背景左右各缩进 10px（用户确认：看起来窄一些），
-        // 内容同步缩进（与新建按钮水平 padding 对齐）。
-        final content = Container(
-          height: 40,
-          padding: const EdgeInsets.symmetric(horizontal: 10),
-          child: Row(
-            children: [
-              Icon(
-                icon,
-                size: 17,
-                color: selected
-                    ? colorScheme.primary
-                    : colorScheme.onSurfaceVariant,
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  name,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 13.5,
-                    fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
-                    color: colorScheme.onSurface,
+        // 拖拽中隐藏选中背景（用户确认：拖拽时两个文件夹的选中效果
+        // 紧贴不好看；拖到目标才显示落点高亮）。ValueNotifier 值变化
+        // 不触发本 builder（watch 的是 provider 实例），需要再包一层
+        // ValueListenableBuilder 监听 dragging。
+        return ValueListenableBuilder<bool>(
+          valueListenable: registry.dragging,
+          builder: (context, isDragging, _) {
+            // 选中 / 拖拽悬停：统一浅灰高亮（用户确认：取消蓝色与边框，
+            // 用默认 hover 效果；背景再浅一档——亮色 surfaceContainer，
+            // 暗色保持 surfaceContainerHighest）；选中态额外保留强调色
+            // 图标 + 加粗文字。拖拽中选中背景隐藏，仅落点高亮显示。
+            final highlightedBg =
+                dropHover || (selected && !isDragging);
+            // 选中/悬停背景左右各缩进 10px（用户确认：看起来窄一些），
+            // 内容同步缩进（与新建按钮水平 padding 对齐）。
+            // 项高度 36（用户确认：比之前扁一点，避免两个选中项紧贴）。
+            final content = Container(
+              height: 36,
+              padding: const EdgeInsets.symmetric(horizontal: 10),
+              child: Row(
+                children: [
+                  Icon(
+                    icon,
+                    size: 17,
+                    color: selected && !isDragging
+                        ? colorScheme.primary
+                        : colorScheme.onSurfaceVariant,
                   ),
-                ),
-              ),
-              if (pinned)
-                Padding(
-                  padding: const EdgeInsets.only(right: 2),
-                  child: Icon(
-                    Icons.push_pin,
-                    size: 12,
-                    color: colorScheme.primary,
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 13.5,
+                        fontWeight: selected && !isDragging
+                            ? FontWeight.w600
+                            : FontWeight.w400,
+                        color: colorScheme.onSurface,
+                      ),
+                    ),
                   ),
-                ),
-              Text(
-                '$count',
-                style: TextStyle(fontSize: 11, color: colorScheme.outline),
+                  if (pinned)
+                    Padding(
+                      padding: const EdgeInsets.only(right: 2),
+                      child: Icon(
+                        Icons.push_pin,
+                        size: 12,
+                        color: colorScheme.primary,
+                      ),
+                    ),
+                  Text(
+                    '$count',
+                    style: TextStyle(fontSize: 11, color: colorScheme.outline),
+                  ),
+                  if (dragHandle != null) ...[const SizedBox(width: 2), dragHandle!],
+                ],
               ),
-              if (dragHandle != null) ...[const SizedBox(width: 2), dragHandle!],
-            ],
-          ),
-        );
+            );
 
-        // 高亮容器（选中/悬停背景统一在此一层定义，与内容分离——
-        // 避免双层样式重复定义导致不同步）。水平 margin 10：背景
-        // 左右缩进，视觉更紧凑（用户确认）。
-        final wrapped = AnimatedContainer(
-          duration: const Duration(milliseconds: 150),
-          curve: Curves.easeOutCubic,
-          margin: const EdgeInsets.symmetric(horizontal: 10),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(12),
-            color: highlightedBg
-                ? (Theme.of(context).brightness == Brightness.dark
-                    ? colorScheme.surfaceContainerHighest
-                    : colorScheme.surfaceContainer)
-                : null,
-          ),
-          child: content,
-        );
+            // 高亮容器（选中/悬停背景统一在此一层定义，与内容分离——
+            // 避免双层样式重复定义导致不同步）。水平 margin 10：背景
+            // 左右缩进，视觉更紧凑（用户确认）。
+            final wrapped = AnimatedContainer(
+              duration: const Duration(milliseconds: 150),
+              curve: Curves.easeOutCubic,
+              margin: const EdgeInsets.symmetric(horizontal: 10),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(12),
+                color: highlightedBg
+                    ? (Theme.of(context).brightness == Brightness.dark
+                        ? colorScheme.surfaceContainerHighest
+                        : colorScheme.surfaceContainer)
+                    : null,
+              ),
+              child: content,
+            );
 
-        // 「全部」：可拖放落点（id null，注册 '__all__'），无菜单/手柄。
-        if (isAll) {
-          return GestureDetector(onTap: onTap, child: wrapped);
-        }
-        // 普通项：长按/右键菜单（拖拽落点由注册表 + notes_list 命中处理）。
-        return GestureDetector(
-          onTap: onTap,
-          onSecondaryTapUp: (d) =>
-              _showContextMenu(context, ref, d.globalPosition),
-          onLongPress: () => _showContextMenu(context, ref, null),
-          child: wrapped,
+            // 「全部」：可拖放落点（id null，注册 '__all__'），无菜单/手柄。
+            if (isAll) {
+              return GestureDetector(onTap: onTap, child: wrapped);
+            }
+            // 普通项：长按/右键菜单（拖拽落点由注册表 + notes_list 命中处理）。
+            return GestureDetector(
+              onTap: onTap,
+              onSecondaryTapUp: (d) =>
+                  _showContextMenu(context, ref, d.globalPosition),
+              onLongPress: () => _showContextMenu(context, ref, null),
+              child: wrapped,
+            );
+          },
         );
       },
     );

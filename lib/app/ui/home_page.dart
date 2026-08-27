@@ -142,14 +142,11 @@ class HomePage extends ConsumerWidget {
               child: const _FabMenu(),
             ),
       ),
-        // 文件夹抽屉（全屏玻璃面板：覆盖整个窗口高度；z 序在文件夹
-        // 按钮之下——按钮静止，抽屉展开时自然盖住它）。
-        const FolderDrawer(),
-        // 文件夹按钮（静止，用户确认：去掉跟随抽屉滑出的动画——
-        // 那是之前「按钮跟随侧边栏一起弹出」设计的残留）。z 序在
-        // 抽屉之下：抽屉展开时被抽屉面板自然盖住，收回时露出来，
-        // 无任何位移动画。多选模式隐藏（避免与多选框重叠）；
-        // top 含状态栏高度（手机端 SafeArea，不与系统通知栏重叠）。
+        // 文件夹按钮（静止，用户确认：去掉跟随抽屉滑出的动画）。
+        // 声明在 FolderDrawer **之前**（Stack 后声明者在上层）——
+        // 抽屉展开时面板自然盖住按钮，收回时原位露出，无位移动画。
+        // 多选模式隐藏（避免与多选框重叠）；top 含状态栏高度
+        // （手机端 SafeArea，不与系统通知栏重叠）。
         if (!multiActive)
           Positioned(
             left: 4,
@@ -164,6 +161,9 @@ class HomePage extends ConsumerWidget {
               },
             ),
           ),
+        // 文件夹抽屉（全屏玻璃面板：覆盖整个窗口高度；声明在按钮之后，
+        // Stack 上层——展开时盖住按钮，层次正确）。
+        const FolderDrawer(),
       ],
     );
   }
@@ -298,10 +298,13 @@ class _FabOption extends StatelessWidget {
         child: BackdropFilter(
           filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
           child: Material(
-            // 暖色玻璃（用户确认）：亮色用主题暖黑 #1D1B16 替代纯黑
-            // 半透明，与 FAB 主按钮一致（纯黑叠暖背景会压灰）。
-            color: (isDark ? Colors.white : kLightTextPrimary)
-                .withValues(alpha: isDark ? 0.10 : 0.08),
+            // 暖白玻璃（用户确认：暖色系）：亮色 = 暖米白 #FDFCF9 90%
+            // 半透明（与卡片同色系，不再是深灰黑玻璃）+ 暖黑图标；
+            // 暗色保持白 12%。之前用暖黑半透明叠出来仍是深灰，
+            // 看不出暖色（实测反馈），改为亮色底才体现暖调。
+            color: isDark
+                ? Colors.white.withValues(alpha: 0.10)
+                : const Color(0xFFFDFCF9).withValues(alpha: 0.90),
             shape: const CircleBorder(),
             child: InkWell(
               onTap: onTap,
@@ -312,7 +315,7 @@ class _FabOption extends StatelessWidget {
                   border: Border.all(
                     color: isDark
                         ? Colors.white.withValues(alpha: 0.10)
-                        : kLightTextPrimary.withValues(alpha: 0.06),
+                        : kLightTextPrimary.withValues(alpha: 0.08),
                     width: 0.5,
                   ),
                   // 原型 option 阴影（shadow-deep）。
@@ -328,7 +331,13 @@ class _FabOption extends StatelessWidget {
                 ),
                 child: Tooltip(
                   message: tooltip,
-                  child: Center(child: Icon(icon, size: 24)),
+                  child: Center(
+                    child: Icon(
+                      icon,
+                      size: 24,
+                      color: isDark ? kDarkTextPrimary : kLightTextPrimary,
+                    ),
+                  ),
                 ),
               ),
             ),
@@ -357,16 +366,22 @@ class _FrostedFab extends StatelessWidget {
         child: BackdropFilter(
           filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
           child: Material(
-            // 暖色玻璃（用户确认）：亮色用主题暖黑 #1D1B16（红>绿>蓝）
-            // 替代纯黑半透明——纯黑是中性色，叠在暖背景上会把暖色压灰；
-            // 暖黑让玻璃底色带暖调，与暖白主题协调。暗色保持白 12%。
-            color: (isDark ? Colors.white : kLightTextPrimary)
-                .withValues(alpha: isDark ? 0.12 : 0.10),
+            // 暖白玻璃（用户确认：暖色系）：亮色 = 暖米白 #FDFCF9 90%
+            // 半透明 + 暖黑 + 图标；暗色保持白 12%。
+            color: isDark
+                ? Colors.white.withValues(alpha: 0.12)
+                : const Color(0xFFFDFCF9).withValues(alpha: 0.90),
             shape: const CircleBorder(),
             child: InkWell(
               onTap: onPressed,
               customBorder: const CircleBorder(),
-              child: const Center(child: Icon(Icons.add, size: 28)),
+              child: Center(
+                child: Icon(
+                  Icons.add,
+                  size: 28,
+                  color: isDark ? kDarkTextPrimary : kLightTextPrimary,
+                ),
+              ),
             ),
           ),
         ),

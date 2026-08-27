@@ -22,3 +22,7 @@ build/
 
 # macOS
 .DS_Store
+
+# CocoaPods 生成物（pod install 自动生成，不提交）
+ios/Podfile.lock
+macos/Podfile.lock

@@ -298,13 +298,12 @@ class _FabOption extends StatelessWidget {
         child: BackdropFilter(
           filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
           child: Material(
-            // 暖白玻璃（用户确认：暖色系）：亮色 = 暖米白 #FDFCF9 90%
-            // 半透明（与卡片同色系，不再是深灰黑玻璃）+ 暖黑图标；
-            // 暗色保持白 12%。之前用暖黑半透明叠出来仍是深灰，
-            // 看不出暖色（实测反馈），改为亮色底才体现暖调。
+            // 暖奶油玻璃（用户确认）：亮色 = kLightFabGlass #F5EFE3
+            // 90% 半透明（比卡片 #FDFCF9 更暖一档，拉开层次避免糊色）
+            // + 暖黑图标；暗色保持白 10%。
             color: isDark
                 ? Colors.white.withValues(alpha: 0.10)
-                : const Color(0xFFFDFCF9).withValues(alpha: 0.90),
+                : kLightFabGlass.withValues(alpha: 0.90),
             shape: const CircleBorder(),
             child: InkWell(
               onTap: onTap,
@@ -366,20 +365,41 @@ class _FrostedFab extends StatelessWidget {
         child: BackdropFilter(
           filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
           child: Material(
-            // 暖白玻璃（用户确认：暖色系）：亮色 = 暖米白 #FDFCF9 90%
-            // 半透明 + 暖黑 + 图标；暗色保持白 12%。
+            // 暖奶油玻璃（用户确认）：亮色 = kLightFabGlass #F5EFE3
+            // 90% 半透明 + 暖黑 + 图标；暗色保持白 12%。主按钮与
+            // 选项按钮同配色（用户确认），并带同款阴影提升层次。
             color: isDark
                 ? Colors.white.withValues(alpha: 0.12)
-                : const Color(0xFFFDFCF9).withValues(alpha: 0.90),
+                : kLightFabGlass.withValues(alpha: 0.90),
             shape: const CircleBorder(),
             child: InkWell(
               onTap: onPressed,
               customBorder: const CircleBorder(),
-              child: Center(
-                child: Icon(
-                  Icons.add,
-                  size: 28,
-                  color: isDark ? kDarkTextPrimary : kLightTextPrimary,
+              child: Container(
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: isDark
+                        ? Colors.white.withValues(alpha: 0.10)
+                        : kLightTextPrimary.withValues(alpha: 0.08),
+                    width: 0.5,
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(
+                        alpha: isDark ? 0.34 : 0.12,
+                      ),
+                      blurRadius: 24,
+                      offset: const Offset(0, 8),
+                    ),
+                  ],
+                ),
+                child: Center(
+                  child: Icon(
+                    Icons.add,
+                    size: 28,
+                    color: isDark ? kDarkTextPrimary : kLightTextPrimary,
+                  ),
                 ),
               ),
             ),

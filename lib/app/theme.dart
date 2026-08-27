@@ -27,6 +27,10 @@ const Color kLightButtonForeground = Color(0xFF4F6EF7);
 const Color kLightTextPrimary = Color(0xFF1D1B16);
 const Color kLightTextSecondary = Color(0xFF6E6A63);
 
+/// 亮色主题悬浮按钮玻璃底（FAB/扇形选项，用户确认：暖奶油色——
+/// 比卡片 #FDFCF9 再暖一档、红蓝差 18，与卡片拉开层次避免糊色）。
+const Color kLightFabGlass = Color(0xFFF5EFE3);
+
 /// 暗色（暗夜蓝）：背景 #0D1B2A、卡片 #1B2838、强调色 #5B9BD5。
 const Color kDarkBackground = Color(0xFF0D1B2A);
 const Color kDarkCard = Color(0xFF1B2838);

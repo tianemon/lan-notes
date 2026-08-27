@@ -283,11 +283,14 @@ class _ReorderZoneState extends ConsumerState<_ReorderZone> {
           },
           // 拖拽手柄：拖动排序（长按保留给菜单）。细三条横线
           // （用户确认：Material drag_handle 偏粗，换手绘细线）。
+          // 手机端加大（Apple 触控标准：手柄触摸区尽量靠近 44pt）。
           dragHandle: ReorderableDragStartListener(
             index: index,
-            child: const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 4),
-              child: _DragHandleIcon(size: 16),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+              child: _DragHandleIcon(
+                size: isDesktopPlatform ? 16 : 20,
+              ),
             ),
           ),
         );
@@ -692,8 +695,9 @@ class _NewFolderDropTargetState extends ConsumerState<_NewFolderDropTarget> {
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 180),
                 curve: Curves.easeOutCubic,
-                // 手机端触屏目标 ≥44pt（用户反馈仍偏小，加大一档）。
-                height: isDesktopPlatform ? 32 : 42,
+                // 手机端触屏目标 ≥44pt（Apple HIG 最低标准；iPhone mini
+                // 360pt 宽验证，与文件夹项 46 一致）。
+                height: isDesktopPlatform ? 32 : 46,
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(10),
                   color: dropHover

@@ -158,7 +158,7 @@ flutter test              # 跑单元测试
 ## 4.4 项目专属规则
 
 1. **同步协议不可私自变更**：消息格式、LWW 合并规则、删除防乱序逻辑见 docs/技术架构.md 第 7 节。改协议必须同步更新文档并重跑双端联调
-2. **平台配置坑**：Android 需 usesCleartextTraffic（ws:// 明文）、iOS 需 NSLocalNetworkUsageDescription + NSBonjourServices、macOS 需网络 Entitlements——改动平台文件时不得移除这些配置
+2. **平台配置坑**：Android 需 usesCleartextTraffic（ws:// 明文）；iOS 需 NSLocalNetworkUsageDescription + NSAppTransportSecurity/NSAllowsLocalNetworking（局域网 ws:// 明文意图声明；发现已用 UDP 广播，**不声明 NSBonjourServices**）；macOS 需网络 Entitlements（sandbox + network.server/client + user-selected.read-write）——改动平台文件时不得移除这些配置，也不得添加不必要权限（iOS 审核严格）
 3. **version 单调递增**：任何笔记写库，凡采用远端数据后本地 version 必须取 max(本地, 远端)（只增不减，禁止回退；task-9 联调修订，原 max+1 会导致版本膨胀破坏删除防乱序，见 docs/技术架构.md 7.3 节）
 4. **UI 风格**：EE 风格（参考 EasyEdit）——暖米白亮色（背景 #F7F5F0、卡片暖白 #FDFCF9 90% 半透明、强调色 #4F6EF7；迭代用户确认从冷白调整）/ 暗夜蓝暗色（背景 #0D1B2A、卡片 #1B2838、文字 #E0E0E0、强调色 #5B9BD5）+ 圆角 16 + 玻璃装饰（列表卡片半透明模拟零 GPU、弹窗/菜单 BackdropFilter blur 20）+ 表面分层（背景/卡片/浮层）。设计令牌与卡片工厂统一在 lib/app/theme.dart + lib/app/ui/widgets/glass_style.dart，全站卡片/弹窗一律走 GlassCard / showGlassDialog，禁止散落自定义 Card/AlertDialog（task-25 用户确认方向变更，原 Material 3 flat 已废弃）
 5. **单向数据流**：UI 只消费 Provider 流，变更一律走 NoteRepository，禁止在 Widget 里直接操作数据库

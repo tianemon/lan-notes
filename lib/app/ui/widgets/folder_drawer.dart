@@ -87,36 +87,10 @@ class FolderDrawer extends ConsumerWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  // 文件夹按钮（用户确认：跟随侧边栏一起弹出——按钮在
-                  // 抽屉头部，抽屉滑入时按钮一起滑入；点击收起抽屉）。
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(10, 8, 10, 2),
-                    child: Row(
-                      children: [
-                        InkWell(
-                          onTap: () => ref
-                              .read(folderDrawerOpenProvider.notifier)
-                              .state = false,
-                          borderRadius: BorderRadius.circular(12),
-                          child: Padding(
-                            padding: const EdgeInsets.all(6),
-                            child: Icon(
-                              Icons.folder_outlined,
-                              size: 20,
-                              color: Theme.of(context)
-                                  .colorScheme
-                                  .onSurfaceVariant,
-                            ),
-                          ),
-                        ),
-                        const Spacer(),
-                      ],
-                    ),
-                  ),
                   // 顶部虚线「+ 新建文件夹」拖放目标（常驻显示，
                   // 落点处理在 notes_list 拖拽收尾）。
                   const Padding(
-                    padding: EdgeInsets.fromLTRB(10, 2, 10, 4),
+                    padding: EdgeInsets.fromLTRB(10, 10, 10, 4),
                     child: _NewFolderDropTarget(),
                   ),
                   Expanded(
@@ -368,30 +342,20 @@ class _FolderItem extends ConsumerWidget {
       valueListenable: registry.highlighted,
       builder: (context, highlighted, _) {
         final dropHover = highlighted == (isAll ? '__all__' : id);
+        // 选中 / 拖拽悬停：统一浅灰高亮（用户确认：取消蓝色与边框，
+        // 用默认 hover 效果）；选中态额外保留强调色图标 + 加粗文字。
+        final highlightedBg = selected || dropHover;
         final content = Container(
           height: 40,
           padding: const EdgeInsets.symmetric(horizontal: 10),
-          decoration: BoxDecoration(
-            color: selected
-                ? colorScheme.primary.withValues(alpha: 0.14)
-                : (dropHover
-                    ? colorScheme.primary.withValues(alpha: 0.16)
-                    : null),
-            borderRadius: BorderRadius.circular(12),
-            border: dropHover
-                ? Border.all(color: colorScheme.primary, width: 1.4)
-                : null,
-          ),
           child: Row(
             children: [
               Icon(
                 icon,
                 size: 17,
-                color: dropHover
+                color: selected
                     ? colorScheme.primary
-                    : (selected
-                        ? colorScheme.primary
-                        : colorScheme.onSurfaceVariant),
+                    : colorScheme.onSurfaceVariant,
               ),
               const SizedBox(width: 8),
               Expanded(
@@ -424,9 +388,21 @@ class _FolderItem extends ConsumerWidget {
           ),
         );
 
+        // 高亮容器（选中/悬停背景统一在此一层定义，与内容分离——
+        // 避免双层样式重复定义导致不同步）。
+        final wrapped = AnimatedContainer(
+          duration: const Duration(milliseconds: 150),
+          curve: Curves.easeOutCubic,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(12),
+            color: highlightedBg ? colorScheme.surfaceContainerHighest : null,
+          ),
+          child: content,
+        );
+
         // 「全部」：可拖放落点（id null，注册 '__all__'），无菜单/手柄。
         if (isAll) {
-          return GestureDetector(onTap: onTap, child: content);
+          return GestureDetector(onTap: onTap, child: wrapped);
         }
         // 普通项：长按/右键菜单（拖拽落点由注册表 + notes_list 命中处理）。
         return GestureDetector(
@@ -434,19 +410,7 @@ class _FolderItem extends ConsumerWidget {
           onSecondaryTapUp: (d) =>
               _showContextMenu(context, ref, d.globalPosition),
           onLongPress: () => _showContextMenu(context, ref, null),
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 150),
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(12),
-              color: dropHover
-                  ? colorScheme.primary.withValues(alpha: 0.16)
-                  : null,
-              border: dropHover
-                  ? Border.all(color: colorScheme.primary, width: 1.4)
-                  : null,
-            ),
-            child: content,
-          ),
+          child: wrapped,
         );
       },
     );
@@ -598,6 +562,12 @@ class _NewFolderDropTarget extends ConsumerStatefulWidget {
 class _NewFolderDropTargetState extends ConsumerState<_NewFolderDropTarget> {
   final GlobalKey _dropKey = GlobalKey();
 
+  /// 点击按下（驱动缩放反馈）。
+  bool _pressed = false;
+
+  /// 桌面鼠标悬停（驱动微抬升 + 阴影，参照 GlassCard hoverLift）。
+  bool _mouseHover = false;
+
   /// 点击创建文件夹（用户确认：按钮可点击，弹命名框；与 FAB 扇形菜单
   /// 的「文件夹」同语义）。点击目标与拖放落点同一注册 key——点击时
   /// 命中在按钮上、无拖拽，直接走命名创建。
@@ -618,40 +588,73 @@ class _NewFolderDropTargetState extends ConsumerState<_NewFolderDropTarget> {
     return ValueListenableBuilder<String?>(
       valueListenable: registry.highlighted,
       builder: (context, highlighted, _) {
-        final hover = highlighted == '__new__';
-        return GestureDetector(
-          key: _dropKey,
-          onTap: _onTap,
-          child: Container(
-            height: 40,
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(
-                color: hover ? colorScheme.primary : colorScheme.outlineVariant,
-                width: 1.4,
-                style: BorderStyle.solid,
-              ),
-              color: hover ? colorScheme.primary.withValues(alpha: 0.12) : null,
-            ),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(
-                  Icons.add,
-                  size: 16,
-                  color: hover
-                      ? colorScheme.primary
-                      : colorScheme.onSurfaceVariant,
-                ),
-                const SizedBox(width: 4),
-                Text(
-                  '新建文件夹',
-                  style: TextStyle(
-                    fontSize: 13,
-                    color: colorScheme.onSurfaceVariant,
+        final dropHover = highlighted == '__new__';
+        // 层次感：常态浅灰底 + 细边框；鼠标悬停背景加深 + 轻阴影
+        // （微抬升）；拖拽悬停强调色淡底 + 强调色边框（拖放目标反馈）。
+        return MouseRegion(
+          cursor: SystemMouseCursors.click,
+          onEnter: (_) => setState(() => _mouseHover = true),
+          onExit: (_) => setState(() => _mouseHover = false),
+          child: AnimatedScale(
+            scale: _pressed ? 0.97 : 1.0,
+            duration: const Duration(milliseconds: 120),
+            curve: Curves.easeOutCubic,
+            child: GestureDetector(
+              key: _dropKey,
+              onTap: _onTap,
+              onTapDown: (_) => setState(() => _pressed = true),
+              onTapUp: (_) => setState(() => _pressed = false),
+              onTapCancel: () => setState(() => _pressed = false),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 180),
+                curve: Curves.easeOutCubic,
+                height: 32,
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(10),
+                  color: dropHover
+                      ? colorScheme.primary.withValues(alpha: 0.12)
+                      : (_mouseHover
+                          ? colorScheme.surfaceContainerHighest
+                          : colorScheme.surfaceContainerLow),
+                  border: Border.all(
+                    color: dropHover
+                        ? colorScheme.primary
+                        : colorScheme.outlineVariant,
+                    width: 1,
                   ),
+                  boxShadow: _mouseHover
+                      ? [
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.08),
+                            blurRadius: 8,
+                            offset: const Offset(0, 2),
+                          ),
+                        ]
+                      : null,
                 ),
-              ],
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(
+                      Icons.add,
+                      size: 15,
+                      color: (dropHover || _mouseHover)
+                          ? colorScheme.primary
+                          : colorScheme.onSurfaceVariant,
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      '新建文件夹',
+                      style: TextStyle(
+                        fontSize: 12.5,
+                        color: (dropHover || _mouseHover)
+                            ? colorScheme.primary
+                            : colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             ),
           ),
         );

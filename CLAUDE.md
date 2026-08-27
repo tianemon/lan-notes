@@ -164,6 +164,7 @@ flutter test              # 跑单元测试
 5. **单向数据流**：UI 只消费 Provider 流，变更一律走 NoteRepository，禁止在 Widget 里直接操作数据库
 6. **文件夹归类（task-32）**：Folders 表字段与 Notes 同构（LWW 全复用，无墓碑）；文件夹删除 = 软删除不可恢复（无回收站，删除前二选一确认）；排序 = isPinned DESC → sortOrder ASC（置顶区/普通区各自拖拽排序，跨区走菜单置顶/取消置顶，reorder 归一化 0..n-1）；notes.folderId null=未分类；协议 v6 起 folder_upsert 同步文件夹，改协议必须同步更新文档并重跑双端联调
 7. **编辑页静默同步**：自动保存/远端同步**不得弹 SnackBar 打断输入**（用户确认）——状态只由 AppBar 图标表达（刷新旋转 = 保存/同步中，对勾 = 保存完成+同步完成，单机时对勾也表示已保存后续自动同步）；列表页的拖拽/移动反馈 SnackBar 保留
+8. **Windows Release 构建必须加 --no-tree-shake-icons**：图标 tree-shaking（字体子集化）会漏掉运行时变量间接引用的 IconData（如同步页 _deviceTypeIcon 返回的设备图标、抽屉 folder_outlined），导致打包后这些图标渲染空白（用户实测：文件夹/设备图标空白、其他正常；Debug 运行正常）。命令：flutter build windows --release --no-tree-shake-icons（run.json 已固化）
 
 ## 4.5 关联文档
 

@@ -9,7 +9,8 @@ import '../../theme.dart';
 // ============================================================
 
 /// 亮色玻璃模拟底色（滚列表用，不用 BackdropFilter）。
-final Color _glassLookLight = Colors.white.withValues(alpha: 0.85);
+/// 暖白（#FDFCF9）：与亮色主题暖米白背景配套（用户确认：冷白→暖白）。
+final Color _glassLookLight = const Color(0xFFFDFCF9).withValues(alpha: 0.88);
 
 /// 暗色玻璃模拟底色（滚列表用）。
 final Color _glassLookDark = const Color(0xFF1B2838);

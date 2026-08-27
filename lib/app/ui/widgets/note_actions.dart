@@ -127,7 +127,7 @@ class _MoveToSheet extends ConsumerWidget {
       decoration: BoxDecoration(
         color: isDark
             ? const Color(0xFF223344)
-            : Colors.white.withValues(alpha: 0.96),
+            : const Color(0xFFFDFCF9).withValues(alpha: 0.96),
         borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
       ),
       child: SafeArea(

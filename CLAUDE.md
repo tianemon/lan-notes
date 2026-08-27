@@ -160,9 +160,10 @@ flutter test              # 跑单元测试
 1. **同步协议不可私自变更**：消息格式、LWW 合并规则、删除防乱序逻辑见 docs/技术架构.md 第 7 节。改协议必须同步更新文档并重跑双端联调
 2. **平台配置坑**：Android 需 usesCleartextTraffic（ws:// 明文）、iOS 需 NSLocalNetworkUsageDescription + NSBonjourServices、macOS 需网络 Entitlements——改动平台文件时不得移除这些配置
 3. **version 单调递增**：任何笔记写库，凡采用远端数据后本地 version 必须取 max(本地, 远端)（只增不减，禁止回退；task-9 联调修订，原 max+1 会导致版本膨胀破坏删除防乱序，见 docs/技术架构.md 7.3 节）
-4. **UI 风格**：EE 风格（参考 EasyEdit）——灰白亮色（背景 #F2F2F7、卡片白 85% 半透明、强调色 #4F6EF7）/ 暗夜蓝暗色（背景 #0D1B2A、卡片 #1B2838、文字 #E0E0E0、强调色 #5B9BD5）+ 圆角 16 + 玻璃装饰（列表卡片半透明模拟零 GPU、弹窗/菜单 BackdropFilter blur 20）+ 表面分层（背景/卡片/浮层）。设计令牌与卡片工厂统一在 lib/app/theme.dart + lib/app/ui/widgets/glass_style.dart，全站卡片/弹窗一律走 GlassCard / showGlassDialog，禁止散落自定义 Card/AlertDialog（task-25 用户确认方向变更，原 Material 3 flat 已废弃）
+4. **UI 风格**：EE 风格（参考 EasyEdit）——暖米白亮色（背景 #F7F5F0、卡片暖白 #FDFCF9 90% 半透明、强调色 #4F6EF7；迭代用户确认从冷白调整）/ 暗夜蓝暗色（背景 #0D1B2A、卡片 #1B2838、文字 #E0E0E0、强调色 #5B9BD5）+ 圆角 16 + 玻璃装饰（列表卡片半透明模拟零 GPU、弹窗/菜单 BackdropFilter blur 20）+ 表面分层（背景/卡片/浮层）。设计令牌与卡片工厂统一在 lib/app/theme.dart + lib/app/ui/widgets/glass_style.dart，全站卡片/弹窗一律走 GlassCard / showGlassDialog，禁止散落自定义 Card/AlertDialog（task-25 用户确认方向变更，原 Material 3 flat 已废弃）
 5. **单向数据流**：UI 只消费 Provider 流，变更一律走 NoteRepository，禁止在 Widget 里直接操作数据库
 6. **文件夹归类（task-32）**：Folders 表字段与 Notes 同构（LWW 全复用，无墓碑）；文件夹删除 = 软删除不可恢复（无回收站，删除前二选一确认）；排序 = isPinned DESC → sortOrder ASC（置顶区/普通区各自拖拽排序，跨区走菜单置顶/取消置顶，reorder 归一化 0..n-1）；notes.folderId null=未分类；协议 v6 起 folder_upsert 同步文件夹，改协议必须同步更新文档并重跑双端联调
+7. **编辑页静默同步**：自动保存/远端同步**不得弹 SnackBar 打断输入**（用户确认）——状态只由 AppBar 图标表达（刷新旋转 = 保存/同步中，对勾 = 保存完成+同步完成，单机时对勾也表示已保存后续自动同步）；列表页的拖拽/移动反馈 SnackBar 保留
 
 ## 4.5 关联文档
 

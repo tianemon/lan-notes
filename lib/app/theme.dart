@@ -17,15 +17,15 @@ bool get isDesktopPlatform =>
 /// 全局统一圆角。
 const double kAppRadius = 16;
 
-/// 亮色（灰白）：背景 #F2F2F7、强调色 #4F6EF7。
-const Color kLightBackground = Color(0xFFF2F2F7);
+/// 亮色（暖米白，用户确认：从冷白调整——背景 #F7F5F0、强调色 #4F6EF7）。
+const Color kLightBackground = Color(0xFFF7F5F0);
 /// 亮色主题强调色（默认蓝；task-32 曾临时改黑，已恢复）。
 const Color kLightAccent = Color(0xFF4F6EF7);
 
 /// 亮色主题按钮图标/文字色（task-32：与强调色一致，蓝色）。
 const Color kLightButtonForeground = Color(0xFF4F6EF7);
-const Color kLightTextPrimary = Color(0xFF1C1C1E);
-const Color kLightTextSecondary = Color(0xFF6E6E73);
+const Color kLightTextPrimary = Color(0xFF1D1B16);
+const Color kLightTextSecondary = Color(0xFF6E6A63);
 
 /// 暗色（暗夜蓝）：背景 #0D1B2A、卡片 #1B2838、强调色 #5B9BD5。
 const Color kDarkBackground = Color(0xFF0D1B2A);
@@ -48,7 +48,7 @@ enum AppSurface { background, card, floating }
 
 /// 取当前主题下的表面颜色。
 ///
-/// - 亮色：背景 #F2F2F7、卡片白 85% 半透明、浮层白 92% 半透明；
+/// - 亮色：背景暖米白 #F7F5F0、卡片暖白 90% 半透明、浮层暖白 95% 半透明；
 /// - 暗色：背景 #0D1B2A、卡片 #1B2838、浮层 #223344（逐层提亮）。
 Color appSurfaceColor(BuildContext context, AppSurface layer) {
   final isDark = Theme.of(context).brightness == Brightness.dark;
@@ -56,10 +56,10 @@ Color appSurfaceColor(BuildContext context, AppSurface layer) {
     AppSurface.background => isDark ? kDarkBackground : kLightBackground,
     AppSurface.card => isDark
         ? kDarkCard
-        : Colors.white.withValues(alpha: 0.85),
+        : const Color(0xFFFDFCF9).withValues(alpha: 0.90),
     AppSurface.floating => isDark
         ? kDarkFloating
-        : Colors.white.withValues(alpha: 0.92),
+        : const Color(0xFFFDFCF9).withValues(alpha: 0.95),
   };
 }
 
@@ -138,14 +138,14 @@ ThemeData buildLightTheme() {
     surface: Colors.white,
     onSurface: kLightTextPrimary,
     onSurfaceVariant: kLightTextSecondary,
-    outline: const Color(0xFF9A9AA0),
-    outlineVariant: const Color(0xFFD9D9DE),
+    outline: const Color(0xFF9C978F),
+    outlineVariant: const Color(0xFFDCD7CE),
   ).copyWith(
-    surfaceContainerLowest: const Color(0xFFFAFAFC),
-    surfaceContainerLow: const Color(0xFFE9E9EF),
-    surfaceContainer: const Color(0xFFE4E4EA),
-    surfaceContainerHigh: const Color(0xFFDFDFE6),
-    surfaceContainerHighest: const Color(0xFFD9D9E0),
+    surfaceContainerLowest: const Color(0xFFFBFAF7),
+    surfaceContainerLow: const Color(0xFFEDE9E2),
+    surfaceContainer: const Color(0xFFE7E3DB),
+    surfaceContainerHigh: const Color(0xFFE1DCD4),
+    surfaceContainerHighest: const Color(0xFFDDD8D0),
   );
 
   return ThemeData(
@@ -176,7 +176,7 @@ ThemeData buildLightTheme() {
       thickness: 0.5,
     ),
     dialogTheme: DialogThemeData(
-      backgroundColor: Colors.white.withValues(alpha: 0.92),
+      backgroundColor: const Color(0xFFFDFCF9).withValues(alpha: 0.94),
       surfaceTintColor: Colors.transparent,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
     ),
@@ -212,7 +212,7 @@ ThemeData buildLightTheme() {
       ),
     ),
     popupMenuTheme: PopupMenuThemeData(
-      color: Colors.white.withValues(alpha: 0.95),
+      color: const Color(0xFFFDFCF9).withValues(alpha: 0.96),
       surfaceTintColor: Colors.transparent,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
     ),

@@ -76,7 +76,9 @@ class FolderDrawer extends ConsumerWidget {
             child: Container(
               // 用户确认：抽屉不透明（取消半透明，见 task-32 反馈）。
               decoration: BoxDecoration(
-                color: isDark ? const Color(0xFF223344) : Colors.white,
+                color: isDark
+                    ? const Color(0xFF223344)
+                    : const Color(0xFFFDFCF9),
                 border: Border.all(
                   color: isDark
                       ? Colors.white.withValues(alpha: 0.08)
@@ -426,7 +428,8 @@ class _FolderItem extends ConsumerWidget {
     if (id == null || !context.mounted) return;
     final overlay = Overlay.of(context);
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final bgColor = isDark ? const Color(0xFF1B2838) : Colors.white;
+    final bgColor =
+        isDark ? const Color(0xFF1B2838) : const Color(0xFFFDFCF9);
     final borderColor = isDark
         ? Colors.white.withValues(alpha: 0.08)
         : Colors.black.withValues(alpha: 0.06);

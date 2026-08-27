@@ -422,9 +422,9 @@ class _EditorPageState extends ConsumerState<EditorPage> {
     if (!_initialized) {
       setState(() => _initialized = true);
     } else {
-      // 非首次加载的覆盖才是真正的远端修改：刷新字数统计 + 短暂提示。
+      // 非首次加载的覆盖才是真正的远端修改：刷新字数统计。
+      // （静默同步：不弹提示、不打断输入，状态由 AppBar 图标表达）
       setState(() {});
-      _showRemoteSyncHint();
     }
   }
 
@@ -455,20 +455,6 @@ class _EditorPageState extends ConsumerState<EditorPage> {
         ..clear()
         ..addAll(tags);
     });
-  }
-
-  /// 短暂提示远端修改已同步（不打断输入）。
-  void _showRemoteSyncHint() {
-    final messenger = ScaffoldMessenger.of(context);
-    messenger
-      ..hideCurrentSnackBar()
-      ..showSnackBar(
-        const SnackBar(
-          content: Text('已同步远端修改'),
-          duration: Duration(seconds: 1),
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
   }
 
   // ---------- 自动保存 ----------
@@ -1250,48 +1236,58 @@ class _WordCountBar extends StatelessWidget {
   }
 }
 
-/// AppBar 保存状态指示：保存中 / 已保存 / 保存失败；新建且无内容时不显示。
-class _SaveStatusIndicator extends StatelessWidget {
+/// AppBar 保存/同步状态指示（静默同步，用户确认）：
+///
+/// - 刷新图标（旋转）= 正在保存/同步（写库或入队中）；
+/// - 对勾 = 保存完成 + 同步完成（单机时也表示已保存、后续会自动同步）；
+/// - 错误图标 = 保存失败（需用户注意，保留文字）；
+/// - 新建且无内容时不显示。
+///
+/// 纯图标、无文字（用户确认「已保存」去掉）——输入时余光可辨状态，
+/// 不打断输入。
+class _SaveStatusIndicator extends StatefulWidget {
   const _SaveStatusIndicator({required this.status});
 
   final _SaveStatus? status;
 
   @override
+  State<_SaveStatusIndicator> createState() => _SaveStatusIndicatorState();
+}
+
+class _SaveStatusIndicatorState extends State<_SaveStatusIndicator>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _spin = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 900),
+  )..repeat();
+
+  @override
+  void dispose() {
+    _spin.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
-    final baseStyle = theme.textTheme.labelMedium?.copyWith(
-      color: colorScheme.onSurfaceVariant,
-    );
 
-    final Widget content = switch (status) {
+    final Widget content = switch (widget.status) {
       null => const SizedBox.shrink(),
-      _SaveStatus.saving => Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            SizedBox(
-              width: 14,
-              height: 14,
-              child: CircularProgressIndicator(
-                strokeWidth: 2,
-                color: colorScheme.onSurfaceVariant,
-              ),
-            ),
-            const SizedBox(width: 6),
-            Text('保存中…', style: baseStyle),
-          ],
+      // 保存中/同步中：旋转刷新图标（不转圈占位动画，观感更轻）。
+      _SaveStatus.saving => RotationTransition(
+          turns: _spin,
+          child: Icon(
+            Icons.refresh,
+            size: 16,
+            color: colorScheme.onSurfaceVariant,
+          ),
         ),
-      _SaveStatus.saved => Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              Icons.check_circle,
-              size: 16,
-              color: colorScheme.primary,
-            ),
-            const SizedBox(width: 4),
-            Text('已保存', style: baseStyle),
-          ],
+      // 保存完成 + 同步完成（单机时也成立：已保存，后续自动同步）。
+      _SaveStatus.saved => Icon(
+          Icons.check_circle,
+          size: 16,
+          color: colorScheme.primary,
         ),
       _SaveStatus.error => Row(
           mainAxisSize: MainAxisSize.min,
@@ -1300,7 +1296,8 @@ class _SaveStatusIndicator extends StatelessWidget {
             const SizedBox(width: 4),
             Text(
               '保存失败',
-              style: baseStyle?.copyWith(color: colorScheme.error),
+              style: theme.textTheme.labelMedium
+                  ?.copyWith(color: colorScheme.error),
             ),
           ],
         ),

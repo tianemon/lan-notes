@@ -917,7 +917,8 @@ class _NoteListItemState extends ConsumerState<NoteListItem> {
     final note = widget.note;
     final overlay = Overlay.of(context);
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final bgColor = isDark ? const Color(0xFF1B2838) : Colors.white;
+    final bgColor =
+        isDark ? const Color(0xFF1B2838) : const Color(0xFFFDFCF9);
     final borderColor = isDark
         ? Colors.white.withValues(alpha: 0.08)
         : Colors.black.withValues(alpha: 0.06);
@@ -1196,7 +1197,9 @@ class _CheckCircle extends StatelessWidget {
           shape: BoxShape.circle,
           color: checked
               ? colorScheme.primary
-              : (isDark ? const Color(0xFF1B2838) : Colors.white),
+              : (isDark
+                    ? const Color(0xFF1B2838)
+                    : const Color(0xFFFDFCF9)),
           border: checked
               ? null
               : Border.all(
@@ -1243,7 +1246,7 @@ class _MultiSelectSheet extends ConsumerWidget {
         margin: const EdgeInsets.fromLTRB(12, 0, 12, 0),
         constraints: const BoxConstraints(maxWidth: 480),
         decoration: BoxDecoration(
-          color: isDark ? const Color(0xFF223344) : Colors.white,
+          color: isDark ? const Color(0xFF223344) : const Color(0xFFFDFCF9),
           borderRadius: const BorderRadius.vertical(
             top: Radius.circular(20),
           ),
@@ -1829,7 +1832,8 @@ class _GhostLayerState extends State<_GhostLayer>
             height: cardSize,
             padding: const EdgeInsets.all(12),
             decoration: BoxDecoration(
-              color: isDark ? const Color(0xFF1B2838) : Colors.white,
+              color:
+                  isDark ? const Color(0xFF1B2838) : const Color(0xFFFDFCF9),
               borderRadius: BorderRadius.circular(16),
               // 无边框（用户确认去掉蓝色描边）。
               boxShadow: [

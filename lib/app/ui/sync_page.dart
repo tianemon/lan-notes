@@ -970,17 +970,19 @@ class _StatusDotState extends State<_StatusDot>
   }
 }
 
-/// 已配对设备行 leading：设备类型图标（按名称猜）+ 状态圆点。
-/// 猜不到类型时只返回状态圆点。图标颜色跟随连接状态（在线绿/离线灰，
-/// 用户确认：图标变绿表示在线）。
+/// 已配对设备行 leading：优先设备类型图标（按名称猜，颜色随连接状态
+/// 在线绿/离线灰——用户确认：去掉圆点，只留图标）；猜不到类型的设备
+/// 回退显示状态圆点（否则无任何在线/离线指示）。
 List<Widget> _peerLeading(String name, Color statusColor) {
   final icon = _deviceTypeIcon(name);
-  return [
-    if (icon != null) ...[
+  if (icon != null) {
+    return [
       AppIcon(icon, size: 18, color: statusColor),
-      const SizedBox(width: 8),
-    ],
-    // 状态圆点：只留在线绿/离线灰（连接中按离线显示，不闪黄）。
+      const SizedBox(width: 12),
+    ];
+  }
+  // 猜不到类型：圆点兜底（在线绿/离线灰，连接中按离线显示）。
+  return [
     _StatusDot(color: statusColor, pulse: false),
     const SizedBox(width: 12),
   ];

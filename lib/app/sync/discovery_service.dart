@@ -482,29 +482,28 @@ class DiscoveryService {
     // 都能收到）。dart socket 直发避免 MethodChannel 往返（253 个包毫秒级，
     // 之前原生通道逐包调用一轮 ~15s）。其他平台保持广播。
     if (Platform.isIOS) {
-      final hosts = await _subnetHostAddresses();
       final stopwatch = Stopwatch()..start();
-      // ignore: avoid_print
-      print('[discovery] iOS 子网单播 ${hosts.length} 目标开始');
       // 每轮重建 socket（用户实测规律）：iOS 上 dart socket 的 UDP 发送
       // 「仅 socket 新建后的首次/前几次成功，之后静默丢弃」（dart-lang/sdk
-      // #45824/#55564；表现：每次开可被发现保底扫到一次=新 socket 首次
-      // 成功，之后扫不到=同 socket 后续发送失败）。每轮 close 旧的并
-      // 重新 bind——每轮都是「新 socket 首次发送」，按规律应每轮成功。
-      // 代价：每轮多一次 bind/close（微秒级），可忽略。
+      // #45824/#55564）。重建后发送的**广播**同样应每轮成功（早期
+      // 「开启瞬间广播成功 1 次」正是新 socket 首次发送）——若成立则
+      // 与安卓/Mac 完全同路径（一次广播覆盖全网段），无需 253 个单播。
       await _maybeRecreateIOSSendSocket();
       final freshSocket = _sendSocket;
       if (freshSocket == null) return;
-      for (final target in hosts) {
+      final targets = await _broadcastTargets();
+      // ignore: avoid_print
+      print('[discovery] iOS 广播重建后 targets=${targets.map((t) => t.address).toList()}');
+      for (final target in targets) {
         try {
           freshSocket.send(payload, target, kDiscoveryPort);
         } catch (e) {
-          stderr.writeln('[discovery] 子网单播发送失败 -> $target: $e');
+          stderr.writeln('[discovery] iOS 广播发送失败 -> $target: $e');
         }
       }
       stopwatch.stop();
       // ignore: avoid_print
-      print('[discovery] iOS 子网单播 ${hosts.length} 目标完成，耗时 ${stopwatch.elapsedMilliseconds}ms');
+      print('[discovery] iOS 广播完成，耗时 ${stopwatch.elapsedMilliseconds}ms');
       return;
     }
     final targets = await _broadcastTargets();
@@ -522,54 +521,6 @@ class DiscoveryService {
         );
       }
     }
-  }
-
-  /// iOS 子网单播目标：枚举本机 IPv4 所在网段的全部主机地址
-  /// （192.168.5.1 ~ 192.168.5.254，排除本机与广播地址），逐网卡收集
-  /// 去重。基于 [_subnetRangeFor] 的掩码推导（与广播地址同一套惯例）。
-  ///
-  /// 网络异常（网卡枚举失败/无有效 IPv4）返回空列表——上层容忍静默跳过。
-  Future<List<InternetAddress>> _subnetHostAddresses() async {
-    final hosts = <InternetAddress>{};
-    try {
-      final interfaces = await NetworkInterface.list(
-        includeLinkLocal: false,
-        type: InternetAddressType.IPv4,
-        includeLoopback: false,
-      );
-      for (final iface in interfaces) {
-        if (_looksLikeVirtualInterface(iface.name)) continue;
-        for (final address in iface.addresses) {
-          if (address.isLoopback || address.isLinkLocal) continue;
-          final range = _subnetRangeFor(address);
-          if (range == null) continue;
-          for (var i = range.$2; i <= range.$3; i++) {
-            final host = InternetAddress('${range.$1}.$i');
-            if (host.address == address.address) continue; // 排除本机
-            hosts.add(host);
-          }
-        }
-      }
-    } catch (_) {
-      return const [];
-    }
-    return hosts.toList();
-  }
-
-  /// 由接口 IP 推导子网主机范围：返回 (前缀, 起始, 结束)。
-  /// 与 [_broadcastAddressFor] 同一套掩码惯例：
-  /// `10/8` → 10.x.y.1~254（推导整个 A 段太大，实际按 /24 收敛）；
-  /// `172.16/12`、`192.168/16` 同理按 /24 收敛；其余按 /24 默认。
-  /// 返回 null 表示无法解析（非 IPv4 格式）。
-  ///
-  /// 注：/24 收敛是对「私有网段超大类」的务实简化——家用/办公路由器
-  /// 绝大多数是 /24 分配，枚举 254 个地址已足够；超大类全枚举开销过大
-  /// （10/8 有 1600 万地址）且无必要。
-  (String, int, int)? _subnetRangeFor(InternetAddress address) {
-    final parts = address.address.split('.').map(int.tryParse).toList();
-    if (parts.length != 4 || parts.any((p) => p == null)) return null;
-    final a = parts[0]!, b = parts[1]!, c = parts[2]!;
-    return ('$a.$b.$c', 1, 254); // 统一 /24：x.y.z.1 ~ x.y.z.254
   }
 
   /// 计算广播目标地址列表：逐网卡子网广播（IP+掩码推导）+ 255.255.255.255

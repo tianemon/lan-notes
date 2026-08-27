@@ -87,9 +87,13 @@ class FolderDrawer extends ConsumerWidget {
                 ),
               ),
               clipBehavior: Clip.antiAlias,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
+              child: SafeArea(
+                // 顶部避让状态栏（Android/iOS 全屏覆盖组件必需）：
+                // 背景仍铺满（Container 在 SafeArea 外层），内容下移。
+                // 桌面平台 padding 为 0，无影响。
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
                   // 顶部虚线「+ 新建文件夹」拖放目标（常驻显示，
                   // 落点处理在 notes_list 拖拽收尾）。
                   const Padding(
@@ -166,8 +170,9 @@ class FolderDrawer extends ConsumerWidget {
             ),
           ),
         ),
-      ],
-    );
+      ),
+    ],
+  );
   }
 
   /// 区内拖拽重排：把 [zone] 换成 [newOrder]，与另一区原顺序组装完整

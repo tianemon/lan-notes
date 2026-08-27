@@ -727,7 +727,8 @@ class _EditorPageState extends ConsumerState<EditorPage> {
           duration: const Duration(milliseconds: 200),
           curve: Curves.easeOut,
           padding: EdgeInsets.only(
-            bottom: MediaQuery.of(context).viewInsets.bottom,
+            bottom: MediaQuery.of(context).viewInsets.bottom +
+                MediaQuery.paddingOf(context).bottom,
           ),
           child: _buildToolbar(),
         ),

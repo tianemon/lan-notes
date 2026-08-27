@@ -1268,9 +1268,11 @@ class _MultiSelectSheet extends ConsumerWidget {
           ],
         ),
         clipBehavior: Clip.antiAlias,
-        // 横向排列（用户确认）：菜单项一行排开，图标上/文字下。
-        // 高度 = 按钮区域高度（无额外上下 padding，用户确认）。
-        child: Row(
+        // 底部避让系统手势区（iPhone home indicator / Android 导航栏）：
+        // 面板贴底（用户确认），但内容上移到手势区之上。
+        child: SafeArea(
+          top: false,
+          child: Row(
             children: [
               // 置顶：仅单选时显示。
               if (single != null)
@@ -1342,6 +1344,7 @@ class _MultiSelectSheet extends ConsumerWidget {
               ),
             ],
           ),
+        ),
       ),
     );
   }

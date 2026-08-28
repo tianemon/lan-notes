@@ -1,7 +1,16 @@
 import 'dart:async';
 import 'dart:math' as math;
+import 'dart:ui' show PointerDeviceKind;
 
-import 'package:flutter/gestures.dart' show PointerRoute;
+import 'package:flutter/gestures.dart'
+    show
+        PointerRoute,
+        PointerPanZoomStartEvent,
+        PointerPanZoomUpdateEvent,
+        PointerPanZoomEndEvent,
+        LongPressGestureRecognizer,
+        TapGestureRecognizer,
+        VerticalDragGestureRecognizer;
 import 'package:flutter/material.dart';
 import 'package:flutter/physics.dart' show SpringDescription, SpringSimulation;
 import 'package:flutter/scheduler.dart' show Ticker;
@@ -15,6 +24,26 @@ import 'empty_hint.dart';
 import 'format.dart';
 import 'glass_style.dart';
 import 'note_actions.dart';
+
+/// 多选拖拽识别器：
+/// - 忽略触控板双指滚动（PointerPanZoom*）——macOS 双指滚动交给 Scrollable；
+/// - 忽略触摸设备（手机）按下——触摸滚动优先，拖拽走长按路径
+///   （长按进多选后不松手移动 = 拖拽）；
+/// - 鼠标/触控板点击按下拖动照常（桌面拖拽体验）。
+class _MouseVerticalDragRecognizer extends VerticalDragGestureRecognizer {
+  @override
+  void handleEvent(PointerEvent event) {
+    if (event is PointerPanZoomStartEvent ||
+        event is PointerPanZoomUpdateEvent ||
+        event is PointerPanZoomEndEvent) {
+      return; // 双指滚动不参与拖拽竞技场，Scrollable 正常接管
+    }
+    if (event is PointerDownEvent && event.kind == PointerDeviceKind.touch) {
+      return; // 手机触摸：不加入竞技场（滚动优先，拖拽走长按路径）
+    }
+    super.handleEvent(event);
+  }
+}
 
 /// 笔记列表：消费 [notesStreamProvider]，按 updatedAt 倒序渲染。
 ///
@@ -607,7 +636,7 @@ class _ShrinkPlaceholderState extends State<_ShrinkPlaceholder> {
 
 /// 单个笔记卡片项：点击进入编辑；长按进入多选（手势由 _NotesListState
 /// 统一处理，本组件只负责展示与 InkWell 点击）；右键菜单（置顶/移动到/
-/// 删除，task-32）；左滑移到回收站（非多选）。
+/// 删除，task-32）。
 ///
 /// 卡片风格（task-25，EE 式）：圆角 16 + 柔和阴影 + 玻璃模拟装饰
 /// （[GlassCard]）；布局三段式——标题 16bold（无标题兜底）+ 摘要 13 灰
@@ -679,31 +708,12 @@ class _NoteListItemState extends ConsumerState<NoteListItem> {
       isSelected: isSelected,
     );
 
-    if (!multiActive) {
-      // 非多选：左滑删除 + 长按（手势层处理）进入多选 + 右键菜单。
-      return Padding(
-        padding: const EdgeInsets.symmetric(vertical: 6),
-        child: SizedBox(
-          // 撑满列宽：多列布局（Column）中卡片不收缩到内容宽度，
-          // 保证双列/四列等宽对齐（EE 卡片 width: double.infinity 同款）。
-          width: double.infinity,
-          child: Dismissible(
-            key: ValueKey(widget.note.id),
-            direction: DismissDirection.endToStart,
-            background: const _DeleteBackground(),
-            confirmDismiss: (_) => _confirmDelete(context),
-            onDismissed: (_) {
-              // 删除已在 confirmDismiss 中完成，列表经 drift 流自动移除该项。
-            },
-            child: card,
-          ),
-        ),
-      );
-    }
-    // 多选模式：点击 = 切换选中（自绘手势层处理拖拽/抽卡，本层只管展示）。
+    // 展示层：点击/长按/右键/拖拽由 _buildCard 手势层处理，本层只管布局。
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 6),
       child: SizedBox(
+        // 撑满列宽：多列布局（Column）中卡片不收缩到内容宽度，
+        // 保证双列/四列等宽对齐（EE 卡片 width: double.infinity 同款）。
         width: double.infinity,
         child: card,
       ),
@@ -791,8 +801,9 @@ class _NoteListItemState extends ConsumerState<NoteListItem> {
   /// 卡片本体（含多选框）。手势全部由本层 GestureDetector 统一处理：
   /// - 非多选：点击进编辑；长按进多选（识别器常驻，进入多选后不中断，
   ///   长按后不松手继续移动 = 拖拽）；
-  /// - 多选：点按切换选中（down 立即选中 / up 取消已选）；按住移动 =
-  ///   拖拽（drag 识别器与 ListView 滚动竞技，压掉滚动）。
+  /// - 多选：点按切换选中（down 立即选中 / up 取消已选）；鼠标按住移动 =
+  ///   拖拽（drag 识别器与 ListView 滚动竞技，压掉滚动）；触摸（手机）
+  ///   滚动优先——按下滑动滚动列表，拖拽走长按路径（识别器不响应 touch）。
   Widget _buildCard(
     BuildContext context, {
     required bool multiActive,
@@ -803,25 +814,50 @@ class _NoteListItemState extends ConsumerState<NoteListItem> {
     final note = widget.note;
     final title = note.title.trim().isEmpty ? '无标题' : note.title.trim();
 
-    return GestureDetector(
-      // 桌面右键：弹统一笔记菜单（在鼠标位置）。
-      onSecondaryTapUp: (d) => _showContextMenu(context, d.globalPosition),
-      // 多选点按：切换选中。
-      onTapDown: multiActive ? (d) => _onTapDown(note.id) : null,
-      onTapUp: multiActive ? (d) => _onTapUp(note.id) : null,
-      onTapCancel: multiActive ? _onTapCancel : null,
-      // 非多选：点击进编辑页。
-      onTap: multiActive ? null : () => context.push('/editor/${note.id}'),
-      // 长按识别器常驻（进入多选后不中断，延续为拖拽）。
-      onLongPressStart: _onLongPressStart,
-      onLongPressMoveUpdate: _onLongPressMoveUpdate,
-      onLongPressEnd: (_) => _onLongPressEnd(),
-      onLongPressCancel: _onLongPressCancel,
-      // 多选：按住即拖（压掉列表滚动）。
-      onVerticalDragStart: multiActive ? _onVerticalDragStart : null,
-      onVerticalDragUpdate: multiActive ? (d) => _onVerticalDragUpdate(d) : null,
-      onVerticalDragEnd: multiActive ? (_) => _onVerticalDragEnd() : null,
-      onVerticalDragCancel: multiActive ? _onVerticalDragCancel : null,
+    return RawGestureDetector(
+      // 手势全部显式声明（GestureDetector 不支持自定义识别器；drag 用
+      // _MouseVerticalDragRecognizer 排除触控板双指滚动误触拖拽）。
+      gestures: <Type, GestureRecognizerFactory>{
+        // 点按（含桌面右键 secondary tap，弹统一笔记菜单）+ 多选切换选中。
+        TapGestureRecognizer:
+            GestureRecognizerFactoryWithHandlers<TapGestureRecognizer>(
+          TapGestureRecognizer.new,
+          (r) {
+            r.onTapDown = multiActive ? (d) => _onTapDown(note.id) : null;
+            r.onTapUp = multiActive ? (d) => _onTapUp(note.id) : null;
+            r.onTapCancel = multiActive ? _onTapCancel : null;
+            // 桌面右键：弹统一笔记菜单（在鼠标位置）。
+            r.onSecondaryTapUp =
+                (d) => _showContextMenu(context, d.globalPosition);
+            r.onTap =
+                multiActive ? null : () => context.push('/editor/${note.id}');
+          },
+        ),
+        // 长按识别器常驻（进入多选后不中断，延续为拖拽）。
+        LongPressGestureRecognizer:
+            GestureRecognizerFactoryWithHandlers<LongPressGestureRecognizer>(
+          LongPressGestureRecognizer.new,
+          (r) {
+            r.onLongPressStart = _onLongPressStart;
+            r.onLongPressMoveUpdate = _onLongPressMoveUpdate;
+            r.onLongPressEnd = (_) => _onLongPressEnd();
+            r.onLongPressCancel = _onLongPressCancel;
+          },
+        ),
+        // 多选：鼠标按住即拖（压掉列表滚动）；触摸/触控板滚动不参与。
+        // 非多选不注册（回调全 null 的识别器仍会参与竞技场抢滚动）。
+        if (multiActive)
+          _MouseVerticalDragRecognizer:
+              GestureRecognizerFactoryWithHandlers<_MouseVerticalDragRecognizer>(
+            _MouseVerticalDragRecognizer.new,
+            (r) {
+              r.onStart = _onVerticalDragStart;
+              r.onUpdate = (d) => _onVerticalDragUpdate(d);
+              r.onEnd = (_) => _onVerticalDragEnd();
+              r.onCancel = _onVerticalDragCancel;
+            },
+          ),
+      },
       child: GlassCard(
         heroTag: null,
         // 卡片宽度恒定：关闭 hover 缩放。
@@ -1032,9 +1068,8 @@ class _NoteListItemState extends ConsumerState<NoteListItem> {
   }
 
   /// 弹出「移到回收站」玻璃确认框；确认后调 [noteRepositoryProvider]
-  /// .softDeleteNote 软删除，返回 true 供 Dismissible 完成滑出动画
-  /// （长按删除时返回值被忽略）。
-  Future<bool> _confirmDelete(BuildContext context) async {
+  /// .softDeleteNote 软删除（右键菜单删除入口）。
+  Future<void> _confirmDelete(BuildContext context) async {
     final title = widget.note.title.trim().isEmpty
         ? '无标题'
         : widget.note.title.trim();
@@ -1054,36 +1089,9 @@ class _NoteListItemState extends ConsumerState<NoteListItem> {
       ],
     );
     if (confirmed != true) {
-      return false;
+      return;
     }
     await ref.read(noteRepositoryProvider).softDeleteNote(widget.note.id);
-    return true;
-  }
-}
-
-/// 左滑露出的删除背景（玻璃卡片风格：圆角 16 与卡片一致，柔和阴影）。
-class _DeleteBackground extends StatelessWidget {
-  const _DeleteBackground();
-
-  @override
-  Widget build(BuildContext context) {
-    final colorScheme = Theme.of(context).colorScheme;
-    return Container(
-      alignment: Alignment.centerRight,
-      padding: const EdgeInsets.symmetric(horizontal: 24),
-      decoration: BoxDecoration(
-        color: colorScheme.errorContainer,
-        borderRadius: const BorderRadius.all(Radius.circular(kAppRadius)),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.06),
-            blurRadius: 20,
-            offset: const Offset(0, 8),
-          ),
-        ],
-      ),
-      child: Icon(Icons.delete_outline, color: colorScheme.onErrorContainer),
-    );
   }
 }
 
@@ -1475,14 +1483,14 @@ class _GhostLayer extends StatefulWidget {
 }
 
 class _GhostLayerState extends State<_GhostLayer>
-    with SingleTickerProviderStateMixin {
+    with TickerProviderStateMixin {
   late final AnimationController _controller = AnimationController(
     vsync: this,
     duration: const Duration(milliseconds: 280),
   );
 
-  /// 方形迷你卡尺寸（用户确认：近似方形，缩小一圈）。
-  static const double cardSize = 112;
+  /// 方形迷你卡尺寸（用户确认：近似方形，96 更紧凑）。
+  static const double cardSize = 96;
 
   // ---- 弹性跟手（SpringSimulation，Flutter 官方弹簧物理，参考 iOS/安卓
   // 拖拽图标的 elastic follow）：ghost 显示位置由弹簧驱动向目标逼近——
@@ -1511,14 +1519,14 @@ class _GhostLayerState extends State<_GhostLayer>
   final List<Offset> _chain = [];
 
   /// 主卡位置历史（时间 → 位置，依次延迟采样用）：拖动中底层卡
-  /// 依次延迟跟随（第一张先动、底层依次移动的拖影动画，用户认可版）。
+  /// 依次延迟跟随（主卡无延迟、底层 60ms/层递增的拖影动画，用户认可版）。
   final List<_HistoryPoint> _history = [];
 
-  /// 每层延迟（卡2 晚 45ms、卡3 晚 90ms…依次启动）。
-  static const int _delayPerLevelMicros = 45 * 1000;
+  /// 每层延迟（主卡无延迟，卡2 晚 60ms、卡3 晚 120ms…依次启动）。
+  static const int _delayPerLevelMicros = 60 * 1000;
 
-  /// 历史保留时长（最长延迟 + 余量）。
-  static const int _historyLifetimeMicros = 600 * 1000;
+  /// 历史保留时长（覆盖无上限层叠的最大延迟 + 余量）。
+  static const int _historyLifetimeMicros = 2000 * 1000;
 
   /// 上一次目标与时间（拖动速度估算用；ticker 无公开 elapsed，
   /// 用系统时钟微秒）。
@@ -1710,7 +1718,7 @@ class _GhostLayerState extends State<_GhostLayer>
       // 主卡最后），才能让每张卡露出上一层右下角的 7px 边缘，形成
       // 规则阶梯（顺序 add 会让卡3 盖住卡2，卡2 露出左上条带，视觉
       // 上「右下角露出面积不一致」）。
-      for (var i = others.length - 1; i >= 0 && i >= others.length - 4; i--) {
+      for (var i = others.length - 1; i >= 0; i--) {
         final note = notes.where((n) => n.id == others[i]).firstOrNull;
         if (note == null) continue;
         final pos = i + 1 < _chain.length ? _chain[i + 1] : _chain.last;
@@ -1718,7 +1726,7 @@ class _GhostLayerState extends State<_GhostLayer>
           context,
           note: note,
           offset: pos,
-          opacity: math.max(0.5, 0.95 - i * 0.15),
+          opacity: math.max(0.5, 0.9 - i * 0.1),
           scale: 1.0,
           isDark: isDark,
         ));
@@ -1741,7 +1749,7 @@ class _GhostLayerState extends State<_GhostLayer>
     }
     // 回弹模式：各卡从当前位置飞回原矩形（依次归位；z 序同跟随模式，
     // 逆序 add 保证规则阶梯）。
-    for (var i = others.length - 1; i >= 0 && i >= others.length - 4; i--) {
+    for (var i = others.length - 1; i >= 0; i--) {
       final note = notes.where((n) => n.id == others[i]).firstOrNull;
       if (note == null) continue;
       cards.add(_ghostCard(
@@ -1753,7 +1761,7 @@ class _GhostLayerState extends State<_GhostLayer>
           drag,
           others[i],
         ),
-        opacity: math.max(0.5, 0.95 - i * 0.15),
+        opacity: math.max(0.5, 0.9 - i * 0.1),
         scale: 1.0,
         isDark: isDark,
       ));

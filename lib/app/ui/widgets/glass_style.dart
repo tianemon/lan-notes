@@ -140,9 +140,9 @@ class _GlassCardState extends State<GlassCard> {
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 180),
         curve: Curves.easeOutCubic,
-        // 撑满父级最大宽度：外层约束可能被 Dismissible 内部的 Stack
-        // 转成 loose（卡片会收缩到内容宽度，宽度随文本变化），
-        // 这里显式撑满保证所有卡片等宽（EE 卡片 width: double.infinity 同款）。
+        // 撑满父级最大宽度：外层约束可能被转成 loose（卡片会收缩到内容
+        // 宽度，宽度随文本变化），这里显式撑满保证所有卡片等宽
+        // （EE 卡片 width: double.infinity 同款）。
         width: double.infinity,
         decoration: _hovered
             ? decoration.copyWith(
@@ -314,17 +314,25 @@ class SlimSwitch extends StatefulWidget {
 
 class _SlimSwitchState extends State<SlimSwitch>
     with SingleTickerProviderStateMixin {
-  late final AnimationController _controller = AnimationController(
-    vsync: this,
-    duration: const Duration(milliseconds: 220),
-    value: widget.value ? 1 : 0,
-  );
+  late final AnimationController _controller;
 
   late final Animation<double> _anim = CurvedAnimation(
     parent: _controller,
     curve: Curves.easeOutCubic,
     reverseCurve: Curves.easeInCubic,
   );
+
+  @override
+  void initState() {
+    super.initState();
+    // initState 显式创建（非惰性）：消除 dispose 首次访问 late 字段
+    // 触发创建的隐患（同 _StatusDot 模式）。
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 220),
+      value: widget.value ? 1 : 0,
+    );
+  }
 
   @override
   void didUpdateWidget(SlimSwitch oldWidget) {

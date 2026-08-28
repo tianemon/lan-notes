@@ -410,10 +410,18 @@ class _AppSnackBarHost extends StatefulWidget {
 
 class _AppSnackBarHostState extends State<_AppSnackBarHost>
     with SingleTickerProviderStateMixin {
-  late final AnimationController _controller = AnimationController(
-    vsync: this,
-    duration: const Duration(milliseconds: 220),
-  )..forward();
+  late final AnimationController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    // initState 显式创建（非惰性）：消除 dispose 首次访问 late 字段
+    // 触发创建的隐患（同 _StatusDot 模式）。
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 220),
+    )..forward();
+  }
 
   @override
   void dispose() {

@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'dart:math' as math;
-import 'dart:ui' show PointerDeviceKind;
+import 'dart:ui' show PointerDeviceKind, lerpDouble;
 
 import 'package:flutter/gestures.dart'
     show
@@ -127,6 +127,13 @@ class _NotesListState extends ConsumerState<NotesList> {
   Set<String> _selectedNow() => ref.read(multiSelectProvider);
 
   @override
+  void dispose() {
+    // 取消延迟拿起窗口，防止组件销毁后 Timer 触发崩溃。
+    _cancelPendingDrag();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     final notesAsync = ref.watch(notesStreamProvider);
     final isSearching = ref.watch(searchQueryProvider).trim().isNotEmpty;
@@ -241,6 +248,30 @@ class _NotesListState extends ConsumerState<NotesList> {
   /// 多选 drag 路径由 onVerticalDrag* 结束，避免竞技失败误结束）。
   bool _dragFromLongPress = false;
 
+  /// 非多选态长按的延迟拿起窗口（500ms）：进入多选后不立即拿起。
+  /// 窗口内松手（_onLongPressEnd）→ 取消，只进多选；窗口内移动
+  /// （_onLongPressMoveUpdate）或按住满 500ms → 拿起。
+  Timer? _pendingDragTimer;
+
+  /// 延迟拿起时用的指针位置（start 时刻记录，未移动时保持不变）。
+  Offset _pendingDragPos = Offset.zero;
+
+  /// 非多选态长按：进入多选后延迟 500ms 拿起（零移动时靠到期自动拿起）。
+  void _schedulePendingDrag(String id, Offset globalPos) {
+    _pendingDragPos = globalPos;
+    _cancelPendingDrag();
+    _pendingDragTimer = Timer(const Duration(milliseconds: 500), () {
+      _pendingDragTimer = null;
+      _beginDrag(_pendingDragPos, mainId: id, fromLongPress: true);
+    });
+  }
+
+  /// 取消延迟拿起窗口（松手 / 已移动拿起 / dispose 时调用）。
+  void _cancelPendingDrag() {
+    _pendingDragTimer?.cancel();
+    _pendingDragTimer = null;
+  }
+
   void _beginDrag(
     Offset globalPos, {
     String? mainId,
@@ -250,6 +281,8 @@ class _NotesListState extends ConsumerState<NotesList> {
     if (selected.isEmpty) return;
     final main = mainId ?? selected.first;
     _dragFromLongPress = fromLongPress;
+    // 任意路径拿起 → 取消延迟拿起窗口（防重复 beginDrag）。
+    _cancelPendingDrag();
     // 记录每张选中卡原矩形（回弹目标）。
     final rects = <String, Rect>{};
     for (final id in selected) {
@@ -741,10 +774,28 @@ class _NoteListItemState extends ConsumerState<NoteListItem> {
 
   void _onTapCancel() => _pendingDeselect = false;
 
-  /// 长按进入多选（非多选态；识别器常驻，多选态忽略——见类注释）。
+  /// 长按进入多选（非多选态；识别器常驻，多选态单独处理——见下）。
+  /// 非多选态：进入多选 + 500ms 延迟拿起窗口——窗口内松手只进多选，
+  /// 移动或按住满 500ms 才拿起（拿起零迟滞的说法改为延迟窗口）。
+  /// 多选态：再次长按 → 单独触发拿起（该卡未选中则先加入，拖拽整体）。
   void _onLongPressStart(LongPressStartDetails d) {
-    if (ref.read(multiSelectProvider).isNotEmpty) return;
-    _notesListState?._beginMultiSelect(widget.note.id);
+    final list = _notesListState;
+    if (list == null) return;
+    if (ref.read(multiSelectProvider).isNotEmpty) {
+      // 多选态：长按 = 拿起，不再进多选流程。
+      if (!ref.read(multiSelectProvider).contains(widget.note.id)) {
+        ref.read(multiSelectProvider.notifier).toggle(widget.note.id);
+      }
+      list._beginDrag(
+        d.globalPosition,
+        mainId: widget.note.id,
+        fromLongPress: true,
+      );
+      return;
+    }
+    // 非多选态：进入多选，拿起由 500ms 窗口（移动/到期）触发。
+    list._beginMultiSelect(widget.note.id);
+    list._schedulePendingDrag(widget.note.id, d.globalPosition);
   }
 
   /// 长按后不松手继续移动 → 开始拖拽（原型核心交互）；已拖拽中则移动。
@@ -754,7 +805,7 @@ class _NoteListItemState extends ConsumerState<NoteListItem> {
     if (list.isDraggingNow) {
       list._moveDrag(d.globalPosition);
     } else {
-      // 长按已 accept（竞技场胜利，列表滚动已被压制）→ 直接开始拖拽。
+      // 500ms 窗口内移动 → 立即拿起（取消延迟，零迟滞拿起）。
       list._beginDrag(
         d.globalPosition,
         mainId: widget.note.id,
@@ -765,12 +816,14 @@ class _NoteListItemState extends ConsumerState<NoteListItem> {
 
   /// 长按拖拽结束（仅结束长按路径的拖拽；多选 drag 路径由
   /// onVerticalDrag* 结束——竞技场中 drag accept 会让 longPress 触发
-  /// cancel，若不加判断会误结束拖拽）。
+  /// cancel，若不加判断会误结束拖拽）。500ms 窗口内放下 → 取消延迟拿起，
+  /// 只进多选不拖拽。
   void _onLongPressEnd() {
     final list = _notesListState;
-    if (list != null &&
-        list.isDraggingNow &&
-        list._dragFromLongPress) {
+    if (list == null) return;
+    // 窗口内松手（未拿起）→ 取消延迟拿起，多选保持。
+    list._cancelPendingDrag();
+    if (list.isDraggingNow && list._dragFromLongPress) {
       list._endDrag();
     }
   }
@@ -1492,6 +1545,36 @@ class _GhostLayerState extends State<_GhostLayer>
   /// 方形迷你卡尺寸（用户确认：近似方形，96 更紧凑）。
   static const double cardSize = 96;
 
+  // ---- 拿起过渡（原卡 → 小卡）与归位过渡（小卡 → 原卡） ----
+
+  /// 拿起进场动画（跟随模式）：主卡从原卡尺寸缩到迷你卡 + 淡入，
+  /// 副卡依次淡入；180ms easeOutCubic。完成后停止重建（_enterDone），
+  /// 之后重建交给 drag 监听 / 弹簧 ticker。
+  late final AnimationController _enter = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 180),
+  )..addListener(() {
+      if (!_enterDone) setState(() {});
+    });
+
+  late final Animation<double> _enterCurve =
+      CurvedAnimation(parent: _enter, curve: Curves.easeOutCubic);
+
+  /// 进场动画是否已播完（完成后不再由动画驱动重建）。
+  bool _enterDone = false;
+
+  /// 归位动画曲线（缓起缓停，停靠自然）。
+  late final Animation<double> _flyCurve =
+      CurvedAnimation(parent: _controller, curve: Curves.easeInOutCubic);
+
+  /// 回弹起始位置快照（松手瞬间各卡实际显示位置）：跟随模式的链位置
+  /// 与 drag.position+rel 不同，直接以 drag.position 为起点会跳变。
+  final Map<String, Offset> _flyStart = {};
+
+  /// 各卡当前显示状态快照（跟随模式每帧更新）：归位动画以此为起点，
+  /// 拿起中途松手时透明度/尺寸/样式无缝衔接。
+  final Map<String, _GhostVisual> _visual = {};
+
   // ---- 弹性跟手（SpringSimulation，Flutter 官方弹簧物理，参考 iOS/安卓
   // 拖拽图标的 elastic follow）：ghost 显示位置由弹簧驱动向目标逼近——
   // 拖动快时轻微滞后 + 到位微回弹，带拖动速度的惯性。 ----
@@ -1555,13 +1638,27 @@ class _GhostLayerState extends State<_GhostLayer>
       _chain.add(_displayPos + Offset(5.0 * i, 5.0 * i));
     }
     if (widget.isFlyingBack) {
-      // 回弹：从当前位置飞到各自原矩形，完成后移除。
+      // 回弹：快照各卡当前显示位置为起始（起点不跳变），动画飞到
+      // 各自原矩形中心并放大展开回原尺寸，完成后移除。
+      for (var i = 0; i < widget.drag.ids.length; i++) {
+        _flyStart[widget.drag.ids[i]] = i < _chain.length
+            ? _chain[i]
+            : _displayPos + Offset(5.0 * i, 5.0 * i);
+      }
       _controller.addStatusListener((status) {
         if (status == AnimationStatus.completed) {
           _removeSelf();
         }
       });
       _controller.forward();
+    } else {
+      // 拿起进场动画（原卡 → 小卡过渡）。
+      _enter.addStatusListener((status) {
+        if (status == AnimationStatus.completed) {
+          _enterDone = true;
+        }
+      });
+      _enter.forward();
     }
   }
 
@@ -1651,6 +1748,7 @@ class _GhostLayerState extends State<_GhostLayer>
   void dispose() {
     _ticker.dispose();
     _controller.dispose();
+    _enter.dispose();
     super.dispose();
   }
 
@@ -1672,7 +1770,6 @@ class _GhostLayerState extends State<_GhostLayer>
             _onTargetChanged(drag.position);
             return _buildStack(
               context,
-              pos: _displayPos,
               progress: null,
               notes: notes,
             );
@@ -1680,15 +1777,14 @@ class _GhostLayerState extends State<_GhostLayer>
         ),
       );
     }
-    // 回弹模式：位置从 drag.position 插值到各卡原矩形。
+    // 回弹模式：位置从松手时快照插值到各卡原矩形中心。
     return SizedBox.expand(
       child: AnimatedBuilder(
         animation: _controller,
         builder: (context, child) {
-          final t = _controller.value;
+          final t = _flyCurve.value;
           return _buildStack(
             context,
-            pos: drag.position,
             progress: t,
             notes: notes,
           );
@@ -1700,7 +1796,6 @@ class _GhostLayerState extends State<_GhostLayer>
   /// 组装层叠 ghost（主卡 + 其余选中卡阶梯偏移 + 拖影残影）。
   Widget _buildStack(
     BuildContext context, {
-    required Offset pos,
     required double? progress,
     required List<Note> notes,
   }) {
@@ -1718,27 +1813,63 @@ class _GhostLayerState extends State<_GhostLayer>
       // 主卡最后），才能让每张卡露出上一层右下角的 7px 边缘，形成
       // 规则阶梯（顺序 add 会让卡3 盖住卡2，卡2 露出左上条带，视觉
       // 上「右下角露出面积不一致」）。
+      // 拿起过渡（morph）：主卡从「原卡形状 + 原卡布局」连续变形为
+      // 迷你卡（位置/尺寸/样式同步插值，同时滑向指针）；副卡保持
+      // 小卡依次淡入（不随主卡变形——多张同时重排布局开销大，主卡
+      // 的变形已足够表达形状过渡）。
+      final enterT = _enterCurve.value;
+      final chainPos = _chain.isEmpty ? _displayPos : _chain[0];
       for (var i = others.length - 1; i >= 0; i--) {
         final note = notes.where((n) => n.id == others[i]).firstOrNull;
         if (note == null) continue;
         final pos = i + 1 < _chain.length ? _chain[i + 1] : _chain.last;
+        // 每层晚约 40ms 依次淡入（180ms 进场内的比例；层多时封顶，
+        // 保证动画结束时全部淡入完成、公式恒有效）。
+        final delay = math.min((i + 1) * 0.22, 0.8);
+        final fadeIn = ((enterT - delay) / (1 - delay)).clamp(0.0, 1.0);
+        final opacity = math.max(0.5, 0.9 - i * 0.1) * fadeIn;
+        _visual[others[i]] = _GhostVisual(
+          pos,
+          opacity,
+          const Offset(cardSize, cardSize),
+          0,
+        );
         cards.add(_ghostCard(
           context,
           note: note,
           offset: pos,
-          opacity: math.max(0.5, 0.9 - i * 0.1),
-          scale: 1.0,
+          width: cardSize,
+          height: cardSize,
+          opacity: opacity,
+          styleT: 0,
           isDark: isDark,
         ));
       }
-      // 主卡（最上层，不放大——放大会吃掉第二层的露出边缘，导致
-      // 露出面积不均匀；用户确认去掉拿起放大，保留阴影层次）。
+      // 主卡（最上层）：原卡位置 → 指针位置、原卡尺寸 → 96 方形、
+      // 原卡布局 → 迷你卡布局，全部随进场进度插值（morph 从原卡
+      // 无缝开始：t=0 时与原卡完全重叠，t=1 时为指针处的小卡）。
+      final mainRect = drag.rects[drag.mainId];
+      final mainPos = mainRect == null
+          ? chainPos
+          : Offset.lerp(mainRect.topLeft, chainPos, enterT)!;
+      final mainW =
+          mainRect == null ? cardSize : lerpDouble(mainRect.width, cardSize, enterT)!;
+      final mainH =
+          mainRect == null ? cardSize : lerpDouble(mainRect.height, cardSize, enterT)!;
+      _visual[drag.mainId] = _GhostVisual(
+        mainPos,
+        1.0,
+        Offset(mainW, mainH),
+        mainRect == null ? 0 : 1 - enterT,
+      );
       cards.add(_ghostCard(
         context,
         note: mainNote,
-        offset: _chain.isEmpty ? _displayPos : _chain[0],
+        offset: mainPos,
+        width: mainW,
+        height: mainH,
         opacity: 1.0,
-        scale: 1.0,
+        styleT: mainRect == null ? 0 : 1 - enterT,
         isDark: isDark,
       ));
       return Stack(
@@ -1747,31 +1878,51 @@ class _GhostLayerState extends State<_GhostLayer>
         ],
       );
     }
-    // 回弹模式：各卡从当前位置飞回原矩形（依次归位；z 序同跟随模式，
-    // 逆序 add 保证规则阶梯）。
+    // 回弹模式（归位 morph）：各卡从松手时的迷你卡形状「变形展开」回
+    // 各自原卡形状——位置/尺寸/布局同步插值（t=1 时与列表恢复的原卡
+    // 完全重叠）；末段淡出衔接原卡入场动画；副卡逐层延迟归位，形成
+    // 层次。z 序同跟随模式，逆序 add 保证规则阶梯。
+    final t = progress;
     for (var i = others.length - 1; i >= 0; i--) {
       final note = notes.where((n) => n.id == others[i]).firstOrNull;
       if (note == null) continue;
+      final level = i + 1;
+      // 每层晚约 45ms 依次归位（总时长 280ms 内的比例；层多时封顶，
+      // 保证归位结束前全部起飞、公式恒有效）。
+      final delay = math.min(level * 0.16, 0.6);
+      final ti = ((t - delay) / (1 - delay)).clamp(0.0, 1.0);
+      final v = _visual[others[i]];
+      final rect = drag.rects[others[i]];
+      final fromOpacity = v?.opacity ?? math.max(0.5, 0.9 - i * 0.1);
+      final fromW = v?.size.dx ?? cardSize;
+      final fromH = v?.size.dy ?? cardSize;
+      final fromStyleT = v?.styleT ?? 0.0;
       cards.add(_ghostCard(
         context,
         note: note,
-        offset: _fly(
-          Offset((i + 1) * 5.0, (i + 1) * 5.0),
-          progress,
-          drag,
-          others[i],
-        ),
-        opacity: math.max(0.5, 0.9 - i * 0.1),
-        scale: 1.0,
+        offset: _fly(ti, drag, others[i]),
+        width: rect == null ? fromW : lerpDouble(fromW, rect.width, ti)!,
+        height: rect == null ? fromH : lerpDouble(fromH, rect.height, ti)!,
+        opacity: fromOpacity * _fadeOut(ti),
+        styleT: rect == null ? fromStyleT : lerpDouble(fromStyleT, 1.0, ti)!,
         isDark: isDark,
       ));
     }
+    final v = _visual[drag.mainId];
+    final mainRect = drag.rects[drag.mainId];
+    final fromOpacity = v?.opacity ?? 1.0;
+    final fromW = v?.size.dx ?? cardSize;
+    final fromH = v?.size.dy ?? cardSize;
+    final fromStyleT = v?.styleT ?? 0.0;
     cards.add(_ghostCard(
       context,
       note: mainNote,
-      offset: _fly(Offset.zero, progress, drag, drag.mainId),
-      opacity: 1.0,
-      scale: 1.0,
+      offset: _fly(t, drag, drag.mainId),
+      width: mainRect == null ? fromW : lerpDouble(fromW, mainRect.width, t)!,
+      height:
+          mainRect == null ? fromH : lerpDouble(fromH, mainRect.height, t)!,
+      opacity: fromOpacity * _fadeOut(t),
+      styleT: mainRect == null ? fromStyleT : lerpDouble(fromStyleT, 1.0, t)!,
       isDark: isDark,
     ));
     return Stack(
@@ -1781,88 +1932,104 @@ class _GhostLayerState extends State<_GhostLayer>
     );
   }
 
-  /// 位置插值：跟随（progress null）= 当前位置；回弹 = 当前位置 → 原矩形。
-  Offset _fly(Offset rel, double? progress, _DragState drag, String id) {
-    final base = drag.position + rel;
-    if (progress == null) return base;
+  /// 位置插值：归位 = 显示状态快照（拿起中途松手时取插值中间位置，
+  /// 无缝衔接）→ 原卡左上角（尺寸同时插值，t=1 时 ghost 与列表恢复
+  /// 的原卡完全重叠）。
+  Offset _fly(double progress, _DragState drag, String id) {
+    final base =
+        _visual[id]?.position ?? _flyStart[id] ?? drag.position;
     final rect = drag.rects[id];
     if (rect == null) return base;
     return Offset.lerp(base, rect.topLeft, progress)!;
   }
 
-  /// 单张方形迷你卡（近似方形，标题 + 摘要 + 时间）。
+  /// 归位末段淡出：后 35% 时长渐隐到 0（与列表恢复卡片的入场动画衔接，
+  /// 避免 ghost 与恢复的原卡重叠闪现）。
+  double _fadeOut(double t) => t <= 0.65 ? 1.0 : 1.0 - (t - 0.65) / 0.35;
+
+  /// 单张 ghost 卡：尺寸（[width]/[height]）与内容布局（字号/行数/间距）
+  /// 由 [styleT] 连续插值——styleT=1 为原卡样式（16/13/11、摘要 2 行、
+  /// padding 16），styleT=0 为迷你卡样式（14/12/10、摘要 4 行、
+  /// padding 12）。拿起时从「原卡形状 + 原卡布局」变形为小卡，归位反向：
+  /// 是形状 morph（长方形卡片逐渐变为小卡片），不是纯缩放。
   Widget _ghostCard(
     BuildContext context, {
     required Note? note,
     required Offset offset,
+    required double width,
+    required double height,
     required double opacity,
-    required double scale,
+    required double styleT,
     required bool isDark,
   }) {
     final colorScheme = Theme.of(context).colorScheme;
     final title = note == null || note.title.trim().isEmpty
         ? '无标题'
         : note.title.trim();
+    // 样式插值（见类注释：1 = 原卡，0 = 迷你卡）。
+    final titleSize = lerpDouble(14, 16, styleT)!;
+    final summarySize = lerpDouble(12, 13, styleT)!;
+    final timeSize = lerpDouble(10, 11, styleT)!;
+    final summaryLines = (lerpDouble(4, 2, styleT)! + 0.5).round().clamp(1, 4);
+    final padding = EdgeInsets.all(lerpDouble(12, 16, styleT)!);
     return Positioned(
       left: offset.dx,
       top: offset.dy,
-      child: Transform.scale(
-        scale: scale,
-        child: Opacity(
-          opacity: opacity,
-          child: Container(
-            width: cardSize,
-            height: cardSize,
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color:
-                  isDark ? const Color(0xFF1B2838) : const Color(0xFFFDFCF9),
-              borderRadius: BorderRadius.circular(16),
-              // 无边框（用户确认去掉蓝色描边）。
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.2),
-                  blurRadius: 18,
-                  offset: const Offset(0, 8),
+      child: Opacity(
+        opacity: opacity,
+        child: Container(
+          width: width,
+          height: height,
+          padding: padding,
+          decoration: BoxDecoration(
+            color:
+                isDark ? const Color(0xFF1B2838) : const Color(0xFFFDFCF9),
+            borderRadius: BorderRadius.circular(16),
+            // 无边框（用户确认去掉蓝色描边）。
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.2),
+                blurRadius: 18,
+                offset: const Offset(0, 8),
+              ),
+            ],
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: titleSize,
+                  fontWeight: FontWeight.bold,
+                  color: colorScheme.onSurface,
                 ),
-              ],
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  maxLines: 1,
+              ),
+              SizedBox(height: lerpDouble(4, 6, styleT)!),
+              // Expanded 吸收高度插值：高度变化时摘要占剩余空间，不溢出。
+              Expanded(
+                child: Text(
+                  note == null ? '' : excerptOf(note.content),
+                  maxLines: summaryLines,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.bold,
-                    color: colorScheme.onSurface,
+                    fontSize: summarySize,
+                    height: 1.4,
+                    color: colorScheme.onSurfaceVariant,
                   ),
                 ),
-                const SizedBox(height: 6),
-                Expanded(
-                  child: Text(
-                    note == null ? '' : excerptOf(note.content),
-                    maxLines: 4,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 12,
-                      height: 1.4,
-                      color: colorScheme.onSurfaceVariant,
-                    ),
+              ),
+              if (note != null)
+                Text(
+                  relativeTime(note.updatedAt),
+                  style: TextStyle(
+                    fontSize: timeSize,
+                    color: colorScheme.outline,
                   ),
                 ),
-                if (note != null)
-                  Text(
-                    relativeTime(note.updatedAt),
-                    style: TextStyle(
-                      fontSize: 10,
-                      color: colorScheme.outline,
-                    ),
-                  ),
-              ],
-            ),
+            ],
           ),
         ),
       ),
@@ -1878,6 +2045,24 @@ class _HistoryPoint {
 
   final int micros;
   final Offset pos;
+}
+
+/// ghost 卡显示状态快照（跟随模式每帧更新，归位以此为起点）：
+/// 拿起中途松手时，归位动画与当前显示状态（位置/透明度/尺寸/样式）
+/// 无缝衔接，无任何跳变。
+class _GhostVisual {
+  const _GhostVisual(this.position, this.opacity, this.size, this.styleT);
+
+  /// 当前显示位置（左上角，全局坐标）。
+  final Offset position;
+
+  final double opacity;
+
+  /// 当前宽高。
+  final Offset size;
+
+  /// 当前样式插值（1 = 原卡样式，0 = 迷你卡样式）。
+  final double styleT;
 }
 
 /// 双轴弹簧模拟（Flutter 官方 SpringSimulation 封装，x/y 独立同参）。

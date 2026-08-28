@@ -125,15 +125,18 @@ class FolderRepository {
 
   /// 拖拽排序（抽屉内置顶区/普通区各自拖拽后调用）：传入**全部活跃
   /// 文件夹的新顺序**（置顶区在前、普通区在后，调用方组装），按位置
-  /// 归一化 sortOrder = 0..n-1，逐条 version+1 随 folder_upsert 同步。
+  /// 归一化 sortOrder = 0..n-1，version+1 随 folder_upsert 同步。
   ///
-  /// 幂等：顺序与现状一致时不写库不递增版本（见 [FolderDao.setSortOrder]）。
+  /// 写库一次批量提交（[FolderDao.setSortOrders]）：只触发一次表变更
+  /// 通知，避免逐条写库把中间顺序推给 UI 造成列表连续跳变。
+  /// 同步事件仍逐条发出——folder_upsert 是单条载荷协议，每条变更都要
+  /// 广播给对端。
+  ///
+  /// 幂等：顺序与现状一致时不写库不递增版本。
   Future<void> reorder(List<Folder> newOrder) async {
-    for (var i = 0; i < newOrder.length; i++) {
-      final folder = newOrder[i];
-      if (folder.sortOrder == i) continue;
-      final updated = await _dao.setSortOrder(folder.id, i);
-      _changes.add(FolderUpsertedEvent(updated));
+    final updated = await _dao.setSortOrders(newOrder);
+    for (final folder in updated) {
+      _changes.add(FolderUpsertedEvent(folder));
     }
   }
 

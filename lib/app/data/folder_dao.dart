@@ -67,26 +67,41 @@ class FolderDao extends DatabaseAccessor<AppDatabase> with _$FolderDaoMixin {
     });
   }
 
-  /// 设置排序值：sortOrder 置值 + version+1 + updatedAt 刷新（拖拽排序）。
+  /// 批量设置排序值：按 [newOrder] 的位置写 sortOrder = 0..n-1，
+  /// version+1 + updatedAt 刷新（拖拽排序）。
   ///
-  /// 幂等：值一致时直接返回当前值。排序随 folder_upsert 同步；拖拽后
-  /// 由仓库层统一归一化为 0..n-1（见 FolderRepository.reorder）。
-  Future<Folder> setSortOrder(String id, int sortOrder) {
-    return _mutate(id, '排序', (current) {
-      if (current.sortOrder == sortOrder) return current; // 幂等
-      final now = DateTime.now().millisecondsSinceEpoch;
-      return Folder(
-        id: id,
+  /// **必须一次批量提交**：逐条 await 写库会让 [getActiveStream] 逐条
+  /// 推送**中间态**（部分 sortOrder 已改、可能与未改项临时重复，排序
+  /// 结果不稳定），抽屉列表随之连续跳变。批量提交只在提交后触发**一次**
+  /// 表变更通知，流回推的直接是最终态。
+  ///
+  /// 幂等：位置未变的项不写库不递增版本。排序随 folder_upsert 同步；
+  /// 拖拽后由仓库层统一归一化为 0..n-1（见 FolderRepository.reorder）。
+  Future<List<Folder>> setSortOrders(List<Folder> newOrder) async {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final pending = <Folder>[];
+    for (var i = 0; i < newOrder.length; i++) {
+      final current = newOrder[i];
+      if (current.sortOrder == i) continue; // 幂等：位置未变
+      pending.add(Folder(
+        id: current.id,
         name: current.name,
         createdAt: current.createdAt,
         updatedAt: now,
         version: current.version + 1,
         deletedAt: current.deletedAt,
         isPinned: current.isPinned,
-        sortOrder: sortOrder,
+        sortOrder: i,
         origin: current.origin,
-      );
-    });
+      ));
+    }
+    if (pending.isEmpty) return const [];
+    await batch((b) => b.insertAll(
+          folders,
+          pending.map((f) => f.toRow()).toList(),
+          mode: InsertMode.insertOrReplace,
+        ));
+    return pending;
   }
 
   /// 软删除：deletedAt 置当前时间 + version+1（文件夹删除不可恢复）。

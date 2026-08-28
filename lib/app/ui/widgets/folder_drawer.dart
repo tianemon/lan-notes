@@ -246,19 +246,69 @@ class _ReorderZoneState extends ConsumerState<_ReorderZone> {
   /// registry.rectOf 拿不到矩形，拖放命中失败，见 task-32 实测）。
   final Map<String, GlobalKey> _keys = {};
 
+  /// 乐观顺序覆盖：拖拽落位后**同步**生效，不等 drift 流回推。
+  ///
+  /// ReorderableListView 的 onReorderItem 是**同步契约**——回调返回后
+  /// 框架立即执行 drop 收尾动画并 rebuild，期望数据源此刻已是新顺序。
+  /// 写库 + 流回推是异步的（1~2 帧），若等它回来，被拖项会先按旧顺序
+  /// 弹回原位、再跳到新位置（肉眼看就是「闪一下」）。这里本地先应用
+  /// 新顺序，流回推确认后清除覆盖，回归单一数据源。
+  List<Folder>? _optimistic;
+
+  /// 当前渲染用顺序（乐观顺序优先于流数据）。
+  List<Folder> get _effective => _optimistic ?? widget.folders;
+
+  @override
+  void didUpdateWidget(_ReorderZone oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final pending = _optimistic;
+    if (pending == null) return;
+    // 顺序一致 = 流已追上 → 交回单一数据源；集合已变（新建 / 删除 /
+    // 远端同步插入） = 乐观顺序失效 → 同样交回，防 UI 卡在失效顺序上。
+    // 仅「顺序不同但集合相同」= 写库途中的中间态，保持覆盖等最终态。
+    if (_sameOrder(pending, widget.folders) ||
+        !_sameIdSet(pending, widget.folders)) {
+      _optimistic = null;
+    }
+  }
+
+  /// id 序列是否完全一致（Folder 每次查询都是新实例，按 id 比较）。
+  static bool _sameOrder(List<Folder> a, List<Folder> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i].id != b[i].id) return false;
+    }
+    return true;
+  }
+
+  /// id 集合是否相同（忽略顺序）：判断乐观顺序是否仍适用。
+  static bool _sameIdSet(List<Folder> a, List<Folder> b) {
+    if (a.length != b.length) return false;
+    final ids = a.map((f) => f.id).toSet();
+    return b.every((f) => ids.contains(f.id));
+  }
+
   @override
   Widget build(BuildContext context) {
-    final folders = widget.folders;
+    final folders = _effective;
     return ReorderableListView.builder(
       shrinkWrap: true,
       physics: const NeverScrollableScrollPhysics(),
       buildDefaultDragHandles: false,
+      // 标记拖拽代理项（proxy）：被拖项在 Overlay 中重建，由
+      // _ProxyMarker 告知子树「当前是 proxy」，_FolderItem 据此不套
+      // 选中/落点背景（只保留 hover 档），避免不透明色块浮在笔记列表
+      // 上暴露 item 的真实矩形边界。
+      proxyDecorator: (child, index, animation) => _ProxyMarker(child: child),
       itemCount: folders.length,
       onReorderItem: (oldIndex, newIndex) {
         // onReorderItem 的 newIndex 已针对移除项修正（无需 -1）。
         final list = List<Folder>.of(folders);
         final moved = list.removeAt(oldIndex);
         list.insert(newIndex, moved);
+        // 同步应用乐观顺序：框架 drop 动画期间数据已是新顺序，被拖项
+        // 直接落在目标位（不弹回原位），消除回写延迟造成的闪烁。
+        setState(() => _optimistic = list);
         widget.onReorder(list);
       },
       itemBuilder: (context, index) {
@@ -297,6 +347,26 @@ class _ReorderZoneState extends ConsumerState<_ReorderZone> {
       },
     );
   }
+}
+
+/// 标记「当前子树 = ReorderableListView 的拖拽代理项（proxy）」。
+///
+/// proxy 是拖拽时被拖项在 Overlay 中的副本，跟随指针悬浮在整页之上。
+/// 列表态的选中/落点背景是**不透明色块**，浮在笔记列表上方会暴露 item
+/// 的真实矩形边界（观感像一块边缘清晰的阴影），因此子树需要知道自己
+/// 处于 proxy 中，改用更轻的 hover 档（见 _FolderItemState.build）。
+///
+/// 用 InheritedWidget 而非 setState 传递：proxy 的 child 是拖拽开始时
+/// 的 widget 快照，之后的 setState 不会同步到已开始的 proxy。
+class _ProxyMarker extends InheritedWidget {
+  const _ProxyMarker({required super.child});
+
+  /// 当前 context 是否位于 proxy 子树中。
+  static bool of(BuildContext context) =>
+      context.dependOnInheritedWidgetOfExactType<_ProxyMarker>() != null;
+
+  @override
+  bool updateShouldNotify(_ProxyMarker oldWidget) => false;
 }
 
 /// 「全部」项拖放注册包装：id 为 null 无法直接注册，这里用特殊 id
@@ -375,6 +445,8 @@ class _FolderItemState extends ConsumerState<_FolderItem> {
     // ValueNotifier 内部变化不触发 rebuild——hover 不生效的实测根因）。
     // 「全部」也参与高亮与拖放（用户确认：样式与普通文件夹一致）。
     final registry = ref.watch(dropZoneRegistryProvider);
+    // 当前子树是否为拖拽代理项（proxy，见 _ProxyMarker）。
+    final isProxy = _ProxyMarker.of(context);
     return ValueListenableBuilder<String?>(
       valueListenable: registry.highlighted,
       builder: (context, highlighted, _) {
@@ -392,8 +464,11 @@ class _FolderItemState extends ConsumerState<_FolderItem> {
             // 图标 + 加粗文字。拖拽中选中背景隐藏，仅落点高亮显示。
             // 桌面鼠标悬浮：仅无选中/无落点高亮时显示更浅一档背景
             // （surfaceContainerLow，与选中态区分）。
+            // proxy（被拖项的悬浮副本）不套选中/落点背景：那是不透明
+            // 色块，浮在笔记列表上方会暴露 item 的真实矩形边界（观感
+            // 像一块边缘清晰的阴影）——拖动中只保留下方的 hover 档。
             final highlightedBg =
-                dropHover || (selected && !isDragging);
+                !isProxy && (dropHover || (selected && !isDragging));
             final isDark = Theme.of(context).brightness == Brightness.dark;
             final bgColor = highlightedBg
                 ? (isDark

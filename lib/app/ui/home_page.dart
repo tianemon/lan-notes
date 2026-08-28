@@ -47,9 +47,18 @@ class HomePage extends ConsumerWidget {
     final selected = ref.watch(multiSelectProvider);
     final multiActive = selected.isNotEmpty;
 
-    // 抽屉全屏覆盖（用户确认）：FolderDrawer 挂在 Scaffold 外层 Stack，
-    // 高度覆盖整个窗口（含 AppBar 区域），展开时盖住文件夹按钮。
-    return Stack(
+    // 多选激活时拦截系统返回（安卓返回键）：先退出多选，不退出应用；
+    // 多选退出后再按返回 = 正常返回（退出应用）。
+    return PopScope(
+      canPop: !multiActive,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) {
+          ref.read(multiSelectProvider.notifier).exit();
+        }
+      },
+      // 抽屉全屏覆盖（用户确认）：FolderDrawer 挂在 Scaffold 外层 Stack，
+      // 高度覆盖整个窗口（含 AppBar 区域），展开时盖住文件夹按钮。
+      child: Stack(
       children: [
         Scaffold(
       appBar: AppBar(
@@ -166,6 +175,7 @@ class HomePage extends ConsumerWidget {
         // Stack 上层——展开时盖住按钮，层次正确）。
         const FolderDrawer(),
       ],
+      ),
     );
   }
 }

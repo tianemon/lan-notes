@@ -406,9 +406,27 @@ class _EditorPageState extends ConsumerState<EditorPage> {
     _debounce?.cancel();
     _maxIntervalTimer?.cancel();
     _suppressChanges = true;
+    // 记录替换前的光标位置：替换 document 会把 selection 重置到开头
+    // （光标跳最前），替换后按焦点位置恢复（clamp 到新内容长度）。
+    final titleFocus = _titleFocusNode.hasFocus;
+    final titleOffset = _titleController.selection.baseOffset;
+    final bodyFocus = _contentFocusNode.hasFocus;
+    final bodyOffset = _contentController.selection.baseOffset;
     _titleController.text = note.title;
     _contentController.document = _documentFromStored(note.content);
     _suppressChanges = false;
+    if (titleFocus) {
+      _titleController.selection = TextSelection.collapsed(
+        offset: titleOffset.clamp(0, _titleController.text.length),
+      );
+    }
+    if (bodyFocus) {
+      final len = _contentController.document.toPlainText().length;
+      _contentController.updateSelection(
+        TextSelection.collapsed(offset: bodyOffset.clamp(0, len)),
+        ChangeSource.local,
+      );
+    }
     _attachDocListener(); // 文档已替换：重建变更订阅
     // 流推送的是库内最新值，即已保存快照。
     _savedTitle = note.title;
@@ -1271,10 +1289,19 @@ class _SaveStatusIndicator extends StatefulWidget {
 
 class _SaveStatusIndicatorState extends State<_SaveStatusIndicator>
     with SingleTickerProviderStateMixin {
-  late final AnimationController _spin = AnimationController(
-    vsync: this,
-    duration: const Duration(milliseconds: 900),
-  )..repeat();
+  late final AnimationController _spin;
+
+  @override
+  void initState() {
+    super.initState();
+    // initState 显式创建（非惰性）：避免 widget 从未进入 saving 状态时，
+    // dispose 首次访问 late 字段触发创建 → 此时 widget 已 deactivated →
+    // 查 TickerMode ancestor 崩溃（与 _StatusDot 同模式）。
+    _spin = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 900),
+    )..repeat();
+  }
 
   @override
   void dispose() {

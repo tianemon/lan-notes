@@ -78,10 +78,16 @@ class FolderDao extends DatabaseAccessor<AppDatabase> with _$FolderDaoMixin {
   /// 幂等：位置未变的项不写库不递增版本。排序随 folder_upsert 同步；
   /// 拖拽后由仓库层统一归一化为 0..n-1（见 FolderRepository.reorder）。
   Future<List<Folder>> setSortOrders(List<Folder> newOrder) async {
+    // 读库内最新值再改（读改写，与原 setSortOrder 的 _mutate 同语义）：
+    // 拖拽写库窗口内远端同步可能已更新同一文件夹，直接基于调用方快照
+    // version+1 会覆盖新字段（name 等）并让 version 回退（违反「只增
+    // 不减」）。用 getAll（含软删除）建索引：远端已软删除的文件夹不被
+    // 本地快照复活。
+    final byId = {for (final f in await getAll()) f.id: f};
     final now = DateTime.now().millisecondsSinceEpoch;
     final pending = <Folder>[];
     for (var i = 0; i < newOrder.length; i++) {
-      final current = newOrder[i];
+      final current = byId[newOrder[i].id] ?? newOrder[i];
       if (current.sortOrder == i) continue; // 幂等：位置未变
       pending.add(Folder(
         id: current.id,

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -178,7 +180,8 @@ class FolderDrawer extends ConsumerWidget {
 
   /// 区内拖拽重排：把 [zone] 换成 [newOrder]，与另一区原顺序组装完整
   /// 列表（置顶区在前），按位置归一化 sortOrder（[FolderRepository.reorder]）。
-  Future<void> _reorderZone(
+  /// 透传是否实际写库（幂等拖回原位 = false，用于乐观覆盖兜底释放）。
+  Future<bool> _reorderZone(
     WidgetRef ref,
     {required List<Folder> folders,
     required List<Folder> zone,
@@ -190,7 +193,7 @@ class FolderDrawer extends ConsumerWidget {
       for (final f in other.where((f) => !f.isPinned)) f,
       ...newOrder.where((f) => !f.isPinned),
     ];
-    await ref.read(folderRepositoryProvider).reorder(merged);
+    return ref.read(folderRepositoryProvider).reorder(merged);
   }
 
 }
@@ -234,7 +237,7 @@ class _ReorderZone extends ConsumerStatefulWidget {
   final List<Folder> folders;
   final String? selected;
   final Map<String, int> countOf;
-  final Future<void> Function(List<Folder> newOrder) onReorder;
+  final Future<bool> Function(List<Folder> newOrder) onReorder;
 
   @override
   ConsumerState<_ReorderZone> createState() => _ReorderZoneState();
@@ -309,7 +312,23 @@ class _ReorderZoneState extends ConsumerState<_ReorderZone> {
         // 同步应用乐观顺序：框架 drop 动画期间数据已是新顺序，被拖项
         // 直接落在目标位（不弹回原位），消除回写延迟造成的闪烁。
         setState(() => _optimistic = list);
-        widget.onReorder(list);
+        // 兜底释放乐观覆盖：**只有确定流不会回推时才清除**。
+        // - 正常写库（返回 true）：等流回推，由 didUpdateWidget 释放——
+        //   提前清除会闪回旧顺序（drift 流回推晚于写库 Future resolve）；
+        // - 幂等未写库（拖回原位，返回 false）：流不会推送，立即清除
+        //   （顺序本就一致，无闪烁）；
+        // - 写库异常：流不会推送，同样立即清除（回滚到库状态）。
+        unawaited(
+          widget.onReorder(list).then((changed) {
+            if (!changed && mounted) {
+              setState(() => _optimistic = null);
+            }
+          }).catchError((Object _) {
+            if (mounted) {
+              setState(() => _optimistic = null);
+            }
+          }),
+        );
       },
       itemBuilder: (context, index) {
         final folder = folders[index];

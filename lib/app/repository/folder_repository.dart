@@ -133,11 +133,15 @@ class FolderRepository {
   /// 广播给对端。
   ///
   /// 幂等：顺序与现状一致时不写库不递增版本。
-  Future<void> reorder(List<Folder> newOrder) async {
+  ///
+  /// 返回是否实际写库（false = 幂等未变更）：调用方（抽屉乐观顺序兜底）
+  /// 用它判断「流是否会回推」——false 时流不会推送，需显式释放乐观覆盖。
+  Future<bool> reorder(List<Folder> newOrder) async {
     final updated = await _dao.setSortOrders(newOrder);
     for (final folder in updated) {
       _changes.add(FolderUpsertedEvent(folder));
     }
+    return updated.isNotEmpty;
   }
 
   /// 排序归一化：重排 sortOrder 为 0..n-1（置顶优先 → 原 sortOrder 升序），

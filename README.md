@@ -1,5 +1,9 @@
 # EasyNote（局域网笔记）
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Flutter](https://img.shields.io/badge/Flutter-3.38%2B-02569B?logo=flutter&logoColor=white)](https://flutter.dev)
+[![platform](https://img.shields.io/badge/platform-iOS%20%7C%20Android%20%7C%20Windows%20%7C%20macOS-lightgrey)](#运行方式)
+
 > 纯局域网内同步笔记的跨平台应用：手机随手记，电脑自动同步，不依赖公网服务器。
 > 一套 Flutter 代码覆盖 **iOS / Android / Windows / macOS**。
 
@@ -242,4 +246,3 @@ dart run temp/drafts/verify_sync.dart  # 驱动真实网络栈验证本地/同�
 - Flutter 3.38 / Dart 3.10，Material 3 flat 风格
 - drift（SQLite）本地持久化，Riverpod 状态管理，go_router 路由
 - 自研 UDP 广播发现（JSON 通告，端口 58888；参考 Syncthing/LocalSend），web_socket_channel（WebSocket 同步）
-- 架构细节见 `docs/技术架构.md`，需求见 `docs/需求文档.md`，进度见 `docs/开发进度.md`

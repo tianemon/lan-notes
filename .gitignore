@@ -26,3 +26,6 @@ build/
 # CocoaPods 生成物（pod install 自动生成，不提交）
 ios/Podfile.lock
 macos/Podfile.lock
+
+# 私有开发文档（本地独立维护，不公开）
+docs/

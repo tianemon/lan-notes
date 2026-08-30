@@ -1,5 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
+// 只取 SocketException（端口占用判定）：避免整包导入与 web_socket_channel
+// 的 WebSocket 等符号冲突。
+import 'dart:io' show SocketException;
 import 'dart:math' as math;
 import 'dart:typed_data';
 
@@ -18,6 +21,9 @@ import 'sync_protocol.dart';
 
 /// 默认同步端口：每台设备 WebSocket 服务端固定监听端口（可配置，task-13）。
 const int kDefaultSyncPort = 58888;
+
+/// 端口冲突自动顺延的候选端口数（目标端口起连试 N 个，全部占用才无法开启）。
+const int kPortFallbackAttempts = 10;
 
 /// 配对事件（全局配对弹窗数据源，见 docs/技术架构.md 7.3 节认证与配对流程）。
 ///
@@ -148,6 +154,7 @@ class PeerDevice {
     this.manuallyDisconnected = false,
     this.syncToPeer = true,
     this.syncFromPeer = true,
+    this.address,
   });
 
   /// 对端设备 ID。
@@ -173,6 +180,9 @@ class PeerDevice {
 
   /// 从对端同步（task-32）：本机是否接收该设备推送的变更。
   final bool syncFromPeer;
+
+  /// 对端最近已知地址（IP:端口，取自地址缓存；无缓存为 null，UI 小字展示）。
+  final String? address;
 }
 
 /// 同步编排服务（P2P 对等，task-13，docs/技术架构.md 7.1/7.3 节）。
@@ -532,7 +542,13 @@ class SyncService {
   /// task-31（互联手动化）：enable 不再持续广播——只开 WebSocket 服务端
   /// 等待已配对设备凭缓存直连；向外广播由「可被发现」（[announceTemporarily]）
   /// 手动触发。
-  Future<void> enable({int port = kDefaultSyncPort}) {
+  ///
+  /// [port] 为 null 时使用持久化端口（persistedSyncPort），无持久化记录则
+  /// 回退 [kDefaultSyncPort]。端口被占用时自动顺延尝试（最多
+  /// [kPortFallbackAttempts] 个），成功后把实际端口持久化（重启沿用），
+  /// 并通过 [lastPortFallbackBase] 告知 UI「默认端口被占用，已自动调整」。
+  /// 全部端口均被占用时抛出最后一次 [SocketException]，同步无法开启。
+  Future<void> enable({int? port}) {
     if (isEnabled) return Future.value();
     return _enableInFlight ??= _doEnable(port: port).whenComplete(() {
       _enableInFlight = null;
@@ -586,7 +602,7 @@ class SyncService {
   /// 是否正在临时广播（「可被发现」进行中）。
   bool get isAnnouncing => _discovery.isPublishing;
 
-  Future<void> _doEnable({required int port}) async {
+  Future<void> _doEnable({required int? port}) async {
     _userDisabled = false; // 重新开启同步 → 清除用户手动关闭标记（task-17）
     _manuallyDisconnected.clear(); // 重新开启同步 → 自动重连（会话级标记重置）
     await _identity.ensureLoaded(); // 身份就绪后再对外发布（持久化 deviceId/设备名）
@@ -594,7 +610,32 @@ class SyncService {
     _folderRepository?.localDeviceId = deviceId; // task-32：本地文件夹 origin 标记用
     await _refreshTrustedCache(); // 信任列表缓存（同步页已配对设备列表/发现标记）
     await _loadAddressCache(); // 地址缓存（v4 直连优先，跨重启有效）
-    await _server.start(port: port);
+    // 端口冲突自动顺延：从目标端口起最多尝试 kPortFallbackAttempts 个，
+    // 全部占用才认定无法开启（SocketException 抛给 UI 提示）。
+    final basePort =
+        port ?? _identity.persistedSyncPort ?? kDefaultSyncPort;
+    Object? lastError;
+    var startedPort = -1;
+    for (var attempt = 0; attempt < kPortFallbackAttempts; attempt++) {
+      final candidate = basePort + attempt;
+      try {
+        await _server.start(port: candidate);
+        startedPort = candidate;
+        break;
+      } on SocketException catch (e) {
+        lastError = e; // 端口被占用 → 顺延下一个端口重试
+      }
+    }
+    if (startedPort < 0) {
+      // 全部候选端口均被占用：同步无法开启（保留 userDisabled=false，
+      // UI 提示后用户可排查端口再重试）。
+      throw lastError!;
+    }
+    // 实际端口持久化（需求 9：重启沿用调整后的端口），并记录是否发生顺延，
+    // 供同步页展示「默认端口被占用，已自动调整」提示。
+    _lastPortFallbackBase = startedPort != basePort ? basePort : null;
+    await _identity.setSyncPort(startedPort);
+    unawaited(_identity.setSyncSwitchOn(true)); // 开启成功 → 持久化开关状态
     _attachServerListeners();
     // task-31（互联手动化）：enable 不再持续广播——本机只开 WebSocket 服务端
     // 等待已配对设备凭缓存直连；向外广播（「可被发现」）与扫描（「扫描设备」）
@@ -605,12 +646,29 @@ class SyncService {
     unawaited(_runDirectConnectPhase());
   }
 
+  /// 最近一次 enable 发生端口顺延时记录的原目标端口（null = 未顺延，
+  /// UI 据此展示/清除「默认端口被占用，已自动调整」提示）。
+  int? _lastPortFallbackBase;
+
+  /// 最近一次 enable 是否发生了端口顺延（UI 提示用）。
+  bool get lastPortFallback =>
+      _lastPortFallbackBase != null;
+
+  /// 最近一次 enable 的原目标端口（发生顺延时非 null）。
+  int? get lastPortFallbackBase => _lastPortFallbackBase;
+
+  /// 当前持久化的同步端口（未持久化时为 [kDefaultSyncPort]，UI 输入框初始值）。
+  int get configuredPort =>
+      _identity.persistedSyncPort ?? kDefaultSyncPort;
+
   /// 用户手动关闭同步（task-17）：与 [disable] 相同，但记录「用户手动
   /// 关闭」标记——回前台（resumed）时不自动重新开启（尊重用户操作）。
   ///
-  /// App 重启后标记丢失（会话级内存态），重启后按 auto_sync 配置恢复。
+  /// 开关状态持久化（需求 10）：重启后保持关闭（main.dart 恢复时检查
+  /// syncSwitchOn）。
   Future<void> disableByUser() async {
     _userDisabled = true;
+    unawaited(_identity.setSyncSwitchOn(false)); // 持久化：重启保持关闭
     await disable();
   }
 
@@ -1418,6 +1476,8 @@ class SyncService {
         manuallyDisconnected: _manuallyDisconnected.contains(peerId),
         syncToPeer: _syncToByPeerId[peerId] ?? true,
         syncFromPeer: _syncFromByPeerId[peerId] ?? true,
+        // 最近已知地址（UI 小字展示 IP:端口）。
+        address: _addressCache[peerId]?.displayName,
       ));
     }
     for (final trusted in _trustedCache) {
@@ -1436,8 +1496,25 @@ class SyncService {
         manuallyDisconnected: _manuallyDisconnected.contains(trusted.deviceId),
         syncToPeer: trusted.syncToPeer,
         syncFromPeer: trusted.syncFromPeer,
+        // 最近已知地址（UI 小字展示 IP:端口）。
+        address: _addressCache[trusted.deviceId]?.displayName,
       ));
     }
+    // 稳定排序：已配对设备按配对时间倒序（最新配对的在最上面）。
+    //
+    // 起因：上面的构建顺序取决于 _sessions（Map，插入顺序随连接建立/断开
+    // 变化）与分段拼接，设备会在断开重连、连接去重、启动竞争时无故跳位。
+    // 这里统一按配对时间定序；未配对设备无 pairedAt，排在最后并用 deviceId
+    // 兜底，保证 List.sort（非稳定排序）下顺序仍然确定。
+    final pairedAtById = <String, int>{
+      for (final t in _trustedCache) t.deviceId: t.pairedAt,
+    };
+    peers.sort((a, b) {
+      final ta = pairedAtById[a.deviceId] ?? 0;
+      final tb = pairedAtById[b.deviceId] ?? 0;
+      final byPairedAt = tb.compareTo(ta); // 降序：时间戳大的（新配对的）在前
+      return byPairedAt != 0 ? byPairedAt : a.deviceId.compareTo(b.deviceId);
+    });
     _lastPeers = peers;
     if (!_peersController.isClosed) {
       _peersController.add(peers);
@@ -1550,8 +1627,12 @@ class SyncService {
       case NoteTrashedEvent(note: final note):
       case NoteRestoredEvent(note: final note):
         _pushToAllPeers(
-          NoteUpsertMessage(note: note, origin: note.origin ?? deviceId)
-              .toJson(),
+          NoteUpsertMessage(
+            // 仅本机保存：只传标记（空标题/正文），对端收到后删除自己的
+            // 副本——内容不外传是该标记的语义核心。
+            note: note.syncPayload,
+            origin: note.origin ?? deviceId,
+          ).toJson(),
         );
       case NoteDeletedEvent(
         id: final id,
@@ -1878,6 +1959,9 @@ class _PeerAddress {
 
   /// 对端 WebSocket 服务端口（固定端口，如 [kDefaultSyncPort]）。
   final int port;
+
+  /// 展示用地址（`IP:端口`，同步页设备小字）。
+  String get displayName => '$address:$port';
 }
 
 /// 附件传输状态（task-30）：一次 file_request → 分片接收 → file_complete
@@ -2730,7 +2814,11 @@ class _PeerSession {
     // 全量快照：笔记（含回收站条目，deletedAt 非空即软删除）+ 墓碑列表
     // + 文件夹（含软删除条目，task-32 v6）——对端先写墓碑再合并笔记/
     // 文件夹，防离线旧数据复活（docs/技术架构.md 7.2 节）。
-    final notes = await service._repository.getAll();
+    // 仅本机保存的笔记在快照里只带标记（空标题/正文）：对端据此删除
+    // 自己的副本，内容不离开本机。
+    final notes = (await service._repository.getAll())
+        .map((n) => n.syncPayload)
+        .toList();
     final tombstones = await service._repository.getAllTombstones();
     final folders = await service._folderRepository?.getAll() ?? const [];
     _send(SyncDataMessage(
@@ -2785,11 +2873,15 @@ class _PeerSession {
       final authorId = (note.origin != null && note.origin!.isNotEmpty)
           ? note.origin!
           : peerDeviceId;
-      if (authorId != null &&
+      // 仅本机保存的标记通知**不过滤**：它是让本机删掉副本的指令，与
+      // 「从该设备同步」开关无关（关掉开关反而不该留着对方的私有内容）。
+      if (!note.localOnly &&
+          authorId != null &&
           (service._syncFromByPeerId[authorId] ?? true) == false) {
         continue;
       }
-      if (authorId != null &&
+      if (!note.localOnly &&
+          authorId != null &&
           !service._originAllowsTo(authorId, service.deviceId)) {
         continue;
       }
@@ -2806,8 +2898,9 @@ class _PeerSession {
     for (final note in localNotes) {
       // task-32 v5：回推 origin = 数据作者（note.origin；转发来的数据
       // origin 不是本机，必须保留——否则对端按发送方过滤会漏）。
+      // 仅本机保存：回推同样只带标记（对端据此删除自己的副本）。
       _send(NoteUpsertMessage(
-        note: note,
+        note: note.syncPayload,
         origin: note.origin ?? service.deviceId,
       ).toJson());
     }
@@ -2872,13 +2965,17 @@ class _PeerSession {
         : (origin.isNotEmpty ? origin : peerDeviceId);
     // ignore: avoid_print
     print('[增量接收] note=${note.id} origin=$authorId 来源会话=$peerDeviceId 从$authorId开关=${service._syncFromByPeerId[authorId] ?? true}');
-    if (authorId != null &&
+    // 仅本机保存的标记通知不过滤开关（同全量快照：它是删副本的指令）。
+    if (!note.localOnly &&
+        authorId != null &&
         (service._syncFromByPeerId[authorId] ?? true) == false) {
       return;
     }
     // v5：origin 设备对本机的「向」开关——关则丢弃（A 关「向本机」时，
     // 即使经 C 转发也不接收 A 的数据）。
-    if (authorId != null && !service._originAllowsTo(authorId, service.deviceId)) {
+    if (!note.localOnly &&
+        authorId != null &&
+        !service._originAllowsTo(authorId, service.deviceId)) {
       return;
     }
     final changed = await service._repository.mergeRemoteNote(note);

@@ -24,6 +24,7 @@ import 'empty_hint.dart';
 import 'format.dart';
 import 'glass_style.dart';
 import 'note_actions.dart';
+import 'note_menu.dart';
 
 /// 多选拖拽识别器：
 /// - 忽略触控板双指滚动（PointerPanZoom*）——macOS 双指滚动交给 Scrollable；
@@ -388,7 +389,12 @@ class _NotesListState extends ConsumerState<NotesList> {
     final registry = ref.read(dropZoneRegistryProvider);
     String? target;
     if (ref.read(folderDrawerOpenProvider)) {
-      final candidates = ['__new__', '__all__', ...registry.keys];
+      final candidates = [
+        '__new__',
+        '__all__',
+        kUncategorizedFolderId,
+        ...registry.keys,
+      ];
       for (final id in candidates) {
         final r = registry.rectOf(id);
         if (r != null && r.inflate(6).contains(globalPos)) {
@@ -457,6 +463,11 @@ class _NotesListState extends ConsumerState<NotesList> {
         await ref.read(noteRepositoryProvider).moveNotesToFolder(d.ids, null);
         if (!mounted) return;
         showAppSnackBar('已移动 ${d.ids.length} 条笔记到「全部」');
+      } else if (target == kUncategorizedFolderId) {
+        // 拖到「未分类」= 移出文件夹（folderId 置 null，与「全部」同语义）。
+        await ref.read(noteRepositoryProvider).moveNotesToFolder(d.ids, null);
+        if (!mounted) return;
+        showAppSnackBar('已移动 ${d.ids.length} 条笔记到「未分类」');
       } else {
         await _moveToFolder(d.ids, target);
       }
@@ -865,7 +876,8 @@ class _NoteListItemState extends ConsumerState<NoteListItem> {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
     final note = widget.note;
-    final title = note.title.trim().isEmpty ? '无标题' : note.title.trim();
+    // 标题为空取正文第一句（需求 5，仅展示层）。
+    final title = displayTitleOf(note.title, note.content);
 
     return RawGestureDetector(
       // 手势全部显式声明（GestureDetector 不支持自定义识别器；drag 用
@@ -976,8 +988,8 @@ class _NoteListItemState extends ConsumerState<NoteListItem> {
             // 浮层渲染，不影响卡片内容布局。
             if (multiActive)
               Positioned(
-                right: 4,
-                bottom: 4,
+                right: 0,
+                bottom: 0,
                 child: _CheckCircle(checked: isSelected),
               ),
           ],
@@ -1006,49 +1018,38 @@ class _NoteListItemState extends ConsumerState<NoteListItem> {
 
     const itemHeight = 34.0;
     const radius = 12.0;
-    final pinLabel = note.isPinned ? '取消置顶' : '置顶';
-    final moveLabel = '移动到';
-    final deleteLabel = '删除';
+    // 菜单项清单与动作执行统一走 note_menu（与长按底部面板同一套）。
+    final menuItems = buildNoteMenuItems([note]);
     final itemWidth = _menuItemWidth([
-      for (final label in [pinLabel, moveLabel, deleteLabel]) label,
+      for (final item in menuItems) item.label,
     ]);
     late final OverlayEntry overlayEntry;
     final items = <Widget>[
-      _MenuButton(
-        width: itemWidth,
-        height: itemHeight,
-        radius: BorderRadius.vertical(top: Radius.circular(radius)),
-        icon: note.isPinned ? Icons.push_pin : Icons.push_pin_outlined,
-        label: pinLabel,
-        onTap: () {
-          overlayEntry.remove();
-          _setPinned(!note.isPinned);
-        },
-      ),
-      _MenuButton(
-        width: itemWidth,
-        height: itemHeight,
-        radius: BorderRadius.zero,
-        icon: Icons.drive_file_move_outlined,
-        label: moveLabel,
-        onTap: () {
-          overlayEntry.remove();
-          showMoveToPanel(context, ref, noteIds: [note.id]);
-        },
-      ),
-      _MenuButton(
-        width: itemWidth,
-        height: itemHeight,
-        radius: BorderRadius.vertical(bottom: Radius.circular(radius)),
-        icon: Icons.delete_outline,
-        label: deleteLabel,
-        labelColor: Theme.of(context).colorScheme.error,
-        iconColor: Theme.of(context).colorScheme.error,
-        onTap: () {
-          overlayEntry.remove();
-          _confirmDelete(context);
-        },
-      ),
+      for (var i = 0; i < menuItems.length; i++)
+        _MenuButton(
+          width: itemWidth,
+          height: itemHeight,
+          // 圆角：首项上圆角、末项下圆角、中间直角。
+          radius: i == 0
+              ? BorderRadius.vertical(top: Radius.circular(radius))
+              : (i == menuItems.length - 1
+                  ? BorderRadius.vertical(bottom: Radius.circular(radius))
+                  : BorderRadius.zero),
+          icon: menuItems[i].icon,
+          label: menuItems[i].label,
+          labelColor: menuItems[i].danger
+              ? Theme.of(context).colorScheme.error
+              : null,
+          iconColor: menuItems[i].danger
+              ? Theme.of(context).colorScheme.error
+              : null,
+          onTap: () {
+            overlayEntry.remove();
+            unawaited(
+              runNoteMenuAction(context, ref, menuItems[i].action, [note]),
+            );
+          },
+        ),
     ];
     final menuH = items.length * itemHeight;
     final screen = MediaQuery.sizeOf(context);
@@ -1111,41 +1112,6 @@ class _NoteListItemState extends ConsumerState<NoteListItem> {
     return (14 * 2 + 16 + 10 + tp.width + 4).ceilToDouble();
   }
 
-  /// 置顶/取消置顶（task-28）：翻转置顶状态并持久化（version+1 随同步）。
-  Future<void> _setPinned(bool pinned) async {
-    await ref
-        .read(noteRepositoryProvider)
-        .setPinned(widget.note.id, pinned);
-    if (!mounted) return;
-    showAppSnackBar(pinned ? '已置顶' : '已取消置顶');
-  }
-
-  /// 弹出「移到回收站」玻璃确认框；确认后调 [noteRepositoryProvider]
-  /// .softDeleteNote 软删除（右键菜单删除入口）。
-  Future<void> _confirmDelete(BuildContext context) async {
-    final title = widget.note.title.trim().isEmpty
-        ? '无标题'
-        : widget.note.title.trim();
-    final confirmed = await showGlassDialog<bool>(
-      context: context,
-      title: const Text('移到回收站'),
-      content: Text('将「$title」移到回收站吗？可在回收站中恢复。'),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(false),
-          child: const Text('取消'),
-        ),
-        FilledButton(
-          onPressed: () => Navigator.of(context).pop(true),
-          child: const Text('移到回收站'),
-        ),
-      ],
-    );
-    if (confirmed != true) {
-      return;
-    }
-    await ref.read(noteRepositoryProvider).softDeleteNote(widget.note.id);
-  }
 }
 
 /// 空态：区分「还没有笔记」与「搜索无结果」两种引导（图标 + 淡入）。
@@ -1275,7 +1241,6 @@ class _MultiSelectSheet extends ConsumerWidget {
     final notes = ref.watch(notesStreamProvider).value ?? const <Note>[];
     final selectedNotes =
         notes.where((n) => selected.contains(n.id)).toList();
-    final single = selectedNotes.length == 1 ? selectedNotes.first : null;
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final colorScheme = Theme.of(context).colorScheme;
 
@@ -1317,60 +1282,24 @@ class _MultiSelectSheet extends ConsumerWidget {
           top: false,
           child: Row(
             children: [
-              // 置顶：仅单选时显示。
-              if (single != null)
+              // 菜单项与右键菜单同源（note_menu）：置顶仅单选、仅本机
+              // 保存带勾选态、删除为危险色。
+              for (final item in buildNoteMenuItems(selectedNotes))
                 Expanded(
                   child: _SheetItem(
-                    icon: single.isPinned
-                        ? Icons.push_pin
-                        : Icons.push_pin_outlined,
-                    label: single.isPinned ? '取消置顶' : '置顶',
+                    icon: item.icon,
+                    label: item.label,
+                    color: item.danger ? colorScheme.error : null,
                     onTap: () async {
-                      await ref
-                          .read(noteRepositoryProvider)
-                          .setPinned(single.id, !single.isPinned);
-                      if (!context.mounted) return;
-                      ref.read(multiSelectProvider.notifier).exit();
-                      showAppSnackBar(single.isPinned ? '已取消置顶' : '已置顶');
+                      await runNoteMenuAction(
+                        context,
+                        ref,
+                        item.action,
+                        selectedNotes,
+                      );
                     },
                   ),
                 ),
-              Expanded(
-                child: _SheetItem(
-                  icon: Icons.drive_file_move_outlined,
-                  label: '移动到',
-                  onTap: () async {
-                    await showMoveToPanel(
-                      context,
-                      ref,
-                      noteIds: List<String>.of(selected),
-                    );
-                    if (context.mounted) {
-                      ref.read(multiSelectProvider.notifier).exit();
-                    }
-                  },
-                ),
-              ),
-              Expanded(
-                child: _SheetItem(
-                  icon: Icons.delete_outline,
-                  label: '删除',
-                  color: colorScheme.error,
-                  onTap: () async {
-                    final confirmed = await showBatchDeleteConfirm(
-                      context,
-                      count: selected.length,
-                    );
-                    if (!confirmed || !context.mounted) return;
-                    await ref
-                        .read(noteRepositoryProvider)
-                        .softDeleteNotes(List<String>.of(selected));
-                    if (!context.mounted) return;
-                    ref.read(multiSelectProvider.notifier).exit();
-                    showAppSnackBar('已删除 ${selected.length} 条笔记');
-                  },
-                ),
-              ),
             ],
           ),
         ),
@@ -1963,9 +1892,10 @@ class _GhostLayerState extends State<_GhostLayer>
     required bool isDark,
   }) {
     final colorScheme = Theme.of(context).colorScheme;
-    final title = note == null || note.title.trim().isEmpty
+    // 标题为空取正文第一句（需求 5，仅展示层）。
+    final title = note == null
         ? '无标题'
-        : note.title.trim();
+        : displayTitleOf(note.title, note.content);
     // 样式插值（见类注释：1 = 原卡，0 = 迷你卡）。
     final titleSize = lerpDouble(14, 16, styleT)!;
     final summarySize = lerpDouble(12, 13, styleT)!;

@@ -297,10 +297,30 @@ class _EditorPageState extends ConsumerState<EditorPage> {
   /// dispose 时关闭；Riverpod 2.x 的 ref.listen 仅限 build 内使用）。
   ProviderSubscription<AsyncValue<Note?>>? _noteSub;
 
+  /// 最近一次本地保存落库的 version（null = 尚无本地保存）。
+  ///
+  /// drift 流会把自己写库的变更原样推回（echo）。保存期间用户若继续输入，
+  /// 流推送内容与当前输入不再一致，仅靠内容比较会误判为「远端修改」走
+  /// 强覆盖路径（正在输入的内容被替换，需求 12）。用 version 判定：
+  /// 推送 version 等于本地刚保存的 version → 保存回推，只对齐快照，
+  /// 不覆盖输入框；远端修改 version 恒更大（LWW +1），互不干扰。
+  int? _lastSavedVersion;
+
   /// 保存串行队列：防抖与返回兜底共用，保证同一时刻只有一个写库请求。
   Future<void> _saveChain = Future.value();
 
   _SaveStatus? _saveStatus;
+
+  /// 进入编辑页时笔记是否为空（标题与正文均无内容，只认第一帧数据）。
+  ///
+  /// 返回时用于识别「进入时就空、现在仍空」的空笔记 → 物理删除不留痕。
+  bool _baselineEmpty = true;
+
+  /// 基线是否已捕获（只认进入后的第一帧数据）。
+  bool _baselineCaptured = false;
+
+  /// 当前笔记是否「仅本机保存」（AppBar 开关；随笔记流同步）。
+  bool _localOnly = false;
 
   /// 底部格式工具栏是否收起（移动端默认收起为单按钮：不遮挡输入、
   /// 不粘连碍眼；点击展开完整工具栏）。
@@ -376,6 +396,28 @@ class _EditorPageState extends ConsumerState<EditorPage> {
       if (!_initialized) {
         setState(() => _initialized = true);
         _setStatus(_SaveStatus.saved);
+      }
+      _captureBaseline(title: '', content: '');
+      return;
+    }
+    // 进入后的首帧数据 = 笔记进入时的状态：记录空态基线（返回时识别
+    // 空笔记用）并同步「仅本机保存」标记。
+    _captureBaseline(title: note.title, content: note.content);
+    if (_localOnly != note.localOnly) {
+      setState(() => _localOnly = note.localOnly);
+    }
+    // 本地保存回推判定（需求 12）：version 等于刚保存的版本 → 是自己保存
+    // 触发的 drift 流推送，不是远端修改。保存期间继续输入时内容比较会
+    // 不成立，若不在此拦截会误走 _applyRemoteNote 强覆盖（输入被替换）。
+    // 只对齐快照，绝不触碰输入框；新输入由后续防抖保存正常落库。
+    if (_lastSavedVersion != null && note.version == _lastSavedVersion) {
+      debugPrint('[editor] 保存回推 echo：version=${note.version}，'
+          '跳过覆盖（输入保持不变）');
+      _savedTitle = note.title;
+      _savedContent = note.content;
+      _syncTags(note.tags);
+      if (!_initialized) {
+        setState(() => _initialized = true);
       }
       return;
     }
@@ -475,6 +517,16 @@ class _EditorPageState extends ConsumerState<EditorPage> {
     });
   }
 
+  // ---------- 进入基线（空笔记判定） ----------
+
+  /// 记录进入编辑页时的空态（只认第一帧数据，后续推送不覆盖）。
+  void _captureBaseline({required String title, required String content}) {
+    if (_baselineCaptured) return;
+    _baselineEmpty =
+        title.trim().isEmpty && Note.plainTextOf(content).trim().isEmpty;
+    _baselineCaptured = true;
+  }
+
   // ---------- 自动保存 ----------
 
   /// 正文当前 delta JSON 序列化（Quill Document → 存库/比较的字符串）。
@@ -556,6 +608,9 @@ class _EditorPageState extends ConsumerState<EditorPage> {
       final updated = await ref
           .read(noteRepositoryProvider)
           .updateNote(id: noteId, title: title, content: content);
+      // 记录本次落库版本：drift 流回推（echo）按 version 识别，
+      // 避免保存期间的输入被误判为远端修改而覆盖（需求 12）。
+      _lastSavedVersion = updated.version;
       _savedTitle = updated.title;
       _savedContent = updated.content;
       if (!mounted) return;
@@ -599,48 +654,62 @@ class _EditorPageState extends ConsumerState<EditorPage> {
     unawaited(_flushBeforeLeave());
   }
 
-  /// 返回前兜底：取消防抖并 flush 未保存变更，全部落盘后再离开。
+  /// 返回流程（用户确认方案 A：自动保存心智——所见即所存，返回不打扰）：
   ///
-  /// 方案B：**无内容空笔记（标题+正文均空）→ 物理删除**（不进回收站，
-  /// 点击新建后未输入直接返回的空白笔记不留痕）；非空 → 正常保存后离开。
+  /// - **新建后没输入任何内容** → 无笔记可存，直接离开；
+  /// - **进入时为空且现在仍为空** → 物理删除，静默不留痕；
+  /// - 其余情况一律**静默兜底落盘**所有未保存变更后离开（不弹「保存/
+  ///   不保存」；内容与已保存一致时 _performSave 的相等检查自动跳过）。
   Future<void> _flushBeforeLeave() async {
     if (_popInProgress) return;
     _popInProgress = true;
     _debounce?.cancel();
     _maxIntervalTimer?.cancel();
     final noteId = _noteId;
+    final isEmptyNow = _titleController.text.trim().isEmpty &&
+        _contentController.document.toPlainText().trim().isEmpty;
     if (noteId == null) {
-      if (mounted) context.pop();
+      if (isEmptyNow) {
+        // 新建模式且没输入：还没有笔记，直接离开。
+        if (mounted) context.pop();
+        return;
+      }
+      // 防抖窗口内输入后立即返回（首次保存还没创建笔记）：兜底创建。
+      await _flushPendingSave();
       return;
     }
-    final isEmptyNote = _titleController.text.trim().isEmpty &&
-        _contentController.document.toPlainText().trim().isEmpty;
-    if (isEmptyNote) {
-      // 空白笔记：直接物理删除（同步会广播删除，对端最终一致）。
+    if (isEmptyNow && _baselineEmpty) {
+      // 进入时为空、现在仍为空：直接物理删除（同步会广播删除，对端一致）。
       await ref.read(noteRepositoryProvider).deleteNote(noteId);
       if (!mounted) return;
       context.pop();
       return;
     }
+    // 返回即保存：兜底落盘待保存变更（含防抖窗口内的输入与格式类变更）。
+    await _flushPendingSave();
+  }
+
+  /// 落盘待保存变更后离开（无改动 / 选择「保存」共用）。
+  ///
+  /// 保存失败时沿用原确认框（重试留在编辑页 / 仍要离开）。
+  Future<void> _flushPendingSave() async {
     if (_dirty) {
-      // 防抖 pending 或上次保存失败：立即兜底保存。
       await _enqueueSave();
     }
     if (!mounted) return;
-    if (_dirty) {
-      // 兜底保存失败：让用户选择重试或放弃。
-      final leave = await _confirmLeaveWithUnsaved();
-      if (!mounted) return;
-      if (leave) {
-        context.pop();
-      } else {
-        // 重试：立即重新保存，停留在编辑页。
-        _popInProgress = false;
-        _enqueueSave();
-      }
+    if (!_dirty) {
+      context.pop();
       return;
     }
-    context.pop();
+    final leave = await _confirmLeaveWithUnsaved();
+    if (!mounted) return;
+    if (leave) {
+      context.pop();
+    } else {
+      // 重试：立即重新保存，停留在编辑页。
+      _popInProgress = false;
+      _enqueueSave();
+    }
   }
 
   /// 保存失败离开确认框：返回 true 表示放弃未保存内容仍要离开。
@@ -662,37 +731,40 @@ class _EditorPageState extends ConsumerState<EditorPage> {
     ).then((value) => value ?? false);
   }
 
-  // ---------- 删除（移到回收站） ----------
+  // ---------- 仅本机保存 ----------
 
-  /// 编辑态删除：二次确认后 softDeleteNote 移到回收站并返回列表。
-  Future<void> _confirmDelete() async {
+  /// 切换「仅本机保存」（AppBar 开关，同步层按此标记拦截内容传输）。
+  ///
+  /// 开启 = 不再同步到其他设备，且**其他设备上已有的副本会被删除**
+  /// （对端收到标记即删，不可撤销，因此开启前先确认）；关闭 = 恢复同步。
+  Future<void> _toggleLocalOnly(bool value) async {
     final noteId = _noteId;
     if (noteId == null) return;
-    final title = _titleController.text.trim().isEmpty
-        ? '无标题'
-        : _titleController.text.trim();
-    final confirmed = await showGlassDialog<bool>(
-      context: context,
-      title: const Text('移到回收站'),
-      content: Text('将「$title」移到回收站吗？可在回收站中恢复。'),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(false),
-          child: const Text('取消'),
+    if (value && !_localOnly) {
+      final confirmed = await showGlassDialog<bool>(
+        context: context,
+        title: const Text('仅本机保存'),
+        content: const Text(
+          '开启后这篇笔记不再同步到其他设备，'
+          '其他设备上已有的副本会被删除。',
         ),
-        FilledButton(
-          onPressed: () => Navigator.of(context).pop(true),
-          child: const Text('移到回收站'),
-        ),
-      ],
-    );
-    if (confirmed != true || !mounted) return;
-    // 取消待保存，避免删除后残留定时器把笔记写回。
-    _debounce?.cancel();
-    _maxIntervalTimer?.cancel();
-    _dirty = false;
-    await ref.read(noteRepositoryProvider).softDeleteNote(noteId);
-    if (mounted) context.pop();
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('开启'),
+          ),
+        ],
+      );
+      if (confirmed != true || !mounted) return;
+    }
+    setState(() => _localOnly = value);
+    await ref.read(noteRepositoryProvider).setLocalOnly(noteId, value);
+    if (!mounted) return;
+    showAppSnackBar(value ? '已设为仅本机保存' : '已恢复同步到其他设备');
   }
 
   // ---------- UI ----------
@@ -712,12 +784,13 @@ class _EditorPageState extends ConsumerState<EditorPage> {
           title: const Text('编辑笔记'),
           actions: [
             _SaveStatusIndicator(status: _saveStatus),
-            IconButton(
-                tooltip: '移到回收站',
-                icon: const Icon(Icons.delete_outline),
-                onPressed: _confirmDelete,
-              ),
-            const SizedBox(width: 4),
+            // 原「移到回收站」按钮位置改为「仅本机保存」开关（用户确认：
+            // 编辑页不再提供删除入口，删除走列表菜单）。
+            _LocalOnlyToggle(
+              value: _localOnly,
+              onChanged: _toggleLocalOnly,
+            ),
+            const SizedBox(width: 8),
           ],
         ),
         body: Stack(
@@ -1264,6 +1337,56 @@ class _WordCountBar extends StatelessWidget {
         '$count 字',
         textAlign: TextAlign.right,
         style: TextStyle(fontSize: 12, color: colorScheme.outline),
+      ),
+    );
+  }
+}
+
+/// AppBar「仅本机保存」开关（复选框 + 文案，用户确认的文案与形式）。
+///
+/// 勾选 = 该笔记内容不再同步到其他设备（对端已有副本会被删除）；取消 =
+/// 恢复同步。状态随笔记流同步（远端取消标记后本地开关同步翻转）。
+class _LocalOnlyToggle extends StatelessWidget {
+  const _LocalOnlyToggle({required this.value, required this.onChanged});
+
+  final bool value;
+
+  /// 目标值回调（true = 仅本机保存）。
+  final ValueChanged<bool> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final color = value ? colorScheme.primary : colorScheme.onSurfaceVariant;
+    return Tooltip(
+      message: value
+          ? '仅本机保存中：不同步到其他设备'
+          : '仅本机保存：开启后不同步到其他设备',
+      child: InkWell(
+        borderRadius: BorderRadius.circular(8),
+        onTap: () => onChanged(!value),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                value ? Icons.check_box : Icons.check_box_outline_blank,
+                size: 18,
+                color: color,
+              ),
+              const SizedBox(width: 4),
+              Text(
+                '仅本机保存',
+                style: TextStyle(
+                  fontSize: 13,
+                  color: color,
+                  fontWeight: value ? FontWeight.w600 : FontWeight.w400,
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

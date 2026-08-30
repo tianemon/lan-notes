@@ -109,7 +109,8 @@ class _SyncPageState extends ConsumerState<SyncPage> {
     _service = ref.read(syncServiceProvider);
     _syncEnabled = _service.isEnabled;
     _portController = TextEditingController(
-      text: '${_service.port ?? kDefaultSyncPort}',
+      // 持久化端口优先（需求 9：重启沿用），无记录回退默认端口。
+      text: '${_service.configuredPort}',
     );
     _nameController = TextEditingController(text: _service.deviceName);
 
@@ -167,6 +168,12 @@ class _SyncPageState extends ConsumerState<SyncPage> {
         await _service.enable();
         if (mounted) {
           setState(() => _syncEnabled = _service.isEnabled);
+          // 端口冲突自动顺延（需求 8）：提示「默认端口被占用，已自动调整」，
+          // 并把输入框同步为实际端口（服务实际监听端口）。
+          if (_service.lastPortFallback) {
+            _portController.text = '${_service.port}';
+            _showSnack('默认端口被占用，已自动调整为 ${_service.port}');
+          }
         }
       } else {
         // 用户手动关闭：走 disableByUser（task-17）——记录「用户手动关闭」
@@ -289,6 +296,8 @@ class _SyncPageState extends ConsumerState<SyncPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
+        // 缩小标题与返回按钮间距（需求 2）。
+        titleSpacing: 4,
         title: const Text('同步'),
       ),
       body: ListView(
@@ -298,37 +307,57 @@ class _SyncPageState extends ConsumerState<SyncPage> {
             _buildConflictBanner(context),
             const SizedBox(height: 12),
           ],
-          // 本机设备名（task-32：卡片风格，左侧「设备名」标签 + 右侧输入框
-          // 直接编辑、输入自动保存——与端口行样式一致）。
+          // 本机设备名称（task-32：卡片风格，左侧「设备名称」标签 + 右侧
+          // 输入框直接编辑、输入自动保存——与端口行样式一致）；
+          // 下方小字说明：该名称是其他设备看到的名字（需求 1）。
           GlassCard(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-            child: Row(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 10),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // 标签定宽（与端口行左对齐，输入框同一垂直线上）。
-                SizedBox(
-                  width: 56,
-                  child: Text(
-                    '设备名',
-                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                          fontWeight: FontWeight.w600,
-                          color: Theme.of(context).colorScheme.onSurfaceVariant,
-                        ),
-                  ),
-                ),
-                Expanded(
-                  child: TextField(
-                    controller: _nameController,
-                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                          fontWeight: FontWeight.w600,
-                        ),
-                    // 参考端口输入框：描边 + 内边距，不贴边。
-                    decoration: const InputDecoration(
-                      isDense: true,
-                      border: OutlineInputBorder(),
-                      contentPadding:
-                          EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                Row(
+                  children: [
+                    // 标签定宽（与端口行左对齐，输入框同一垂直线上）。
+                    SizedBox(
+                      width: 72,
+                      child: Text(
+                        '设备名称',
+                        style:
+                            Theme.of(context).textTheme.titleMedium?.copyWith(
+                                  fontWeight: FontWeight.w600,
+                                  color: Theme.of(context)
+                                      .colorScheme
+                                      .onSurfaceVariant,
+                                ),
+                      ),
                     ),
-                    onChanged: (_) => _scheduleSaveDeviceName(),
+                    Expanded(
+                      child: TextField(
+                        controller: _nameController,
+                        style:
+                            Theme.of(context).textTheme.titleMedium?.copyWith(
+                                  fontWeight: FontWeight.w600,
+                                ),
+                        // 参考端口输入框：描边 + 内边距，不贴边。
+                        decoration: const InputDecoration(
+                          isDense: true,
+                          border: OutlineInputBorder(),
+                          contentPadding: EdgeInsets.symmetric(
+                              horizontal: 10, vertical: 8),
+                        ),
+                        onChanged: (_) => _scheduleSaveDeviceName(),
+                      ),
+                    ),
+                  ],
+                ),
+                // 说明小字：与输入框起点对齐（需求 1）。
+                Padding(
+                  padding: const EdgeInsets.only(left: 72, top: 4),
+                  child: Text(
+                    '其他设备看到的名称',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: Theme.of(context).colorScheme.outline,
+                        ),
                   ),
                 ),
               ],
@@ -423,13 +452,14 @@ class _SyncPageState extends ConsumerState<SyncPage> {
               ),
             ],
           ),
-          // 端口行（仅同步开启时显示）：修改端口后点「重启」重新开启服务。
+          // 端口行（仅同步开启时显示）：修改端口后点「重启」重新开启服务；
+          // 下方小字说明默认端口（需求 3）。
           if (_syncEnabled) ...[
             const SizedBox(height: 10),
             Row(
               children: [
               SizedBox(
-                width: 56,
+                width: 72,
                 child: Text(
                   '端口',
                   style: theme.textTheme.titleMedium?.copyWith(
@@ -465,6 +495,16 @@ class _SyncPageState extends ConsumerState<SyncPage> {
               ),
             ],
           ),
+            // 端口说明小字：与输入框起点对齐（需求 3）。
+            Padding(
+              padding: const EdgeInsets.only(left: 72, top: 4),
+              child: Text(
+                '默认 $kDefaultSyncPort，端口冲突时自动顺延',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: colorScheme.outline,
+                ),
+              ),
+            ),
           ],
         ],
       ),
@@ -500,7 +540,14 @@ class _SyncPageState extends ConsumerState<SyncPage> {
       unawaited(_service.announceTemporarily());
       if (mounted) {
         setState(() => _syncEnabled = _service.isEnabled);
-        _showSnack('已重启同步（端口 $port）');
+        // 端口冲突自动顺延（需求 8）：提示实际生效端口并同步输入框。
+        if (_service.lastPortFallback) {
+          final actual = _service.port;
+          if (actual != null) _portController.text = '$actual';
+          _showSnack('默认端口被占用，已自动调整为 $actual');
+        } else {
+          _showSnack('已重启同步（端口 $port）');
+        }
       }
     } on SocketException {
       if (mounted) {
@@ -659,7 +706,7 @@ class _SyncPageState extends ConsumerState<SyncPage> {
                         visualDensity: VisualDensity.compact,
                         padding: const EdgeInsets.symmetric(horizontal: 14),
                       ),
-                      child: const Text('扫描'),
+                      child: const Text('搜索'),
                     ),
                   ],
                 ),
@@ -1030,14 +1077,30 @@ class _PeerTile extends StatelessWidget {
           // 见 app_icons.dart 说明）；猜不到类型只显示状态圆点。
           ..._peerLeading(peer.deviceName, statusColor),
           Expanded(
-            child: Text(
-              peer.deviceName,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                fontSize: 15,
-                fontWeight: FontWeight.w600,
-              ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  peer.deviceName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                // 设备名下方小字：最近已知地址 IP:端口（需求 13；无缓存不占位）。
+                if (peer.address != null && peer.address!.isNotEmpty)
+                  Text(
+                    peer.address!,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: colorScheme.outline,
+                    ),
+                  ),
+              ],
             ),
           ),
           // 右侧：两个同步方向开关（上下排列）——

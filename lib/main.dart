@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_quill/flutter_quill.dart' show FlutterQuillLocalizations;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'app/repository/intro_note.dart';
 import 'app/repository/providers.dart';
 import 'app/router.dart';
 import 'app/theme.dart';
@@ -24,6 +25,14 @@ void main() async {
     // 渲染，设置异步写入 notifier 后才切深色——造成「亮→暗」一闪
     // （用户反馈：系统亮色 + 应用内深色，启动先亮后暗）。
     themeModeNotifier.value = settings.themeMode;
+  } catch (_) {}
+  // 首次安装：创建介绍笔记（仅本机保存，可删除、删后不复活）。放在首帧
+  // 之前执行，避免用户先看到空列表、笔记随后才出现。
+  try {
+    await ensureIntroNote(
+      container.read(databaseProvider),
+      container.read(noteRepositoryProvider),
+    );
   } catch (_) {}
   runApp(UncontrolledProviderScope(
     container: container,
@@ -98,6 +107,8 @@ class _LanNotesAppState extends ConsumerState<LanNotesApp>
       await identity.ensureLoaded(); // 读取持久化配置（含 auto_sync）
       final service = ref.read(syncServiceProvider);
       if (!identity.autoSync || service.isUserDisabled) return;
+      // 开关状态持久化（需求 10）：用户上次手动关闭同步 → 重启/回前台不自动开启。
+      if (!identity.syncSwitchOn) return;
       if (!service.isEnabled) {
         await service.enable();
       } else if (!service.isConnected) {

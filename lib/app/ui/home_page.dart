@@ -3,6 +3,7 @@ import 'dart:ui';
 
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -15,6 +16,15 @@ import '../theme.dart';
 import 'widgets/app_icons.dart';
 import 'widgets/folder_drawer.dart';
 import 'widgets/notes_list.dart';
+
+/// 搜索框是否聚焦（跨组件共享：[HomePage] 的 PopScope 返回键拦截要用）。
+/// 由 [_SearchField] 的 FocusNode 监听同步，[HomePage] 只读。
+final _searchFocusedProvider = StateProvider<bool>((ref) => false);
+
+/// 双击返回退出：上次按返回的时间戳（null = 无待确认的退出）。
+/// 无任何拦截状态时按返回 → 提示「再返回一次退出」并记录时间；
+/// 2 秒内再次按返回 → 真正退出（业内标准 2s，Android 主流做法）。
+final _lastBackPressProvider = StateProvider<DateTime?>((ref) => null);
 
 /// 主页：笔记列表页。
 ///
@@ -47,14 +57,44 @@ class HomePage extends ConsumerWidget {
     final selected = ref.watch(multiSelectProvider);
     final multiActive = selected.isNotEmpty;
 
-    // 多选激活时拦截系统返回（安卓返回键）：先退出多选，不退出应用；
-    // 多选退出后再按返回 = 正常返回（退出应用）。
+    // 系统返回（安卓返回键）全量拦截，回调内分级处理：
+    // 抽屉 → 搜索聚焦 → 多选 → 双击返回退出。
+    // canPop 恒 false：保证每次返回都进回调（否则系统直接 pop 退出，
+    // 双击确认与各级拦截都无从触发）；真正退出用 SystemNavigator.pop()
+    // 绕过 PopScope 拦截。
     return PopScope(
-      canPop: !multiActive,
+      canPop: false,
       onPopInvokedWithResult: (didPop, _) {
-        if (!didPop) {
-          ref.read(multiSelectProvider.notifier).exit();
+        if (didPop) return;
+        // 抽屉展开 → 只关抽屉（不退出应用）。
+        if (ref.read(folderDrawerOpenProvider)) {
+          ref.read(folderDrawerOpenProvider.notifier).state = false;
+          ref.read(folderDrawerByDragProvider.notifier).state = false;
+          return;
         }
+        // 搜索框聚焦 → 只取消聚焦（收起键盘，关键字保留）。
+        if (ref.read(_searchFocusedProvider)) {
+          FocusManager.instance.primaryFocus?.unfocus();
+          return;
+        }
+        // 多选激活 → 退出多选（不退出应用）。
+        if (ref.read(multiSelectProvider).isNotEmpty) {
+          ref.read(multiSelectProvider.notifier).exit();
+          return;
+        }
+        // 无拦截状态：双击返回退出（2 秒窗口，业内标准）。
+        final now = DateTime.now();
+        final last = ref.read(_lastBackPressProvider);
+        if (last != null &&
+            now.difference(last) < const Duration(seconds: 2)) {
+          // 2 秒内再次返回 → 真正退出（时间戳过期视为首次，等价于清除状态）。
+          ref.read(_lastBackPressProvider.notifier).state = null;
+          SystemNavigator.pop();
+          return;
+        }
+        // 首次返回（或距上次超过 2 秒）：记录时间并提示。
+        ref.read(_lastBackPressProvider.notifier).state = now;
+        showAppSnackBar('再返回一次退出', duration: const Duration(seconds: 2));
       },
       // 抽屉全屏覆盖（用户确认）：FolderDrawer 挂在 Scaffold 外层 Stack，
       // 高度覆盖整个窗口（含 AppBar 区域），展开时盖住文件夹按钮。
@@ -63,10 +103,9 @@ class HomePage extends ConsumerWidget {
         Scaffold(
       appBar: AppBar(
         // 多选模式：全选 + 已选 N 项 + 完成；普通模式：文件夹按钮 + 三按钮。
+        // 全选用文字按钮（需求 7）：视觉密度紧凑，与右侧「完成」样式呼应。
         leading: multiActive
-            ? IconButton(
-                tooltip: '全选',
-                icon: const Icon(Icons.select_all),
+            ? TextButton(
                 onPressed: () {
                   final ids = ref
                           .read(notesStreamProvider)
@@ -76,6 +115,7 @@ class HomePage extends ConsumerWidget {
                       .read(multiSelectProvider.notifier)
                       .selectAll(ids.map((n) => n.id));
                 },
+                child: const Text('全选'),
               )
             // 普通态 leading 留空：文件夹按钮移到外层 Stack（z 序在
             // 抽屉之上），抽屉展开时按钮在抽屉上层向左滑出（可见）。
@@ -142,7 +182,10 @@ class HomePage extends ConsumerWidget {
               padding: const EdgeInsets.only(right: 8, bottom: 16),
               child: _FrostedFab(
                 onPressed: () async {
-                  final folderId = ref.read(folderFilterProvider);
+                  final selected = ref.read(folderFilterProvider);
+                  // 「未分类」筛选下新建 = 不归入任何文件夹（哨兵不能入库）。
+                  final folderId =
+                      selected == kUncategorizedFolderId ? null : selected;
                   final note = await ref
                       .read(noteRepositoryProvider)
                       .createNote(title: '', content: '', folderId: folderId);
@@ -251,25 +294,51 @@ class _SearchField extends ConsumerStatefulWidget {
   ConsumerState<_SearchField> createState() => _SearchFieldState();
 }
 
+/// 搜索框边框：统一无边框（聚焦也不高亮，只显示光标）。
+/// 主题 inputDecorationTheme 的 focusedBorder 是主色描边，必须显式覆盖。
+const _kSearchBorder = OutlineInputBorder(
+  borderRadius: BorderRadius.all(Radius.circular(24)),
+  borderSide: BorderSide.none,
+);
+
 class _SearchFieldState extends ConsumerState<_SearchField> {
   late final TextEditingController _controller;
+  late final FocusNode _focusNode;
+
+  /// dispose 阶段 element 已标记卸载、ref 不可用：initState 时提前持有
+  /// notifier（全局 StateProvider，实例稳定），供卸载兜底清聚焦标记用。
+  late final StateController<bool> _focusedNotifier;
 
   @override
   void initState() {
     super.initState();
     _controller = TextEditingController(text: ref.read(searchQueryProvider));
     _controller.addListener(_syncToProvider);
+    _focusNode = FocusNode(debugLabel: 'SearchField');
+    // 聚焦状态同步到 provider：返回键据此先取消聚焦而不是退出应用。
+    _focusNode.addListener(_syncFocusToProvider);
+    _focusedNotifier = ref.read(_searchFocusedProvider.notifier);
   }
 
   @override
   void dispose() {
+    _focusNode
+      ..removeListener(_syncFocusToProvider)
+      ..dispose();
     _controller.dispose();
+    // 兜底：卸载时清除聚焦标记，避免 PopScope 永久拦截返回键。
+    _focusedNotifier.state = false;
     super.dispose();
   }
 
   /// 输入即过滤：每次键入把关键字同步到 provider。
   void _syncToProvider() {
     ref.read(searchQueryProvider.notifier).state = _controller.text;
+  }
+
+  /// 聚焦变化同步到 provider（返回键拦截用）。
+  void _syncFocusToProvider() {
+    ref.read(_searchFocusedProvider.notifier).state = _focusNode.hasFocus;
   }
 
   @override
@@ -286,7 +355,10 @@ class _SearchFieldState extends ConsumerState<_SearchField> {
 
     return TextField(
       controller: _controller,
+      focusNode: _focusNode,
       textInputAction: TextInputAction.search,
+      // 点击搜索框外部区域 → 取消聚焦（收起键盘），关键字保留。
+      onTapOutside: (_) => _focusNode.unfocus(),
       style: theme.textTheme.bodyLarge,
       decoration: InputDecoration(
         hintText: '搜索笔记',
@@ -302,10 +374,13 @@ class _SearchFieldState extends ConsumerState<_SearchField> {
         filled: true,
         fillColor: theme.colorScheme.surfaceContainerLow,
         contentPadding: EdgeInsets.zero,
-        border: const OutlineInputBorder(
-          borderRadius: BorderRadius.all(Radius.circular(24)),
-          borderSide: BorderSide.none,
-        ),
+        // 全部无边框：聚焦也不高亮（覆盖主题 focusedBorder 的主色描边）。
+        border: _kSearchBorder,
+        enabledBorder: _kSearchBorder,
+        focusedBorder: _kSearchBorder,
+        disabledBorder: _kSearchBorder,
+        errorBorder: _kSearchBorder,
+        focusedErrorBorder: _kSearchBorder,
       ),
     );
   }

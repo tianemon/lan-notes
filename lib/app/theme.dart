@@ -1,10 +1,12 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import 'navigation.dart';
+import 'ui/widgets/glass_style.dart';
 
 // ============================================================
 // 设计令牌（EE 风格，参考 EasyEdit ui_style.dart，task-25）
@@ -370,39 +372,51 @@ ThemeData buildAppTheme() => buildLightTheme();
 /// 当前显示的横幅（OverlayEntry 生命周期管理）。
 OverlayEntry? _appSnackBarEntry;
 
-/// 横幅自动消失定时器。
-Timer? _appSnackBarTimer;
-
 /// 在根 Overlay 上弹横幅（固定底部，不随页面切换移动）。
+///
+/// 自动消失与退场淡出由 [_AppSnackBarHost] 内部管理（Timer + 反向动画），
+/// 播完通过 [onDismissed] 回调移除自身；新通知顶掉旧的时直接清除。
 void showAppSnackBar(String message, {Duration? duration}) {
   final overlay = rootNavigatorKey.currentState?.overlay;
   if (overlay == null) return; // 导航未挂载（启动早期）：跳过
 
-  // 移除旧横幅（不等待动画，直接清）。
+  // 移除旧横幅（新通知顶掉旧的：直接清，不等待动画）。
   _appSnackBarEntry?.remove();
   _appSnackBarEntry = null;
-  _appSnackBarTimer?.cancel();
 
   late final OverlayEntry entry;
   entry = OverlayEntry(
-    builder: (context) => _AppSnackBarHost(message: message),
+    builder: (context) => _AppSnackBarHost(
+      message: message,
+      duration: duration ?? const Duration(seconds: 2),
+      onDismissed: () {
+        if (_appSnackBarEntry == entry) {
+          _appSnackBarEntry = null;
+          entry.remove();
+        }
+      },
+    ),
   );
   _appSnackBarEntry = entry;
   overlay.insert(entry);
-
-  _appSnackBarTimer = Timer(duration ?? const Duration(seconds: 2), () {
-    if (_appSnackBarEntry == entry) {
-      entry.remove();
-      _appSnackBarEntry = null;
-    }
-  });
 }
 
-/// 横幅本体：底部固定 + SafeArea + 浮出动画 + 自动消失后回调。
+/// 横幅本体：底部居中悬浮 + 毛玻璃 + 宽度自适应文字 + 淡入淡出。
 class _AppSnackBarHost extends StatefulWidget {
-  const _AppSnackBarHost({required this.message});
+  const _AppSnackBarHost({
+    required this.message,
+    required this.duration,
+    required this.onDismissed,
+  });
 
+  /// 提示文案。
   final String message;
+
+  /// 自动消失延迟（含入场动画时间）。
+  final Duration duration;
+
+  /// 淡出动画播完后回调（由外层移除 OverlayEntry）。
+  final VoidCallback onDismissed;
 
   @override
   State<_AppSnackBarHost> createState() => _AppSnackBarHostState();
@@ -411,6 +425,7 @@ class _AppSnackBarHost extends StatefulWidget {
 class _AppSnackBarHostState extends State<_AppSnackBarHost>
     with SingleTickerProviderStateMixin {
   late final AnimationController _controller;
+  late final Timer _timer;
 
   @override
   void initState() {
@@ -420,11 +435,21 @@ class _AppSnackBarHostState extends State<_AppSnackBarHost>
     _controller = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 220),
-    )..forward();
+    );
+    // 入场：淡入 + 上滑。
+    _controller.forward();
+    // 自动消失：先反向播放（淡出 + 下滑），播完再回调移除，避免硬切。
+    _controller.addStatusListener((status) {
+      if (status == AnimationStatus.dismissed) {
+        widget.onDismissed();
+      }
+    });
+    _timer = Timer(widget.duration, _controller.reverse);
   }
 
   @override
   void dispose() {
+    _timer.cancel();
     _controller.dispose();
     super.dispose();
   }
@@ -432,58 +457,78 @@ class _AppSnackBarHostState extends State<_AppSnackBarHost>
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    // 对齐 SnackBar 主题外观（深色圆角条）。
-    final bg = isDark ? const Color(0xFF2A3A4A) : kLightTextPrimary;
-    final fg = isDark ? kDarkTextPrimary : Colors.white;
+    // 文字色跟随玻璃底色：亮色白 75% 底 → 深色字；暗色白 10% 底 → 浅色字
+    // （与 GlassDialog 一致）。
+    final fg = isDark ? kDarkTextPrimary : kLightTextPrimary;
 
-    return Positioned(
-      left: 16,
-      right: 16,
-      // 固定底部：SafeArea 上沿 + 16（避开系统手势区，不随页面变化）。
-      bottom: MediaQuery.paddingOf(context).bottom + 16,
-      child: SafeArea(
-        top: false,
-        child: FadeTransition(
-          opacity: CurvedAnimation(parent: _controller, curve: Curves.easeOut),
-          child: SlideTransition(
-            position: Tween<Offset>(
-              begin: const Offset(0, 0.4),
-              end: Offset.zero,
-            ).animate(CurvedAnimation(
-              parent: _controller,
-              curve: Curves.easeOutCubic,
-            )),
-            child: Material(
-              type: MaterialType.transparency,
-              child: Container(
-                constraints: const BoxConstraints(maxWidth: 480),
-                margin: const EdgeInsets.symmetric(horizontal: 8),
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                decoration: BoxDecoration(
-                  color: bg,
-                  borderRadius: BorderRadius.circular(12),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.2),
-                      blurRadius: 16,
-                      offset: const Offset(0, 6),
+    return LayoutBuilder(
+      builder: (context, c) {
+        final maxW = math.min(360.0, c.maxWidth - 32);
+        return UnconstrainedBox(
+          // OverlayEntry 的 builder 收到 tight 全屏约束，Align/Container 会把
+          // tight 透传/顶满，导致条子被撑满全屏。这里在最外层用
+          // UnconstrainedBox 破除 tight，并由它把条子定位到底部居中。
+          alignment: Alignment.bottomCenter,
+          child: SafeArea(
+            top: false,
+            child: Padding(
+              // 底部间距 66 = 基础 16 + 用户指定再抬高 50。
+              padding: const EdgeInsets.only(bottom: 66),
+              child: FadeTransition(
+                opacity:
+                    CurvedAnimation(parent: _controller, curve: Curves.easeOut),
+                child: SlideTransition(
+                  position: Tween<Offset>(
+                    begin: const Offset(0, 0.4),
+                    end: Offset.zero,
+                  ).animate(CurvedAnimation(
+                    parent: _controller,
+                    curve: Curves.easeOutCubic,
+                  )),
+                  // 必须包一层 Material：通知条挂在根 Overlay 上，不在任何
+                  // Scaffold/Material 内。缺了它，Text 会吃到 Flutter 的
+                  // DefaultTextStyle.fallback()——那是一套醒目的警告样式
+                  // （红字 + 黄色双下划线 + monospace 48 + 异常行距）。
+                  child: Material(
+                    type: MaterialType.transparency,
+                    // 毛玻璃：BackdropFilter blur 20 + 半透底色；ClipRRect
+                    // 裁掉模糊方角。不复用 styledDecoration——它的 0.5px
+                    // 白边框和大阴影在窄条上会形成贴底的「下划线」。
+                    child: glassWrap(
+                      radius: 12,
+                      // IntrinsicWidth：强制条宽按文字测量收缩（而不是撑满
+                      // maxWidth）。短文案窄条，长文案到 maxW 封顶换行。
+                      child: IntrinsicWidth(
+                        child: Container(
+                          constraints: BoxConstraints(maxWidth: maxW),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 16, vertical: 8),
+                          decoration: BoxDecoration(
+                            color: isDark
+                                ? Colors.white.withValues(alpha: 0.12)
+                                : Colors.white.withValues(alpha: 0.8),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Text(
+                            widget.message,
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: fg,
+                              fontWeight: FontWeight.w400,
+                            ),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ),
                     ),
-                  ],
-                ),
-                child: Center(
-                  child: Text(
-                    widget.message,
-                    style: TextStyle(fontSize: 14, color: fg),
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
                   ),
                 ),
               ),
             ),
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 }

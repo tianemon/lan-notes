@@ -129,6 +129,21 @@ class $NotesTable extends Notes with TableInfo<$NotesTable, NoteRow> {
     type: DriftSqlType.string,
     requiredDuringInsert: false,
   );
+  static const VerificationMeta _localOnlyMeta = const VerificationMeta(
+    'localOnly',
+  );
+  @override
+  late final GeneratedColumn<bool> localOnly = GeneratedColumn<bool>(
+    'local_only',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("local_only" IN (0, 1))',
+    ),
+    defaultValue: const Constant(false),
+  );
   @override
   List<GeneratedColumn> get $columns => [
     id,
@@ -142,6 +157,7 @@ class $NotesTable extends Notes with TableInfo<$NotesTable, NoteRow> {
     tags,
     origin,
     folderId,
+    localOnly,
   ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -224,6 +240,12 @@ class $NotesTable extends Notes with TableInfo<$NotesTable, NoteRow> {
         folderId.isAcceptableOrUnknown(data['folder_id']!, _folderIdMeta),
       );
     }
+    if (data.containsKey('local_only')) {
+      context.handle(
+        _localOnlyMeta,
+        localOnly.isAcceptableOrUnknown(data['local_only']!, _localOnlyMeta),
+      );
+    }
     return context;
   }
 
@@ -277,6 +299,10 @@ class $NotesTable extends Notes with TableInfo<$NotesTable, NoteRow> {
         DriftSqlType.string,
         data['${effectivePrefix}folder_id'],
       ),
+      localOnly: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}local_only'],
+      )!,
     );
   }
 
@@ -313,6 +339,12 @@ class NoteRow extends DataClass implements Insertable<NoteRow> {
   /// 所属文件夹 id（task-32 文件夹归类）：null=未分类（「全部」视图下
   /// 的未分类笔记）。移动笔记 = 置值 + version+1，随 note_upsert 同步。
   final String? folderId;
+
+  /// 仅本机保存（localOnly，默认 false）：true = 该笔记内容不参与同步
+  /// ——本机照常编辑查看，但不向任何对端传输标题/正文；对端收到该标记
+  /// 后删除自己那份副本（同步层过滤见 sync_service.dart）。
+  /// 标记本身随同步传播（字段在 note_upsert 载荷里），否则对端无从得知。
+  final bool localOnly;
   const NoteRow({
     required this.id,
     required this.title,
@@ -325,6 +357,7 @@ class NoteRow extends DataClass implements Insertable<NoteRow> {
     required this.tags,
     this.origin,
     this.folderId,
+    required this.localOnly,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -346,6 +379,7 @@ class NoteRow extends DataClass implements Insertable<NoteRow> {
     if (!nullToAbsent || folderId != null) {
       map['folder_id'] = Variable<String>(folderId);
     }
+    map['local_only'] = Variable<bool>(localOnly);
     return map;
   }
 
@@ -368,6 +402,7 @@ class NoteRow extends DataClass implements Insertable<NoteRow> {
       folderId: folderId == null && nullToAbsent
           ? const Value.absent()
           : Value(folderId),
+      localOnly: Value(localOnly),
     );
   }
 
@@ -388,6 +423,7 @@ class NoteRow extends DataClass implements Insertable<NoteRow> {
       tags: serializer.fromJson<String>(json['tags']),
       origin: serializer.fromJson<String?>(json['origin']),
       folderId: serializer.fromJson<String?>(json['folderId']),
+      localOnly: serializer.fromJson<bool>(json['localOnly']),
     );
   }
   @override
@@ -405,6 +441,7 @@ class NoteRow extends DataClass implements Insertable<NoteRow> {
       'tags': serializer.toJson<String>(tags),
       'origin': serializer.toJson<String?>(origin),
       'folderId': serializer.toJson<String?>(folderId),
+      'localOnly': serializer.toJson<bool>(localOnly),
     };
   }
 
@@ -420,6 +457,7 @@ class NoteRow extends DataClass implements Insertable<NoteRow> {
     String? tags,
     Value<String?> origin = const Value.absent(),
     Value<String?> folderId = const Value.absent(),
+    bool? localOnly,
   }) => NoteRow(
     id: id ?? this.id,
     title: title ?? this.title,
@@ -432,6 +470,7 @@ class NoteRow extends DataClass implements Insertable<NoteRow> {
     tags: tags ?? this.tags,
     origin: origin.present ? origin.value : this.origin,
     folderId: folderId.present ? folderId.value : this.folderId,
+    localOnly: localOnly ?? this.localOnly,
   );
   NoteRow copyWithCompanion(NotesCompanion data) {
     return NoteRow(
@@ -446,6 +485,7 @@ class NoteRow extends DataClass implements Insertable<NoteRow> {
       tags: data.tags.present ? data.tags.value : this.tags,
       origin: data.origin.present ? data.origin.value : this.origin,
       folderId: data.folderId.present ? data.folderId.value : this.folderId,
+      localOnly: data.localOnly.present ? data.localOnly.value : this.localOnly,
     );
   }
 
@@ -462,7 +502,8 @@ class NoteRow extends DataClass implements Insertable<NoteRow> {
           ..write('isPinned: $isPinned, ')
           ..write('tags: $tags, ')
           ..write('origin: $origin, ')
-          ..write('folderId: $folderId')
+          ..write('folderId: $folderId, ')
+          ..write('localOnly: $localOnly')
           ..write(')'))
         .toString();
   }
@@ -480,6 +521,7 @@ class NoteRow extends DataClass implements Insertable<NoteRow> {
     tags,
     origin,
     folderId,
+    localOnly,
   );
   @override
   bool operator ==(Object other) =>
@@ -495,7 +537,8 @@ class NoteRow extends DataClass implements Insertable<NoteRow> {
           other.isPinned == this.isPinned &&
           other.tags == this.tags &&
           other.origin == this.origin &&
-          other.folderId == this.folderId);
+          other.folderId == this.folderId &&
+          other.localOnly == this.localOnly);
 }
 
 class NotesCompanion extends UpdateCompanion<NoteRow> {
@@ -510,6 +553,7 @@ class NotesCompanion extends UpdateCompanion<NoteRow> {
   final Value<String> tags;
   final Value<String?> origin;
   final Value<String?> folderId;
+  final Value<bool> localOnly;
   final Value<int> rowid;
   const NotesCompanion({
     this.id = const Value.absent(),
@@ -523,6 +567,7 @@ class NotesCompanion extends UpdateCompanion<NoteRow> {
     this.tags = const Value.absent(),
     this.origin = const Value.absent(),
     this.folderId = const Value.absent(),
+    this.localOnly = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   NotesCompanion.insert({
@@ -537,6 +582,7 @@ class NotesCompanion extends UpdateCompanion<NoteRow> {
     this.tags = const Value.absent(),
     this.origin = const Value.absent(),
     this.folderId = const Value.absent(),
+    this.localOnly = const Value.absent(),
     this.rowid = const Value.absent(),
   }) : id = Value(id),
        createdAt = Value(createdAt),
@@ -553,6 +599,7 @@ class NotesCompanion extends UpdateCompanion<NoteRow> {
     Expression<String>? tags,
     Expression<String>? origin,
     Expression<String>? folderId,
+    Expression<bool>? localOnly,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -567,6 +614,7 @@ class NotesCompanion extends UpdateCompanion<NoteRow> {
       if (tags != null) 'tags': tags,
       if (origin != null) 'origin': origin,
       if (folderId != null) 'folder_id': folderId,
+      if (localOnly != null) 'local_only': localOnly,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -583,6 +631,7 @@ class NotesCompanion extends UpdateCompanion<NoteRow> {
     Value<String>? tags,
     Value<String?>? origin,
     Value<String?>? folderId,
+    Value<bool>? localOnly,
     Value<int>? rowid,
   }) {
     return NotesCompanion(
@@ -597,6 +646,7 @@ class NotesCompanion extends UpdateCompanion<NoteRow> {
       tags: tags ?? this.tags,
       origin: origin ?? this.origin,
       folderId: folderId ?? this.folderId,
+      localOnly: localOnly ?? this.localOnly,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -637,6 +687,9 @@ class NotesCompanion extends UpdateCompanion<NoteRow> {
     if (folderId.present) {
       map['folder_id'] = Variable<String>(folderId.value);
     }
+    if (localOnly.present) {
+      map['local_only'] = Variable<bool>(localOnly.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -657,6 +710,7 @@ class NotesCompanion extends UpdateCompanion<NoteRow> {
           ..write('tags: $tags, ')
           ..write('origin: $origin, ')
           ..write('folderId: $folderId, ')
+          ..write('localOnly: $localOnly, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -2238,6 +2292,7 @@ typedef $$NotesTableCreateCompanionBuilder =
       Value<String> tags,
       Value<String?> origin,
       Value<String?> folderId,
+      Value<bool> localOnly,
       Value<int> rowid,
     });
 typedef $$NotesTableUpdateCompanionBuilder =
@@ -2253,6 +2308,7 @@ typedef $$NotesTableUpdateCompanionBuilder =
       Value<String> tags,
       Value<String?> origin,
       Value<String?> folderId,
+      Value<bool> localOnly,
       Value<int> rowid,
     });
 
@@ -2316,6 +2372,11 @@ class $$NotesTableFilterComposer extends Composer<_$AppDatabase, $NotesTable> {
 
   ColumnFilters<String> get folderId => $composableBuilder(
     column: $table.folderId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get localOnly => $composableBuilder(
+    column: $table.localOnly,
     builder: (column) => ColumnFilters(column),
   );
 }
@@ -2383,6 +2444,11 @@ class $$NotesTableOrderingComposer
     column: $table.folderId,
     builder: (column) => ColumnOrderings(column),
   );
+
+  ColumnOrderings<bool> get localOnly => $composableBuilder(
+    column: $table.localOnly,
+    builder: (column) => ColumnOrderings(column),
+  );
 }
 
 class $$NotesTableAnnotationComposer
@@ -2426,6 +2492,9 @@ class $$NotesTableAnnotationComposer
 
   GeneratedColumn<String> get folderId =>
       $composableBuilder(column: $table.folderId, builder: (column) => column);
+
+  GeneratedColumn<bool> get localOnly =>
+      $composableBuilder(column: $table.localOnly, builder: (column) => column);
 }
 
 class $$NotesTableTableManager
@@ -2467,6 +2536,7 @@ class $$NotesTableTableManager
                 Value<String> tags = const Value.absent(),
                 Value<String?> origin = const Value.absent(),
                 Value<String?> folderId = const Value.absent(),
+                Value<bool> localOnly = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => NotesCompanion(
                 id: id,
@@ -2480,6 +2550,7 @@ class $$NotesTableTableManager
                 tags: tags,
                 origin: origin,
                 folderId: folderId,
+                localOnly: localOnly,
                 rowid: rowid,
               ),
           createCompanionCallback:
@@ -2495,6 +2566,7 @@ class $$NotesTableTableManager
                 Value<String> tags = const Value.absent(),
                 Value<String?> origin = const Value.absent(),
                 Value<String?> folderId = const Value.absent(),
+                Value<bool> localOnly = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => NotesCompanion.insert(
                 id: id,
@@ -2508,6 +2580,7 @@ class $$NotesTableTableManager
                 tags: tags,
                 origin: origin,
                 folderId: folderId,
+                localOnly: localOnly,
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0

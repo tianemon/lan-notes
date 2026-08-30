@@ -84,7 +84,8 @@ class _TrashItem extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
-    final title = note.title.trim().isEmpty ? '无标题' : note.title.trim();
+    // 标题为空取正文第一句（需求 5，仅展示层）。
+    final title = displayTitleOf(note.title, note.content);
     final deletedAt = note.deletedAt;
 
     return Padding(
@@ -160,7 +161,8 @@ Future<void> _confirmPurgeOne(
   WidgetRef ref,
   Note note,
 ) async {
-  final title = note.title.trim().isEmpty ? '无标题' : note.title.trim();
+  // 标题为空取正文第一句（需求 5，仅展示层）。
+  final title = displayTitleOf(note.title, note.content);
   final confirmed = await showGlassDialog<bool>(
     context: context,
     title: const Text('清空笔记'),

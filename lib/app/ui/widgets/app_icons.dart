@@ -13,7 +13,7 @@ import 'package:flutter/material.dart';
 // `AppIcon(icon: AppIconData.folder, size: 17, color: ...)`。
 
 /// 手绘图标枚举（避免运行时 IconData 变量引用 + 不依赖字体）。
-enum AppIconData { folder, desktopWindows, smartphone, laptopMac, tablet }
+enum AppIconData { folder, folderOff, desktopWindows, smartphone, laptopMac, tablet }
 
 /// 手绘图标组件：用法同 Icon，但走 CustomPainter。
 class AppIcon extends StatelessWidget {
@@ -55,6 +55,25 @@ class AppFolderIcon extends StatelessWidget {
   }
 }
 
+/// 便捷：文件夹 + 斜线图标（folder_off 风格，「未分类」用）。
+/// 主题/尺寸/颜色语义与 [AppFolderIcon] 完全一致。
+class AppFolderOffIcon extends StatelessWidget {
+  const AppFolderOffIcon({super.key, this.size, this.color});
+
+  final double? size;
+  final Color? color;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = IconTheme.of(context);
+    return AppIcon(
+      AppIconData.folderOff,
+      size: size ?? theme.size ?? 24,
+      color: color ?? theme.color ?? Theme.of(context).colorScheme.onSurfaceVariant,
+    );
+  }
+}
+
 class _AppIconPainter extends CustomPainter {
   _AppIconPainter(this.icon, this.color);
 
@@ -66,7 +85,8 @@ class _AppIconPainter extends CustomPainter {
     // folder 用描边（空心，与 Material folder_outlined 一致，用户确认）；
     // 设备图标用填充（原 Icons.smartphone/laptop_mac/desktop_windows 均
     // 为实心 baseline 变体）。
-    final isStroke = icon == AppIconData.folder;
+    final isStroke =
+        icon == AppIconData.folder || icon == AppIconData.folderOff;
     final paint = Paint()
       ..color = color
       ..style = isStroke ? PaintingStyle.stroke : PaintingStyle.fill
@@ -80,24 +100,35 @@ class _AppIconPainter extends CustomPainter {
     canvas.restore();
   }
 
+  /// folder 轮廓（24x24，material folder 官方 path）。
+  void _folderPath(Path p) {
+    p.moveTo(10, 4);
+    p.lineTo(4, 4);
+    p.cubicTo(2.9, 4, 2.01, 4.9, 2.01, 6);
+    p.lineTo(2, 18);
+    p.cubicTo(2, 19.1, 2.9, 20, 4, 20);
+    p.lineTo(20, 20);
+    p.cubicTo(21.1, 20, 22, 19.1, 22, 18);
+    p.lineTo(22, 8);
+    p.cubicTo(22, 6.9, 21.1, 6, 20, 6);
+    p.lineTo(12, 6);
+    p.lineTo(10, 4);
+    p.close();
+  }
+
   /// Material Symbols 官方 24x24 path 数据（填充风格）。
   Path _pathFor(AppIconData icon) {
     final p = Path();
     switch (icon) {
       case AppIconData.folder:
         // material folder: M10,4H4C2.9,4 2.01,4.9 2.01,6L2,18c0,1.1 0.9,2 2,2h16c1.1,0 2,-0.9 2,-2V8c0,-1.1 -0.9,-2 -2,-2h-8L10,4z
-        p.moveTo(10, 4);
-        p.lineTo(4, 4);
-        p.cubicTo(2.9, 4, 2.01, 4.9, 2.01, 6);
-        p.lineTo(2, 18);
-        p.cubicTo(2, 19.1, 2.9, 20, 4, 20);
-        p.lineTo(20, 20);
-        p.cubicTo(21.1, 20, 22, 19.1, 22, 18);
-        p.lineTo(22, 8);
-        p.cubicTo(22, 6.9, 21.1, 6, 20, 6);
-        p.lineTo(12, 6);
-        p.lineTo(10, 4);
-        p.close();
+        _folderPath(p);
+      case AppIconData.folderOff:
+        // folder + 45° 斜线（material folder_off 的斜线走向，左上→右下，
+        // 端点略超出文件夹轮廓）：用于「未分类」（不属于任何文件夹）。
+        _folderPath(p);
+        p.moveTo(3.5, 3.5);
+        p.lineTo(20.5, 20.5);
       case AppIconData.desktopWindows:
         // material desktop_windows: M21,2H3C1.9,2 1,2.9 1,4v13c0,1.1 0.9,2 2,2h7v2H8v2h8v-2h-2v-2h7c1.1,0 2,-0.9 2,-2V4C23,2.9 22.1,2 21,2zM21,17H3V4h18V17z
         p.moveTo(21, 2);

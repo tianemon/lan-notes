@@ -107,6 +107,7 @@ class NoteRepository {
     required String title,
     required String content,
     String? folderId,
+    bool localOnly = false,
   }) async {
     final now = DateTime.now().millisecondsSinceEpoch;
     final note = Note(
@@ -117,6 +118,7 @@ class NoteRepository {
       updatedAt: now,
       origin: localDeviceId,
       folderId: folderId,
+      localOnly: localOnly,
     );
     await _dao.insertOrReplace(note);
     _changes.add(NoteUpsertedEvent(note));
@@ -167,6 +169,25 @@ class NoteRepository {
   ///
   /// [folderId] 传 null = 移出文件夹（未分类）。每条变更经
   /// [NoteUpsertedEvent] 推送（note_upsert 随同步）。
+  /// 仅本机保存开关（localOnly）：置值 + version+1，updatedAt 不变。
+  ///
+  /// 变更经 [NoteUpsertedEvent] 推送（同步层按 localOnly 决定传内容还是
+  /// 只传标记：true 时不带标题/正文，对端据此删除自己的副本）。幂等
+  /// 语义同 [setPinned]。
+  Future<Note> setLocalOnly(String id, bool localOnly) async {
+    final updated = await _dao.setLocalOnly(id, localOnly);
+    _changes.add(NoteUpsertedEvent(updated));
+    return updated;
+  }
+
+  /// 批量设置仅本机保存（多选菜单）：逐条置值 + version+1（幂等）。
+  Future<void> setLocalOnlyForNotes(List<String> ids, bool localOnly) async {
+    for (final id in ids) {
+      final updated = await _dao.setLocalOnly(id, localOnly);
+      _changes.add(NoteUpsertedEvent(updated));
+    }
+  }
+
   Future<void> moveNotesToFolder(List<String> ids, String? folderId) async {
     for (final id in ids) {
       final updated = await _dao.moveToFolder(id, folderId);
@@ -298,7 +319,20 @@ class NoteRepository {
     }
     final local = await _dao.getById(remote.id);
     if (local == null) {
+      // 本机没有的笔记，若对端标记为「仅本机保存」则不必落库（对端不外传
+      // 内容，这条只是标记通知；本机无副本就无事可做）。
+      if (remote.localOnly) return false;
       await _dao.insertOrReplace(remote);
+      return true;
+    }
+    // 本地已标记「仅本机保存」：拒收远端任何内容——该笔记独属于本机，
+    // 双向隔离（既不外传，也不接受对端/第三台设备的旧副本覆盖）。
+    // 用户取消标记（localOnly → false）后恢复正常同步。
+    if (local.localOnly) return false;
+    // 对端标记「仅本机保存」：删除本机这份副本（不进回收站、不写墓碑——
+    // 该笔记在对端依然存在，写墓碑会让删除反向传播或拦截后续恢复同步）。
+    if (remote.localOnly) {
+      await _dao.deleteById(remote.id);
       return true;
     }
     // 操作时间：软删除条目以 deletedAt 计、正常条目以 updatedAt 计
@@ -318,6 +352,7 @@ class NoteRepository {
         remote.deletedAt == local.deletedAt &&
         remote.isPinned == local.isPinned &&
         remote.folderId == local.folderId &&
+        remote.localOnly == local.localOnly &&
         _sameTags(remote.tags, local.tags)) {
       // 内容与删除/置顶/标签/文件夹状态均一致：仅对齐版本/时间戳（防“全量同步→
       // 版本+1→回推→再+1”膨胀）。
@@ -335,6 +370,7 @@ class NoteRepository {
         tags: remote.tags,
         origin: remote.origin ?? local.origin,
         folderId: remote.folderId ?? local.folderId,
+        localOnly: local.localOnly,
       );
       await _dao.insertOrReplace(aligned);
       return true;
@@ -354,6 +390,7 @@ class NoteRepository {
       // `remote.folderId ?? local.folderId` 会把 null 吞掉、保留本地旧值，
       // 导致「移出文件夹」永远无法跨端同步。
       folderId: remote.folderId,
+      localOnly: remote.localOnly,
     );
     await _dao.insertOrReplace(merged);
     return true;

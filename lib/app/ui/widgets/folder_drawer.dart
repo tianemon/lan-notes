@@ -55,6 +55,8 @@ class FolderDrawer extends ConsumerWidget {
     }
     final pinned = folders.where((f) => f.isPinned).toList();
     final normal = folders.where((f) => !f.isPinned).toList();
+    // 「未分类」计数：不属于任何文件夹的活跃笔记（folderId 为 null）。
+    final uncategorizedCount = notes.where((n) => n.folderId == null).length;
 
     return Stack(
       children: [
@@ -114,7 +116,8 @@ class FolderDrawer extends ConsumerWidget {
                       children: [
                         // 「全部」：默认选中；可拖放落点（用户确认：样式
                         // 与普通文件夹一致、图标一致、可拖入=移出文件夹）。
-                        _AllFolderDropTarget(
+                        _FixedDropTarget(
+                          id: '__all__',
                           child: _FolderItem(
                             id: null,
                             name: '全部',
@@ -164,7 +167,33 @@ class FolderDrawer extends ConsumerWidget {
                             ),
                           ),
                         ],
-
+                        // 「未分类」：固定置底（文件夹列表最下方）——显示
+                        // 不属于任何文件夹的笔记；可拖放落点（拖入 = 移出
+                        // 文件夹，与拖到「全部」同语义）。
+                        _FixedDropTarget(
+                          id: kUncategorizedFolderId,
+                          child: _FolderItem(
+                            id: kUncategorizedFolderId,
+                            name: '未分类',
+                            icon: const AppFolderOffIcon(),
+                            count: uncategorizedCount,
+                            selected: selected == kUncategorizedFolderId,
+                            fixed: true,
+                            onTap: () {
+                              ref
+                                      .read(folderFilterProvider.notifier)
+                                      .state =
+                                  kUncategorizedFolderId;
+                              ref
+                                  .read(folderDrawerOpenProvider.notifier)
+                                  .state = false;
+                              // 多选态切筛选：退出多选（与普通文件夹同语义）。
+                              if (ref.read(multiSelectProvider).isNotEmpty) {
+                                ref.read(multiSelectProvider.notifier).exit();
+                              }
+                            },
+                          ),
+                        ),
                       ],
                     ),
                   ),
@@ -388,25 +417,28 @@ class _ProxyMarker extends InheritedWidget {
   bool updateShouldNotify(_ProxyMarker oldWidget) => false;
 }
 
-/// 「全部」项拖放注册包装：id 为 null 无法直接注册，这里用特殊 id
-/// '__all__' 注册稳定 GlobalKey（State 持有，build 重建不换实例）。
-/// 拖到「全部」= 移动到未分类（notes_list 落点处理，用户确认）。
-class _AllFolderDropTarget extends ConsumerStatefulWidget {
-  const _AllFolderDropTarget({required this.child});
+/// 固定项（「全部」/「未分类」）拖放注册包装：这些项没有真实文件夹 id，
+/// 用约定的哨兵 id 注册稳定 GlobalKey（State 持有，build 重建不换实例）。
+/// 拖到「全部」= 移动到未分类；拖到「未分类」同样 = 移出文件夹
+/// （notes_list 落点处理，用户确认）。
+class _FixedDropTarget extends ConsumerStatefulWidget {
+  const _FixedDropTarget({required this.id, required this.child});
+
+  /// 注册到 [DropZoneRegistry] 的哨兵 id（'__all__' / '__uncategorized__'）。
+  final String id;
 
   final Widget child;
 
   @override
-  ConsumerState<_AllFolderDropTarget> createState() =>
-      _AllFolderDropTargetState();
+  ConsumerState<_FixedDropTarget> createState() => _FixedDropTargetState();
 }
 
-class _AllFolderDropTargetState extends ConsumerState<_AllFolderDropTarget> {
+class _FixedDropTargetState extends ConsumerState<_FixedDropTarget> {
   final GlobalKey _dropKey = GlobalKey();
 
   @override
   Widget build(BuildContext context) {
-    ref.read(dropZoneRegistryProvider).register('__all__', _dropKey);
+    ref.read(dropZoneRegistryProvider).register(widget.id, _dropKey);
     return KeyedSubtree(key: _dropKey, child: widget.child);
   }
 }
@@ -427,6 +459,7 @@ class _FolderItem extends ConsumerStatefulWidget {
     required this.onTap,
     this.pinned = false,
     this.dragHandle,
+    this.fixed = false,
   });
 
   final String? id;
@@ -437,6 +470,9 @@ class _FolderItem extends ConsumerStatefulWidget {
   final bool pinned;
   final VoidCallback onTap;
   final Widget? dragHandle;
+
+  /// 固定项（「全部」/「未分类」）：无菜单、无拖拽手柄，仅点击切换筛选。
+  final bool fixed;
 
   @override
   ConsumerState<_FolderItem> createState() => _FolderItemState();
@@ -454,6 +490,7 @@ class _FolderItemState extends ConsumerState<_FolderItem> {
   bool get pinned => widget.pinned;
   VoidCallback get onTap => widget.onTap;
   Widget? get dragHandle => widget.dragHandle;
+  bool get fixed => widget.fixed;
 
   @override
   Widget build(BuildContext context) {
@@ -578,8 +615,8 @@ class _FolderItemState extends ConsumerState<_FolderItem> {
               );
             }
 
-            // 「全部」：可拖放落点（id null，注册 '__all__'），无菜单/手柄。
-            if (isAll) {
+            // 固定项（「全部」/「未分类」）：可拖放落点，无菜单/手柄。
+            if (isAll || fixed) {
               return GestureDetector(onTap: onTap, child: interactive);
             }
             // 普通项：长按/右键菜单（拖拽落点由注册表 + notes_list 命中处理）。

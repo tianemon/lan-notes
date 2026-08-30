@@ -47,6 +47,12 @@ class Notes extends Table {
   /// 的未分类笔记）。移动笔记 = 置值 + version+1，随 note_upsert 同步。
   TextColumn get folderId => text().nullable()();
 
+  /// 仅本机保存（localOnly，默认 false）：true = 该笔记内容不参与同步
+  /// ——本机照常编辑查看，但不向任何对端传输标题/正文；对端收到该标记
+  /// 后删除自己那份副本（同步层过滤见 sync_service.dart）。
+  /// 标记本身随同步传播（字段在 note_upsert 载荷里），否则对端无从得知。
+  BoolColumn get localOnly => boolean().withDefault(const Constant(false))();
+
   @override
   Set<Column> get primaryKey => {id};
 }
@@ -175,7 +181,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase(super.executor);
 
   @override
-  int get schemaVersion => 11;
+  int get schemaVersion => 12;
 
   /// 迁移策略：v1（仅 Notes）→ v2（新增 DeviceSettings/TrustedDevices）
   /// → v3（TrustedDevices 加 autoConnect 列，task-16）→ v4（Notes 加
@@ -185,8 +191,9 @@ class AppDatabase extends _$AppDatabase {
   /// 标签）→ v8（task-29 富文本：notes.content 纯文本 → delta JSON，
   /// 逐行转换，列类型不变）→ v9（TrustedDevices 加 syncToPeer/syncFromPeer
   /// 列，task-32 同步方向开关）→ v10（Notes 加 origin 列，task-32 最后
-  /// 修改者）→ **v11（task-32 文件夹归类：新建 Folders 表 + Notes 加
-  /// folderId 列，存量笔记默认 null=未分类）**。
+  /// 修改者）→ v11（task-32 文件夹归类：新建 Folders 表 + Notes 加
+  /// folderId 列，存量笔记默认 null=未分类）→ **v12（Notes 加 localOnly
+  /// 列「仅本机保存」，默认 false，存量笔记照常同步）**。
   ///
   /// task-12 新增两张表：旧库（schemaVersion=1）升级时仅建新表，
   /// 不触碰笔记数据；task-16 给信任列表加「自动连接」开关列（带默认值
@@ -254,6 +261,15 @@ class AppDatabase extends _$AppDatabase {
                 cols.any((c) => c.data['name'] == 'folder_id');
             if (!hasFolderId) {
               await m.addColumn(notes, notes.folderId);
+            }
+          }
+          if (from < 12) {
+            // 同 v11 的幂等处理：列可能已残留存在（PRAGMA 查到即跳过）。
+            final cols = await customSelect('PRAGMA table_info(notes)').get();
+            final hasLocalOnly =
+                cols.any((c) => c.data['name'] == 'local_only');
+            if (!hasLocalOnly) {
+              await m.addColumn(notes, notes.localOnly);
             }
           }
         },

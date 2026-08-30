@@ -17,6 +17,15 @@ const String kDeviceSettingDeviceName = 'device_name';
 /// 从后台回前台时若同步被系统关闭自动恢复。存储 '1'/'0'。
 const String kDeviceSettingAutoSync = 'auto_sync';
 
+/// 设备设置键：同步服务监听端口（用户需求：改端口后持久化，重启沿用）。
+/// 存储 '1'-'65535' 数字字符串；不存在时由 SyncService 回退默认端口。
+const String kDeviceSettingSyncPort = 'sync_port';
+
+/// 设备设置键：同步开关状态（用户需求：手动关闭同步后持久化，重启保持
+/// 关闭）。存储 '1'/'0'；不存在（旧库）时视为开启——与旧版行为一致
+/// （旧版重启后按 auto_sync 恢复开启）。
+const String kDeviceSettingSyncSwitch = 'sync_switch';
+
 /// 对端地址缓存键前缀（task-27 v4 直连优先，持久化）：
 /// `addr_<deviceId>` → `ip:port`。打开软件/enable 时先凭缓存地址直连
 /// 已配对设备（3 次×2 组），失败再进入退避扫描；连接/发现时刷新。
@@ -60,6 +69,12 @@ class DeviceIdentityStore {
   String _deviceId;
   String _deviceName;
   bool _autoSync = true;
+
+  /// 持久化的同步服务端口（null = 未设置，回退默认端口）。
+  int? _syncPort;
+
+  /// 持久化的同步开关状态（null/缺省视为开启，兼容旧库）。
+  bool _syncSwitchOn = true;
   Future<void>? _loading;
 
   /// 本机设备 ID（持久化身份，重启不变；首次启动生成并落库）。
@@ -73,6 +88,12 @@ class DeviceIdentityStore {
   /// 开启时 App 启动/回前台自动恢复同步（见 main.dart 生命周期逻辑）；
   /// 关闭后仅手动开启同步，重启 App 也不自动开启。
   bool get autoSync => _autoSync;
+
+  /// 持久化的同步服务端口（未设置返回 null，由调用方回退默认端口）。
+  int? get persistedSyncPort => _syncPort;
+
+  /// 持久化的同步开关状态（上次是开启还是手动关闭；缺省视为开启）。
+  bool get syncSwitchOn => _syncSwitchOn;
 
   /// 从数据库加载持久化身份并缓存（幂等）；首次运行把内存默认值落库。
   ///
@@ -100,6 +121,13 @@ class DeviceIdentityStore {
     if (storedAutoSync == null) {
       await _dao.setSetting(kDeviceSettingAutoSync, '1');
     }
+    // sync_port：不存在（未改过端口）时保持 null，由调用方回退默认端口。
+    final storedPort = await _dao.getSetting(kDeviceSettingSyncPort);
+    _syncPort = int.tryParse(storedPort ?? '');
+    // sync_switch：不存在（旧库）时视为开启（兼容旧版「重启按 auto_sync
+    // 恢复」行为）；手动关闭后为 '0'，重启不再自动开启。
+    final storedSwitch = await _dao.getSetting(kDeviceSettingSyncSwitch);
+    _syncSwitchOn = storedSwitch != '0';
   }
 
   /// 修改设备名（持久化；同步开关开启时由 SyncService 刷新 UDP 广播发布）。
@@ -117,6 +145,18 @@ class DeviceIdentityStore {
   Future<void> setAutoSync(bool value) async {
     _autoSync = value;
     await _dao.setSetting(kDeviceSettingAutoSync, value ? '1' : '0');
+  }
+
+  /// 持久化同步服务端口（改端口重启成功 / 冲突自动顺延后调用）。
+  Future<void> setSyncPort(int port) async {
+    _syncPort = port;
+    await _dao.setSetting(kDeviceSettingSyncPort, '$port');
+  }
+
+  /// 持久化同步开关状态（手动开启/关闭同步开关时调用，重启沿用）。
+  Future<void> setSyncSwitchOn(bool value) async {
+    _syncSwitchOn = value;
+    await _dao.setSetting(kDeviceSettingSyncSwitch, value ? '1' : '0');
   }
 
   /// 设备是否已配对（在信任列表中）。

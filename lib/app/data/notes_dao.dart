@@ -50,6 +50,7 @@ class NoteDao extends DatabaseAccessor<AppDatabase> with _$NoteDaoMixin {
         tags: current.tags,
       origin: current.origin,
         folderId: current.folderId,
+        localOnly: current.localOnly,
       );
     });
   }
@@ -74,6 +75,7 @@ class NoteDao extends DatabaseAccessor<AppDatabase> with _$NoteDaoMixin {
         tags: current.tags,
       origin: current.origin,
         folderId: current.folderId,
+        localOnly: current.localOnly,
       );
     });
   }
@@ -98,6 +100,7 @@ class NoteDao extends DatabaseAccessor<AppDatabase> with _$NoteDaoMixin {
         tags: List.of(tags),
         origin: current.origin,
         folderId: current.folderId,
+        localOnly: current.localOnly,
       );
     });
   }
@@ -123,6 +126,34 @@ class NoteDao extends DatabaseAccessor<AppDatabase> with _$NoteDaoMixin {
         tags: current.tags,
         origin: current.origin,
         folderId: folderId,
+        localOnly: current.localOnly,
+      );
+    });
+  }
+
+  /// 仅本机保存开关（localOnly）：置值 + version+1，updatedAt **保持不变**
+  /// （标记不是内容修改——切换标记不该让笔记跳到列表最前）。
+  ///
+  /// version+1 是标记能传播到对端的前提（LWW 按版本比较）：对端收到
+  /// localOnly=true 的 upsert 会删除自己那份副本（同步层处理，见
+  /// sync_service 的 localOnly 拦截）；true → false 后内容恢复同步。
+  /// 幂等：与当前状态一致时直接返回当前值，不重复递增版本。
+  Future<Note> setLocalOnly(String id, bool localOnly) {
+    return _mutate(id, '仅本机保存', (current) {
+      if (current.localOnly == localOnly) return current; // 幂等
+      return Note(
+        id: id,
+        title: current.title,
+        content: current.content,
+        createdAt: current.createdAt,
+        updatedAt: current.updatedAt,
+        version: current.version + 1,
+        deletedAt: current.deletedAt,
+        isPinned: current.isPinned,
+        tags: current.tags,
+        origin: current.origin,
+        folderId: current.folderId,
+        localOnly: localOnly,
       );
     });
   }
@@ -173,6 +204,7 @@ class NoteDao extends DatabaseAccessor<AppDatabase> with _$NoteDaoMixin {
       tags: current.tags,
       origin: current.origin,
         folderId: current.folderId,
+        localOnly: current.localOnly,
     );
     await update(notes).replace(trashed.toRow());
     return trashed;
@@ -180,8 +212,9 @@ class NoteDao extends DatabaseAccessor<AppDatabase> with _$NoteDaoMixin {
 
   /// 恢复：清除 deletedAt + version+1（回收站条目回到正常列表）。
   ///
-  /// 幂等：不在回收站（deletedAt 为 null）时直接返回当前值。返回恢复后
-  /// 的笔记（含新 version，deletedAt 为 null）。
+  /// updatedAt 保留删除前的原值（用户需求：恢复不改日期——列表按 updatedAt
+  /// 排序，恢复后回到原时间位置）；version 仍 +1 保证跨设备同步按新版本
+  /// 合并。幂等：不在回收站（deletedAt 为 null）时直接返回当前值。
   Future<Note> restore(String id) async {
     final current = await getById(id);
     if (current == null) {
@@ -190,19 +223,19 @@ class NoteDao extends DatabaseAccessor<AppDatabase> with _$NoteDaoMixin {
     if (current.deletedAt == null) {
       return current; // 不在回收站：幂等
     }
-    final now = DateTime.now().millisecondsSinceEpoch;
     final restored = Note(
       id: id,
       title: current.title,
       content: current.content,
       createdAt: current.createdAt,
-      updatedAt: now,
+      updatedAt: current.updatedAt,
       version: current.version + 1,
       deletedAt: null,
       isPinned: current.isPinned,
       tags: current.tags,
       origin: current.origin,
         folderId: current.folderId,
+        localOnly: current.localOnly,
     );
     await update(notes).replace(restored.toRow());
     return restored;
@@ -234,6 +267,10 @@ class NoteDao extends DatabaseAccessor<AppDatabase> with _$NoteDaoMixin {
   }
 
   /// 按 id 物理删除，返回受影响行数（无墓碑，仅测试/特殊场景用）。
+  ///
+  /// 「对端标记仅本机保存」删本机副本也走这里：该笔记在对端依然存在
+  /// （只是不外传内容），写墓碑会让删除反向传播、或在用户取消标记后
+  /// 拦截内容回传（墓碑永不清除）。
   Future<int> deleteById(String id) {
     return (delete(notes)..where((t) => t.id.equals(id))).go();
   }

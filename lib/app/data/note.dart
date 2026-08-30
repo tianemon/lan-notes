@@ -9,6 +9,9 @@ import 'database.dart';
 /// - [version]：LWW 冲突合并用的单调递增版本号（默认 0）
 /// - [deletedAt]：软删除标记（null=正常，非 null=回收站，epoch ms；
 ///   JSON 序列化中可缺失/null，兼容旧版数据与旧对端）
+/// - [localOnly]：仅本机保存（默认 false；JSON 可缺失 → false，兼容旧版
+///   数据与旧对端）。true = 内容不参与同步（本机不向外传输标题/正文，
+///   对端收到该标记后删除自己的副本），标记字段本身随同步传播。
 /// - [isPinned]：是否置顶（task-28，列表置顶优先；JSON 可缺失 → false，
 ///   兼容旧版数据与旧对端）
 /// - [tags]：标签列表（task-28，列表页标签筛选；JSON 可缺失 → 空列表，
@@ -36,6 +39,9 @@ class Note {
   /// 所属文件夹 id（task-32 文件夹归类）：null=未分类。
   final String? folderId;
 
+  /// 仅本机保存（默认 false）：true = 内容不参与同步（本机保留，对端删副本）。
+  final bool localOnly;
+
   const Note({
     required this.id,
     required this.title,
@@ -48,9 +54,10 @@ class Note {
     this.tags = const [],
     this.origin,
     this.folderId,
+    this.localOnly = false,
   });
 
-  Note copyWith({String? origin}) => Note(
+  Note copyWith({String? origin, bool? localOnly}) => Note(
         id: id,
         title: title,
         content: content,
@@ -62,7 +69,31 @@ class Note {
         tags: tags,
         origin: origin ?? this.origin,
         folderId: folderId,
+        localOnly: localOnly ?? this.localOnly,
       );
+
+  /// 同步载荷：仅本机保存的笔记**只传标记、不传内容**。
+  ///
+  /// localOnly=true 时返回的副本不含标题/正文（空串）与标签，对端收到后
+  /// 据此删除自己的副本（合并逻辑见 [NoteRepository.mergeRemoteNote]）——
+  /// 内容不外传正是该标记的语义核心；标记本身必须传播，否则对端无从得知。
+  /// localOnly=false 时原样返回。
+  Note get syncPayload => localOnly
+      ? Note(
+          id: id,
+          title: '',
+          content: '',
+          createdAt: createdAt,
+          updatedAt: updatedAt,
+          version: version,
+          deletedAt: deletedAt,
+          isPinned: isPinned,
+          tags: const [],
+          origin: origin,
+          folderId: folderId,
+          localOnly: true,
+        )
+      : this;
 
   /// 从 drift 行数据转换（数据库读取 → 领域对象）。
   factory Note.fromRow(NoteRow row) {
@@ -78,6 +109,7 @@ class Note {
       tags: _decodeTags(row.tags),
       origin: row.origin,
       folderId: row.folderId,
+      localOnly: row.localOnly,
     );
   }
 
@@ -95,6 +127,7 @@ class Note {
       tags: jsonEncode(tags),
       origin: origin,
       folderId: folderId,
+      localOnly: localOnly,
     );
   }
 
@@ -110,6 +143,9 @@ class Note {
       'deletedAt': deletedAt,
       'isPinned': isPinned,
       'tags': tags,
+      // 仅本机保存：标记本身必须传播——对端靠它删除自己的副本（内容
+      // 由同步层在传输前过滤，不走这条载荷）。
+      'localOnly': localOnly,
       if (origin != null) 'origin': origin,
       if (folderId != null) 'folderId': folderId,
     };
@@ -132,6 +168,7 @@ class Note {
       tags: _decodeTagsJson(json['tags']),
       origin: (json['origin'] as String?) ?? '',
       folderId: json['folderId'] as String?,
+      localOnly: (json['localOnly'] as bool?) ?? false,
     );
   }
 

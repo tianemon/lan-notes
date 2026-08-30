@@ -35,8 +35,16 @@ final noteRepositoryProvider = Provider<NoteRepository>((ref) {
 /// 当前搜索关键字（空串 = 不过滤），列表页搜索框绑定。
 final searchQueryProvider = StateProvider<String>((ref) => '');
 
+/// 「未分类」筛选的哨兵值（[folderFilterProvider]）：只显示 folderId 为
+/// null 的笔记。
+///
+/// 用哨兵而非 null 是为了与「全部」（null = 不限文件夹）区分；文件夹 id
+/// 由 UUID 生成，不会与该值冲突。
+const String kUncategorizedFolderId = '__uncategorized__';
+
 /// 当前选中文件夹 id（task-32 文件夹归类）：null = 「全部」——显示全部
-/// 笔记（含未分类与各文件夹内）；非 null = 仅显示该文件夹内笔记。
+/// 笔记（含未分类与各文件夹内）；非 null = 仅显示该文件夹内笔记；
+/// [kUncategorizedFolderId] = 只显示未归类（folderId 为 null）的笔记。
 /// 默认 null（打开软件默认选中「全部」）。
 final folderFilterProvider = StateProvider<String?>((ref) => null);
 
@@ -175,6 +183,7 @@ final layoutModeProvider = StateProvider<int>((ref) {
 /// 与文件夹筛选自动过滤（并存，task-32）。
 ///
 /// - [folderFilterProvider] 为 null（「全部」）= 所有活跃笔记（含未分类）；
+/// - 选中 [kUncategorizedFolderId]（「未分类」）= 仅 folderId 为 null 的笔记；
 /// - 选中文件夹 = 仅该文件夹内笔记（folderId == 选中 id）；
 /// - 搜索在文件夹过滤结果内生效（与文件夹筛选并存）。
 ///
@@ -188,10 +197,10 @@ final notesStreamProvider = StreamProvider<List<Note>>((ref) {
     return repo.search(keyword);
   }
   // 文件夹筛选：在搜索流基础上按 folderId 过滤（个人量级 Dart 侧过滤
-  // 开销可忽略）。
-  return repo
-      .search(keyword)
-      .map((notes) => notes.where((n) => n.folderId == folderId).toList());
+  // 开销可忽略）。「未分类」= folderId 为 null 的笔记。
+  return repo.search(keyword).map((notes) => folderId == kUncategorizedFolderId
+      ? notes.where((n) => n.folderId == null).toList()
+      : notes.where((n) => n.folderId == folderId).toList());
 });
 
 /// 回收站流：drift 流式查询，按 deletedAt 倒序（回收站页数据源）。

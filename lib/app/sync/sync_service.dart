@@ -243,16 +243,15 @@ class SyncService {
     this.directConnectAttemptTimeout = const Duration(seconds: 4),
     this.heartbeatInterval = const Duration(seconds: 2),
     this.heartbeatTimeout = const Duration(seconds: 5),
-  })  : _repository = repository,
-        _identity = identity,
-        _folderRepository = folderRepository,
-        _discovery = discovery ?? DiscoveryService(),
-        _attachments = attachments ?? AttachmentsStore() {
+  }) : _repository = repository,
+       _identity = identity,
+       _folderRepository = folderRepository,
+       _discovery = discovery ?? DiscoveryService(),
+       _attachments = attachments ?? AttachmentsStore() {
     // 本地变更 → 推送：订阅贯穿服务生命周期，无对端时推送为空操作。
     _changesSub = repository.changes.listen(_onLocalChange);
     // 文件夹变更 → 推送（task-32 文件夹归类）：folder_upsert 消息。
-    _folderChangesSub =
-        folderRepository?.changes.listen(_onLocalFolderChange);
+    _folderChangesSub = folderRepository?.changes.listen(_onLocalFolderChange);
     // 发现 → 自动连接：扫描结果到达时，已配对且本机 deviceId 较小者自动
     // 发起连接（扫描按需触发：手动 [scanOnce] / 已配对断线退避扫描）。
     _discoverySub = _discovery.devices.listen((devices) {
@@ -612,8 +611,7 @@ class SyncService {
     await _loadAddressCache(); // 地址缓存（v4 直连优先，跨重启有效）
     // 端口冲突自动顺延：从目标端口起最多尝试 kPortFallbackAttempts 个，
     // 全部占用才认定无法开启（SocketException 抛给 UI 提示）。
-    final basePort =
-        port ?? _identity.persistedSyncPort ?? kDefaultSyncPort;
+    final basePort = port ?? _identity.persistedSyncPort ?? kDefaultSyncPort;
     Object? lastError;
     var startedPort = -1;
     for (var attempt = 0; attempt < kPortFallbackAttempts; attempt++) {
@@ -651,15 +649,13 @@ class SyncService {
   int? _lastPortFallbackBase;
 
   /// 最近一次 enable 是否发生了端口顺延（UI 提示用）。
-  bool get lastPortFallback =>
-      _lastPortFallbackBase != null;
+  bool get lastPortFallback => _lastPortFallbackBase != null;
 
   /// 最近一次 enable 的原目标端口（发生顺延时非 null）。
   int? get lastPortFallbackBase => _lastPortFallbackBase;
 
   /// 当前持久化的同步端口（未持久化时为 [kDefaultSyncPort]，UI 输入框初始值）。
-  int get configuredPort =>
-      _identity.persistedSyncPort ?? kDefaultSyncPort;
+  int get configuredPort => _identity.persistedSyncPort ?? kDefaultSyncPort;
 
   /// 用户手动关闭同步（task-17）：与 [disable] 相同，但记录「用户手动
   /// 关闭」标记——回前台（resumed）时不自动重新开启（尊重用户操作）。
@@ -830,7 +826,10 @@ class SyncService {
   /// 发起）。等待终端状态（connected/disconnected，超时 [directConnectAttemptTimeout]）。
   ///
   /// 返回是否已连接；无缓存/参数非法返回 false（调用方转入退避扫描）。
-  Future<bool> _connectFromCacheOnce(String peerId, {bool manual = false}) async {
+  Future<bool> _connectFromCacheOnce(
+    String peerId, {
+    bool manual = false,
+  }) async {
     final cached = _addressCache[peerId];
     if (cached == null) return false;
     var sessionId = _sessionByPeerId[peerId];
@@ -843,15 +842,16 @@ class SyncService {
           .map((t) => t.deviceName)
           .firstOrNull;
       final client = SyncClient();
-      final newSession = _PeerSession(
-        id: 'out-${++_outgoingSeq}',
-        isInitiator: true,
-        link: _OutgoingLink(client),
-        service: this,
-      )
-        ..peerDeviceId = peerId
-        ..peerName = _safePeerName(name, fallback: peerId)
-        ..manualConnect = manual;
+      final newSession =
+          _PeerSession(
+              id: 'out-${++_outgoingSeq}',
+              isInitiator: true,
+              link: _OutgoingLink(client),
+              service: this,
+            )
+            ..peerDeviceId = peerId
+            ..peerName = _safePeerName(name, fallback: peerId)
+            ..manualConnect = manual;
       _sessions[newSession.id] = newSession;
       _sessionByPeerId[peerId] = newSession.id;
       newSession.attach();
@@ -1077,7 +1077,10 @@ class SyncService {
   ///
   /// 以会话登记的 peerDeviceId 为准（消息载荷可伪造，防未配对设备冒充
   /// 他人触发删除）。
-  Future<void> _onUnpairReceived(_PeerSession session, String claimedPeerId) async {
+  Future<void> _onUnpairReceived(
+    _PeerSession session,
+    String claimedPeerId,
+  ) async {
     final targetId = session.peerDeviceId ?? claimedPeerId;
     if (targetId.isEmpty || targetId == deviceId) return;
     await _identity.removeTrusted(targetId);
@@ -1170,14 +1173,15 @@ class SyncService {
       return;
     }
     final client = SyncClient();
-    final session = _PeerSession(
-      id: 'out-${++_outgoingSeq}',
-      isInitiator: true,
-      link: _OutgoingLink(client),
-      service: this,
-    )
-      ..peerDeviceId = peerId
-      ..peerName = _safePeerName(device.deviceName, fallback: peerId);
+    final session =
+        _PeerSession(
+            id: 'out-${++_outgoingSeq}',
+            isInitiator: true,
+            link: _OutgoingLink(client),
+            service: this,
+          )
+          ..peerDeviceId = peerId
+          ..peerName = _safePeerName(device.deviceName, fallback: peerId);
     _sessions[session.id] = session;
     _sessionByPeerId[peerId] = session.id;
     session.attach();
@@ -1245,7 +1249,9 @@ class SyncService {
       unawaited(_connectOutgoing(device));
     }
     // 清理已消失的冲突设备（下次再出现可重新上报）。
-    _reportedDiscoveryConflicts.removeWhere((id) => !discoveredIds.contains(id));
+    _reportedDiscoveryConflicts.removeWhere(
+      (id) => !discoveredIds.contains(id),
+    );
   }
 
   /// 登记会话的对端身份（连接去重：每对设备仅保留一条会话）。
@@ -1306,7 +1312,9 @@ class SyncService {
   /// 在线方不主动重连（架构决策），等待对端重新上线后主动连接。
   void _onHeartbeatTimeout(_PeerSession session) {
     // ignore: avoid_print
-    print('[心跳监控] onHeartbeatTimeout 关闭会话 peer=${session.peerDeviceId ?? 'null'}');
+    print(
+      '[心跳监控] onHeartbeatTimeout 关闭会话 peer=${session.peerDeviceId ?? 'null'}',
+    );
     // 直接 close()（勿先 markClosed——那会让 close() 因 _closed 直接 return，
     // link 不关闭、消息流不 onDone，会话卡在连接表）。
     unawaited(session.close());
@@ -1319,7 +1327,9 @@ class SyncService {
   void _onSessionLinkClosed(_PeerSession session) {
     if (_sessions.remove(session.id) == null) return;
     // ignore: avoid_print
-    print('[心跳监控] 会话移除 peer=${session.peerDeviceId ?? 'null'} isConnected=$isConnected 剩余会话=${_sessions.length}');
+    print(
+      '[心跳监控] 会话移除 peer=${session.peerDeviceId ?? 'null'} isConnected=$isConnected 剩余会话=${_sessions.length}',
+    );
     _clearFileTransfersForSession(session.id); // 附件传输随会话断开丢弃（task-30）
     _unregisterPeerId(session.peerDeviceId, session);
     _clearActivePairingSession(session);
@@ -1412,15 +1422,9 @@ class SyncService {
     final trusted = await _identity.getTrustedDevices();
     _trustedCache = trusted;
     _trustedIds = trusted.map((t) => t.deviceId).toSet();
-    _autoConnectByPeerId = {
-      for (final t in trusted) t.deviceId: t.autoConnect,
-    };
-    _syncToByPeerId = {
-      for (final t in trusted) t.deviceId: t.syncToPeer,
-    };
-    _syncFromByPeerId = {
-      for (final t in trusted) t.deviceId: t.syncFromPeer,
-    };
+    _autoConnectByPeerId = {for (final t in trusted) t.deviceId: t.autoConnect};
+    _syncToByPeerId = {for (final t in trusted) t.deviceId: t.syncToPeer};
+    _syncFromByPeerId = {for (final t in trusted) t.deviceId: t.syncFromPeer};
   }
 
   /// 上报设备 ID 冲突（握手/手动连接每次上报；发现列表按 deviceId 去重）。
@@ -1433,11 +1437,13 @@ class SyncService {
       return; // 同一冲突设备持续在列表：只报一次。
     }
     if (!_conflictController.isClosed) {
-      _conflictController.add(DeviceIdConflictEvent(
-        peerDeviceId: peerId,
-        peerDeviceName: peerName,
-        source: source,
-      ));
+      _conflictController.add(
+        DeviceIdConflictEvent(
+          peerDeviceId: peerId,
+          peerDeviceName: peerName,
+          source: source,
+        ),
+      );
     }
   }
 
@@ -1463,42 +1469,48 @@ class SyncService {
           .where((t) => t.deviceId == peerId)
           .map((t) => t.deviceName)
           .firstOrNull;
-      peers.add(PeerDevice(
-        deviceId: peerId,
-        deviceName: _peerDisplayName(
-          peerId,
-          trustedName: trustedName,
-          sessionName: session.peerName,
+      peers.add(
+        PeerDevice(
+          deviceId: peerId,
+          deviceName: _peerDisplayName(
+            peerId,
+            trustedName: trustedName,
+            sessionName: session.peerName,
+          ),
+          isTrusted: _trustedIds.contains(peerId),
+          status: _sessionStatus(session),
+          autoConnect: _autoConnectByPeerId[peerId] ?? true,
+          manuallyDisconnected: _manuallyDisconnected.contains(peerId),
+          syncToPeer: _syncToByPeerId[peerId] ?? true,
+          syncFromPeer: _syncFromByPeerId[peerId] ?? true,
+          // 最近已知地址（UI 小字展示 IP:端口）。
+          address: _addressCache[peerId]?.displayName,
         ),
-        isTrusted: _trustedIds.contains(peerId),
-        status: _sessionStatus(session),
-        autoConnect: _autoConnectByPeerId[peerId] ?? true,
-        manuallyDisconnected: _manuallyDisconnected.contains(peerId),
-        syncToPeer: _syncToByPeerId[peerId] ?? true,
-        syncFromPeer: _syncFromByPeerId[peerId] ?? true,
-        // 最近已知地址（UI 小字展示 IP:端口）。
-        address: _addressCache[peerId]?.displayName,
-      ));
+      );
     }
     for (final trusted in _trustedCache) {
       if (trusted.deviceId == deviceId) continue; // 自身永不出现
       if (seen.contains(trusted.deviceId)) continue;
       seen.add(trusted.deviceId);
-      peers.add(PeerDevice(
-        deviceId: trusted.deviceId,
-        deviceName: _peerDisplayName(
-          trusted.deviceId,
-          trustedName: trusted.deviceName,
+      peers.add(
+        PeerDevice(
+          deviceId: trusted.deviceId,
+          deviceName: _peerDisplayName(
+            trusted.deviceId,
+            trustedName: trusted.deviceName,
+          ),
+          isTrusted: true,
+          status: PeerStatus.disconnected,
+          autoConnect: trusted.autoConnect,
+          manuallyDisconnected: _manuallyDisconnected.contains(
+            trusted.deviceId,
+          ),
+          syncToPeer: trusted.syncToPeer,
+          syncFromPeer: trusted.syncFromPeer,
+          // 最近已知地址（UI 小字展示 IP:端口）。
+          address: _addressCache[trusted.deviceId]?.displayName,
         ),
-        isTrusted: true,
-        status: PeerStatus.disconnected,
-        autoConnect: trusted.autoConnect,
-        manuallyDisconnected: _manuallyDisconnected.contains(trusted.deviceId),
-        syncToPeer: trusted.syncToPeer,
-        syncFromPeer: trusted.syncFromPeer,
-        // 最近已知地址（UI 小字展示 IP:端口）。
-        address: _addressCache[trusted.deviceId]?.displayName,
-      ));
+      );
     }
     // 稳定排序：已配对设备按配对时间倒序（最新配对的在最上面）。
     //
@@ -1557,8 +1569,8 @@ class SyncService {
     final link = session.link;
     if (link is _OutgoingLink) {
       return switch (link.client.state) {
-        SyncConnectionState.connecting || SyncConnectionState.connected =>
-          PeerStatus.connecting,
+        SyncConnectionState.connecting ||
+        SyncConnectionState.connected => PeerStatus.connecting,
         SyncConnectionState.disconnected => PeerStatus.disconnected,
       };
     }
@@ -1575,8 +1587,7 @@ class SyncService {
     final origin = _originOf(message);
     for (final session in _sessions.values) {
       if (session != except && session.ready && _canPushTo(session)) {
-        if (origin != null &&
-            !_originAllowsTo(origin, session.peerDeviceId)) {
+        if (origin != null && !_originAllowsTo(origin, session.peerDeviceId)) {
           continue; // origin 设备对该目标关「向」：不转发
         }
         session.sendMessage(message);
@@ -1602,10 +1613,14 @@ class SyncService {
   /// 向所有已就绪对端推送（本地变更 → note_upsert / note_delete）。
   void _pushToAllPeers(Map<String, dynamic> message) {
     // ignore: avoid_print
-    print('[增量推送] type=${message['type']} origin=${message['origin']} 本机会话数=${_sessions.length}');
+    print(
+      '[增量推送] type=${message['type']} origin=${message['origin']} 本机会话数=${_sessions.length}',
+    );
     for (final session in _sessions.values) {
       // ignore: avoid_print
-      print('[增量推送]   对端=${session.peerDeviceId} ready=${session.ready} 可推=${_canPushTo(session)}');
+      print(
+        '[增量推送]   对端=${session.peerDeviceId} ready=${session.ready} 可推=${_canPushTo(session)}',
+      );
       if (session.ready && _canPushTo(session)) {
         session.sendMessage(message);
       }
@@ -1644,12 +1659,14 @@ class SyncService {
         version: final version,
         deletedAt: final deletedAt,
       ):
-        _pushToAllPeers(NoteDeleteMessage(
-          id: id,
-          version: version,
-          deletedAt: deletedAt,
-          origin: deviceId,
-        ).toJson());
+        _pushToAllPeers(
+          NoteDeleteMessage(
+            id: id,
+            version: version,
+            deletedAt: deletedAt,
+            origin: deviceId,
+          ).toJson(),
+        );
     }
   }
 
@@ -1693,8 +1710,9 @@ class SyncService {
   ///
   /// 正则直接匹配 delta JSON 字符串中的 quill image embed 值
   /// （`{"image":"attachments/<hash>.jpg"}`）与纯文本引用；同 hash 去重。
-  static final RegExp _attachmentRef =
-      RegExp(r'attachments/([a-f0-9]{16})\.([a-z0-9]+)');
+  static final RegExp _attachmentRef = RegExp(
+    r'attachments/([a-f0-9]{16})\.([a-z0-9]+)',
+  );
 
   /// 提取 delta content 中的附件引用 (hash, ext) 列表（按 hash 去重，保持出现顺序）。
   static List<(String, String)> extractAttachmentRefs(String content) {
@@ -1732,8 +1750,11 @@ class SyncService {
     if (_fileTransfers.containsKey(hash)) return; // 已在请求/传输中：去重
     if (_fileSizeRejected.contains(hash)) return; // 超限已拒绝：不重试
     if (await _attachments.exists(hash)) return; // 本地已有：无需请求
-    final state =
-        _FileTransferState(fileId: hash, sourceSessionId: source.id, ext: ext);
+    final state = _FileTransferState(
+      fileId: hash,
+      sourceSessionId: source.id,
+      ext: ext,
+    );
     _fileTransfers[hash] = state;
     // 请求超时兜底：对端无此文件 / 大小不符 / 被忽略 → 移除，可重试。
     state.timer = Timer(fileRequestTimeout, () {
@@ -1778,12 +1799,14 @@ class SyncService {
         if (!source.isAlive) return; // 会话已断开：中止传输
         final start = i * chunkSize;
         final end = math.min(start + chunkSize, bytes.length);
-        source.sendMessage(FileChunkMessage(
-          fileId: fileId,
-          chunkIndex: i,
-          totalChunks: totalChunks,
-          data: base64Encode(bytes.sublist(start, end)),
-        ).toJson());
+        source.sendMessage(
+          FileChunkMessage(
+            fileId: fileId,
+            chunkIndex: i,
+            totalChunks: totalChunks,
+            data: base64Encode(bytes.sublist(start, end)),
+          ).toJson(),
+        );
         if (fileChunkSendDelay > Duration.zero) {
           await Future<void>.delayed(fileChunkSendDelay);
         }
@@ -1918,7 +1941,10 @@ class SyncService {
   /// 作为 HMAC 密钥（32 字节随机数编码为 64 个 ASCII 字符，任何字节序列
   /// 均可作密钥，等效熵不变）。
   String hmacHex(String secret, String message) {
-    final hmac = Hmac(sha256, utf8.encode(secret)).convert(utf8.encode(message));
+    final hmac = Hmac(
+      sha256,
+      utf8.encode(secret),
+    ).convert(utf8.encode(message));
     return hmac.toString(); // Digest.toString() 即 hex
   }
 
@@ -2109,8 +2135,10 @@ class _PeerSession {
 
   /// 会话是否已就绪（双方互信）：就绪后才同步数据。
   bool get ready =>
-      peerDeviceId != null && peerDeviceId != service.deviceId &&
-      _peerTrusted && _peerTrustsMe;
+      peerDeviceId != null &&
+      peerDeviceId != service.deviceId &&
+      _peerTrusted &&
+      _peerTrustsMe;
 
   /// 会话是否存活（供连接去重判断）。
   bool get isAlive => link.isAlive;
@@ -2188,7 +2216,9 @@ class _PeerSession {
   void _startHeartbeat() {
     if (_heartbeat != null) return;
     // ignore: avoid_print
-    print('[心跳监控] 心跳启动 peer=${peerDeviceId ?? 'null'} 间隔=${service.heartbeatInterval.inSeconds}s 超时=${service.heartbeatTimeout.inSeconds}s');
+    print(
+      '[心跳监控] 心跳启动 peer=${peerDeviceId ?? 'null'} 间隔=${service.heartbeatInterval.inSeconds}s 超时=${service.heartbeatTimeout.inSeconds}s',
+    );
     _heartbeat = Timer.periodic(service.heartbeatInterval, (_) {
       try {
         if (_closed) {
@@ -2291,25 +2321,28 @@ class _PeerSession {
     // 出站会话创建时即已知对端 deviceId（来自 UDP 广播发现），据此查询；
     // 未知时填 false（兼容旧对端，接收方仍以自己信任列表为准）。
     final peerId = peerDeviceId;
-    final trusted =
-        peerId != null && await service._identity.isTrusted(peerId);
-    _send(HelloMessage(
-      deviceId: service.deviceId,
-      deviceName: service._safeDeviceName,
-      trusted: trusted,
-      protocolVersion: kProtocolVersion,
-      port: service._server.port, // 对端入站缓存本机地址用（task-32）
-      manual: manualConnect, // 手动连接标志（对端据此不拒绝，task-32）
-      syncTo: service._syncToByPeerId, // 本机向配置（对端过滤转发/接收用）
-    ).toJson());
+    final trusted = peerId != null && await service._identity.isTrusted(peerId);
+    _send(
+      HelloMessage(
+        deviceId: service.deviceId,
+        deviceName: service._safeDeviceName,
+        trusted: trusted,
+        protocolVersion: kProtocolVersion,
+        port: service._server.port, // 对端入站缓存本机地址用（task-32）
+        manual: manualConnect, // 手动连接标志（对端据此不拒绝，task-32）
+        syncTo: service._syncToByPeerId, // 本机向配置（对端过滤转发/接收用）
+      ).toJson(),
+    );
   }
 
   void _sendWelcome({required bool trusted}) {
-    _send(WelcomeMessage(
-      hostName: service._safeDeviceName,
-      deviceId: service.deviceId,
-      trusted: trusted,
-    ).toJson());
+    _send(
+      WelcomeMessage(
+        hostName: service._safeDeviceName,
+        deviceId: service.deviceId,
+        trusted: trusted,
+      ).toJson(),
+    );
   }
 
   void _sendSyncRequest() {
@@ -2334,18 +2367,17 @@ class _PeerSession {
     if (peerId == null) return;
     final secret = service.generateSecret();
     // 展示名多来源兜底（task-32）：对端 hello 上报空名时从 UDP 通告恢复。
-    final displayName = service._peerDisplayName(
-      peerId,
-      sessionName: peerName,
-    );
+    final displayName = service._peerDisplayName(peerId, sessionName: peerName);
     await service._identity.addTrusted(peerId, displayName, secret: secret);
     await service._refreshTrustedCache();
     _peerTrusted = true; // 用户同意即本机信任对端
-    _send(PairingAcceptMessage(
-      deviceId: service.deviceId,
-      deviceName: service._safeDeviceName,
-      secret: secret,
-    ).toJson());
+    _send(
+      PairingAcceptMessage(
+        deviceId: service.deviceId,
+        deviceName: service._safeDeviceName,
+        secret: secret,
+      ).toJson(),
+    );
     // 等待请求方确认回发 pairing_accept（同一密钥）后进入就绪。
   }
 
@@ -2360,10 +2392,12 @@ class _PeerSession {
   /// 本机作为**请求方**：向对端发送配对请求（等待同意）。
   void _enterRequester() {
     _pairingRole = _PairingRole.requester;
-    _send(PairingRequestMessage(
-      deviceId: service.deviceId,
-      deviceName: service._safeDeviceName,
-    ).toJson());
+    _send(
+      PairingRequestMessage(
+        deviceId: service.deviceId,
+        deviceName: service._safeDeviceName,
+      ).toJson(),
+    );
   }
 
   /// 本机作为**接受方**进入配对队列（FIFO）：UI 收到 pairing_request 弹窗
@@ -2373,11 +2407,13 @@ class _PeerSession {
     _pairingRole = _PairingRole.consenter;
     if (!service._pairingQueue.contains(this)) {
       service._pairingQueue.add(this);
-      service._pairingController.add(PairingRequestedEvent(
-        deviceId: peerId,
-        deviceName: service._safePeerName(peerName, fallback: peerId),
-        connectionId: id,
-      ));
+      service._pairingController.add(
+        PairingRequestedEvent(
+          deviceId: peerId,
+          deviceName: service._safePeerName(peerName, fallback: peerId),
+          connectionId: id,
+        ),
+      );
     }
   }
 
@@ -2391,11 +2427,13 @@ class _PeerSession {
   void _leaveQueueCancelled(String reason) {
     _pairingRole = _PairingRole.none;
     service._pairingQueue.remove(this);
-    service._pairingController.add(PairingCancelledEvent(
-      deviceId: peerDeviceId ?? '',
-      connectionId: id,
-      reason: reason,
-    ));
+    service._pairingController.add(
+      PairingCancelledEvent(
+        deviceId: peerDeviceId ?? '',
+        connectionId: id,
+        reason: reason,
+      ),
+    );
   }
 
   // ===== 协议状态机（统一处理入站/出站消息）=====
@@ -2408,10 +2446,13 @@ class _PeerSession {
     // （note_upsert/note_delete/sync_data/sync_request）——连接/心跳/配对
     // 消息不受影响（连接永远维持，同步方向各自控制）。
     final peerId = peerDeviceId;
-    if (peerId != null && (service._syncFromByPeerId[peerId] ?? true) == false) {
+    if (peerId != null &&
+        (service._syncFromByPeerId[peerId] ?? true) == false) {
       switch (message) {
-        case NoteUpsertMessage() || NoteDeleteMessage() ||
-            SyncDataMessage() || SyncRequestMessage():
+        case NoteUpsertMessage() ||
+            NoteDeleteMessage() ||
+            SyncDataMessage() ||
+            SyncRequestMessage():
           return; // 同步数据丢弃
         default:
           break;
@@ -2481,7 +2522,10 @@ class _PeerSession {
         origin: final deleteOrigin,
       ):
         await _onNoteDelete(id, version, deletedAt, deleteOrigin);
-      case FolderUpsertMessage(folder: final folder, origin: final folderOrigin):
+      case FolderUpsertMessage(
+        folder: final folder,
+        origin: final folderOrigin,
+      ):
         await _onFolderUpsert(folder, folderOrigin);
       case DevicesUpdateMessage():
         // P2P：各端设备列表以本机连接表为准（devicesUpdates 由本机
@@ -2661,8 +2705,9 @@ class _PeerSession {
     if (!_setPeerIdentity(peerId, peerName)) return;
     // task-32：pairing_request 名称为空时回退会话已登记的 hello 名称
     // （请求方握手 hello 通常带名；避免弹窗显示 deviceId）。
-    final displayName =
-        peerName.trim().isNotEmpty ? peerName : (this.peerName ?? peerId);
+    final displayName = peerName.trim().isNotEmpty
+        ? peerName
+        : (this.peerName ?? peerId);
     _enterConsenter(peerId, displayName);
   }
 
@@ -2673,10 +2718,12 @@ class _PeerSession {
     if (peerId == null) return;
     final secret = await service._identity.getTrustedSecret(peerId);
     if (secret == null || secret.isEmpty) return; // 无密钥：无法应答（对端将按未配对处理）
-    _send(ChallengeResponseMessage(
-      nonce: nonce,
-      hmac: service.hmacHex(secret, nonce),
-    ).toJson());
+    _send(
+      ChallengeResponseMessage(
+        nonce: nonce,
+        hmac: service.hmacHex(secret, nonce),
+      ).toJson(),
+    );
   }
 
   /// 收到 challenge_response（本机验证对端）：比对 HMAC，匹配才 welcome
@@ -2752,15 +2799,19 @@ class _PeerSession {
         await service._refreshTrustedCache();
         _peerTrusted = true;
         _peerTrustsMe = true; // accept 即对端同意并信任本机
-        service._pairingController.add(PairingSucceededEvent(
-          deviceId: trustedPeerId,
-          deviceName: trustedPeerName,
-        ));
-        _send(PairingAcceptMessage(
-          deviceId: service.deviceId,
-          deviceName: service._safeDeviceName,
-          secret: secret, // 确认回发同一密钥（共享密钥语义）
-        ).toJson());
+        service._pairingController.add(
+          PairingSucceededEvent(
+            deviceId: trustedPeerId,
+            deviceName: trustedPeerName,
+          ),
+        );
+        _send(
+          PairingAcceptMessage(
+            deviceId: service.deviceId,
+            deviceName: service._safeDeviceName,
+            secret: secret, // 确认回发同一密钥（共享密钥语义）
+          ).toJson(),
+        );
         _onReady();
         service._emitDevices();
       case _PairingRole.consenter:
@@ -2769,10 +2820,12 @@ class _PeerSession {
         await service._refreshTrustedCache();
         _peerTrustsMe = true; // 确认回发 = 请求方已接受配对
         _leaveQueueOnSuccess();
-        service._pairingController.add(PairingSucceededEvent(
-          deviceId: trustedPeerId,
-          deviceName: trustedPeerName,
-        ));
+        service._pairingController.add(
+          PairingSucceededEvent(
+            deviceId: trustedPeerId,
+            deviceName: trustedPeerName,
+          ),
+        );
         _onReady();
         service._emitDevices();
       case _PairingRole.none:
@@ -2782,11 +2835,13 @@ class _PeerSession {
 
   Future<void> _onPairingFail(String reason) async {
     // 本机作为请求方被拒绝（对端为接受方）：提示原因并断开。
-    service._pairingController.add(PairingFailedEvent(
-      deviceId: peerDeviceId ?? '',
-      connectionId: id,
-      reason: reason,
-    ));
+    service._pairingController.add(
+      PairingFailedEvent(
+        deviceId: peerDeviceId ?? '',
+        connectionId: id,
+        reason: reason,
+      ),
+    );
     _pairingRole = _PairingRole.none;
     unawaited(service._closeSession(this));
   }
@@ -2801,8 +2856,7 @@ class _PeerSession {
     if (!ready) return; // 本机未信任对端（未配对）：不响应（F14）。
     // task-32：向对端同步开关关闭 → 不响应全量推送（方向由开关控制）。
     final peerId = peerDeviceId;
-    if (peerId != null &&
-        (service._syncToByPeerId[peerId] ?? true) == false) {
+    if (peerId != null && (service._syncToByPeerId[peerId] ?? true) == false) {
       return;
     }
     await _sendFullSnapshot();
@@ -2821,14 +2875,21 @@ class _PeerSession {
         .toList();
     final tombstones = await service._repository.getAllTombstones();
     final folders = await service._folderRepository?.getAll() ?? const [];
-    _send(SyncDataMessage(
-      notes: notes,
-      tombstones: tombstones
-          .map((t) =>
-              Tombstone(id: t.id, version: t.version, deletedAt: t.deletedAt))
-          .toList(),
-      folders: folders,
-    ).toJson());
+    _send(
+      SyncDataMessage(
+        notes: notes,
+        tombstones: tombstones
+            .map(
+              (t) => Tombstone(
+                id: t.id,
+                version: t.version,
+                deletedAt: t.deletedAt,
+              ),
+            )
+            .toList(),
+        folders: folders,
+      ).toJson(),
+    );
   }
 
   Future<void> _onSyncData(
@@ -2899,29 +2960,35 @@ class _PeerSession {
       // task-32 v5：回推 origin = 数据作者（note.origin；转发来的数据
       // origin 不是本机，必须保留——否则对端按发送方过滤会漏）。
       // 仅本机保存：回推同样只带标记（对端据此删除自己的副本）。
-      _send(NoteUpsertMessage(
-        note: note.syncPayload,
-        origin: note.origin ?? service.deviceId,
-      ).toJson());
+      _send(
+        NoteUpsertMessage(
+          note: note.syncPayload,
+          origin: note.origin ?? service.deviceId,
+        ).toJson(),
+      );
     }
     final localTombstones = await service._repository.getAllTombstones();
     for (final tombstone in localTombstones) {
-      _send(NoteDeleteMessage(
-        id: tombstone.id,
-        version: tombstone.version,
-        deletedAt: tombstone.deletedAt,
-        origin: service.deviceId,
-      ).toJson());
+      _send(
+        NoteDeleteMessage(
+          id: tombstone.id,
+          version: tombstone.version,
+          deletedAt: tombstone.deletedAt,
+          origin: service.deviceId,
+        ).toJson(),
+      );
     }
     // 双向对齐（task-32 v6）：本机全部文件夹回推对端（含软删除条目，
     // 对端 LWW 合并维持各端文件夹状态一致）。
     if (folderRepo != null) {
       final localFolders = await folderRepo.getAll();
       for (final folder in localFolders) {
-        _send(FolderUpsertMessage(
-          folder: folder,
-          origin: folder.origin ?? service.deviceId,
-        ).toJson());
+        _send(
+          FolderUpsertMessage(
+            folder: folder,
+            origin: folder.origin ?? service.deviceId,
+          ).toJson(),
+        );
       }
     }
     service._markSyncCompleted();
@@ -2964,7 +3031,9 @@ class _PeerSession {
         ? note.origin!
         : (origin.isNotEmpty ? origin : peerDeviceId);
     // ignore: avoid_print
-    print('[增量接收] note=${note.id} origin=$authorId 来源会话=$peerDeviceId 从$authorId开关=${service._syncFromByPeerId[authorId] ?? true}');
+    print(
+      '[增量接收] note=${note.id} origin=$authorId 来源会话=$peerDeviceId 从$authorId开关=${service._syncFromByPeerId[authorId] ?? true}',
+    );
     // 仅本机保存的标记通知不过滤开关（同全量快照：它是删副本的指令）。
     if (!note.localOnly &&
         authorId != null &&
@@ -3007,7 +3076,8 @@ class _PeerSession {
       return;
     }
     // v5：origin 设备对本机的「向」开关（同 upsert）。
-    if (authorId != null && !service._originAllowsTo(authorId, service.deviceId)) {
+    if (authorId != null &&
+        !service._originAllowsTo(authorId, service.deviceId)) {
       return;
     }
     final changed = await service._repository.mergeRemoteDelete(

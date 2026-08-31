@@ -15,6 +15,7 @@ import 'package:go_router/go_router.dart';
 import '../data/note.dart';
 import '../repository/attachments.dart';
 import '../repository/providers.dart';
+import 'widgets/editor_search_panel.dart';
 import 'widgets/glass_style.dart';
 import '../theme.dart';
 
@@ -54,13 +55,20 @@ class EditorPage extends ConsumerStatefulWidget {
   ConsumerState<EditorPage> createState() => _EditorPageState();
 }
 
-class _EditorPageState extends ConsumerState<EditorPage> {
+/// 搜索高亮每次跳转都新建一个 AnimationController（旧的高亮先 dispose），
+/// 故用 TickerProviderStateMixin——Single 版本在整个 State 生命周期只允许
+/// 创建一个 ticker，第二次跳转必抛断言（表现：高亮只生效一次）。
+class _EditorPageState extends ConsumerState<EditorPage>
+    with TickerProviderStateMixin {
   /// 内容变更到触发保存的防抖时长。
   static const Duration _debounceDuration = Duration(seconds: 1);
 
   /// 持续输入强制保存的最大间隔（idle 防抖之外的上限）：
   /// 防止一直输入导致防抖反复重置、长期不落盘。
   static const Duration _maxSaveInterval = Duration(seconds: 5);
+
+  /// 搜索关键词高亮总时长：保持 2s + 渐隐 0.8s（用户确认交互）。
+  static const Duration _highlightDuration = Duration(milliseconds: 2800);
 
   final TextEditingController _titleController = TextEditingController();
   final FocusNode _titleFocusNode = FocusNode();
@@ -79,7 +87,6 @@ class _EditorPageState extends ConsumerState<EditorPage> {
 
   /// 正文文档变化订阅（_attachDocListener 管理，替换文档后重建）。
   StreamSubscription<DocChange>? _docSub;
-
 
   /// 当前笔记标签（编辑态从笔记流加载，增删后经 setTags 持久化同步）。
   final List<String> _tags = [];
@@ -108,6 +115,15 @@ class _EditorPageState extends ConsumerState<EditorPage> {
 
   /// 编辑器 GlobalKey（保存菜单 clamp 在编辑区内用）。
   final GlobalKey _editorKey = GlobalKey();
+
+  /// 编辑器状态 key（QuillEditorConfig.editorKey）：笔记内搜索的滚动
+  /// 定位与关键词高亮要用 renderEditor 的几何信息（官方推荐用法：
+  /// editorKey.currentState?.renderEditor.getLocalRectForCaret）。
+  final GlobalKey<EditorState> _quillEditorKey = GlobalKey<EditorState>();
+
+  /// 正文关键词高亮浮层（搜索跳转后显示，2s 后渐隐移除）。
+  OverlayEntry? _searchHighlightEntry;
+  AnimationController? _searchHighlightAnim;
 
   /// 图片 GlobalKey → 文件映射（右键命中判断用）。
   /// 每次判断实时取 key 的当前 RenderBox 矩形——滚动后依然准确。
@@ -155,8 +171,7 @@ class _EditorPageState extends ConsumerState<EditorPage> {
         var left = position.dx - menuSize.width / 2;
         var top = position.dy + 6;
         if (editorRect != null) {
-          left = left.clamp(
-              editorRect.left, editorRect.right - menuSize.width);
+          left = left.clamp(editorRect.left, editorRect.right - menuSize.width);
           top = top.clamp(editorRect.top, editorRect.bottom - menuSize.height);
         }
         return Stack(
@@ -188,8 +203,7 @@ class _EditorPageState extends ConsumerState<EditorPage> {
                     _saveToLocal(context, file);
                   },
                   child: const Padding(
-                    padding:
-                        EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                    padding: EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
@@ -218,9 +232,10 @@ class _EditorPageState extends ConsumerState<EditorPage> {
     return null;
   }
 
-  /// 编辑器滚动 → 保存菜单跟随图片重新定位。
+  /// 编辑器滚动 → 保存菜单跟随图片重新定位；关键词高亮跟随滚动。
   void _onEditorScroll() {
     _imageMenuEntry?.markNeedsBuild();
+    _searchHighlightEntry?.markNeedsBuild();
   }
 
   /// 图片渲染后注册 GlobalKey（右键命中判断用）。
@@ -326,7 +341,6 @@ class _EditorPageState extends ConsumerState<EditorPage> {
   /// 不粘连碍眼；点击展开完整工具栏）。
   bool _toolbarCollapsed = true;
 
-
   @override
   void initState() {
     super.initState();
@@ -344,7 +358,12 @@ class _EditorPageState extends ConsumerState<EditorPage> {
   /// 新文档的流（_applyRemoteNote 中调用）。
   void _attachDocListener() {
     _docSub?.cancel();
-    _docSub = _contentController.changes.listen((_) => _onChanged());
+    _docSub = _contentController.changes.listen((_) {
+      // 文档任何变化（输入/撤销/远端覆盖）都会让搜索高亮的 offset 失效：
+      // 立即移除高亮（比等它自然渐隐更正确）。
+      _removeSearchHighlight();
+      _onChanged();
+    });
   }
 
   @override
@@ -361,6 +380,7 @@ class _EditorPageState extends ConsumerState<EditorPage> {
       ..removeListener(_onEditorScroll)
       ..dispose();
     _imageMenuEntry?.remove();
+    _removeSearchHighlight();
     super.dispose();
   }
 
@@ -411,8 +431,10 @@ class _EditorPageState extends ConsumerState<EditorPage> {
     // 不成立，若不在此拦截会误走 _applyRemoteNote 强覆盖（输入被替换）。
     // 只对齐快照，绝不触碰输入框；新输入由后续防抖保存正常落库。
     if (_lastSavedVersion != null && note.version == _lastSavedVersion) {
-      debugPrint('[editor] 保存回推 echo：version=${note.version}，'
-          '跳过覆盖（输入保持不变）');
+      debugPrint(
+        '[editor] 保存回推 echo：version=${note.version}，'
+        '跳过覆盖（输入保持不变）',
+      );
       _savedTitle = note.title;
       _savedContent = note.content;
       _syncTags(note.tags);
@@ -421,8 +443,7 @@ class _EditorPageState extends ConsumerState<EditorPage> {
       }
       return;
     }
-    if (note.title == _titleController.text &&
-        note.content == _contentDelta) {
+    if (note.title == _titleController.text && note.content == _contentDelta) {
       // 内容与当前输入一致（本地保存回推）：不更新 controller，避免
       // 光标跳动/输入打断；仅对齐已保存快照（版本/时间戳可能变化）。
       _savedTitle = note.title;
@@ -476,7 +497,8 @@ class _EditorPageState extends ConsumerState<EditorPage> {
     _dirty = false;
     _setStatus(_SaveStatus.saved);
     // 刷新字数统计缓存（首次填充 + 远端覆盖均走此路径）。
-    _wordCountCache = _titleController.text.length +
+    _wordCountCache =
+        _titleController.text.length +
         _contentController.document.toPlainText().length;
     _syncTags(note.tags);
     if (!_initialized) {
@@ -504,7 +526,9 @@ class _EditorPageState extends ConsumerState<EditorPage> {
       // 非 JSON：按纯文本转换
     }
     final text = stored.endsWith('\n') ? stored : '$stored\n';
-    return Document.fromJson([{'insert': text}]);
+    return Document.fromJson([
+      {'insert': text},
+    ]);
   }
 
   /// 同步标签到本地状态：与当前一致时跳过（避免无意义重建）。
@@ -552,11 +576,11 @@ class _EditorPageState extends ConsumerState<EditorPage> {
     _dirty = true;
     // 编辑中：状态切到「保存中」（转圈）。已有未保存变更时保持不变；
     // 保存失败（error）时保留错误提示，不覆盖。
-    if (_saveStatus != _SaveStatus.saving &&
-        _saveStatus != _SaveStatus.error) {
+    if (_saveStatus != _SaveStatus.saving && _saveStatus != _SaveStatus.error) {
       _setStatus(_SaveStatus.saving);
     }
-    _wordCountCache = _titleController.text.length +
+    _wordCountCache =
+        _titleController.text.length +
         _contentController.document.toPlainText().length;
     // idle 防抖重置。
     _debounce?.cancel();
@@ -620,8 +644,8 @@ class _EditorPageState extends ConsumerState<EditorPage> {
       // 对勾同样成立，用户确认）。
       await Future<void>.delayed(Duration.zero);
       if (!mounted) return;
-      final changedDuringSave = _titleController.text != title ||
-          _contentDelta != content;
+      final changedDuringSave =
+          _titleController.text != title || _contentDelta != content;
       _dirty = changedDuringSave;
       if (changedDuringSave) {
         // 保存期间又有新输入：保持「保存中」，链上后续保存会再次执行。
@@ -666,7 +690,8 @@ class _EditorPageState extends ConsumerState<EditorPage> {
     _debounce?.cancel();
     _maxIntervalTimer?.cancel();
     final noteId = _noteId;
-    final isEmptyNow = _titleController.text.trim().isEmpty &&
+    final isEmptyNow =
+        _titleController.text.trim().isEmpty &&
         _contentController.document.toPlainText().trim().isEmpty;
     if (noteId == null) {
       if (isEmptyNow) {
@@ -731,6 +756,157 @@ class _EditorPageState extends ConsumerState<EditorPage> {
     ).then((value) => value ?? false);
   }
 
+  // ---------- 笔记内搜索（跳转 + 关键词高亮渐隐） ----------
+
+  /// 打开笔记内搜索浮层。
+  void _openNoteSearch() {
+    // 上次跳转的关键词高亮若还没消失（2.8s 窗口内再开搜索），先移除：
+    // 否则高亮 Overlay 会垫在弹窗下面，透过半透明 barrier 显示出来。
+    _removeSearchHighlight();
+    showEditorSearchPanel(
+      context,
+      controller: _contentController,
+      onJump: _jumpToMatch,
+      history: ref.read(searchHistoryProvider),
+    );
+  }
+
+  /// 跳转到匹配处：滚动定位（不改光标）+ 关键词高亮 2s 后渐隐。
+  void _jumpToMatch(EditorSearchMatch match) {
+    final editorState = _quillEditorKey.currentState;
+    if (editorState == null) return;
+    final renderEditor = editorState.renderEditor;
+    // 匹配 offset 可能因远端同步覆盖而失效（浮层打开期间文档仍可能被
+    // 对端改写）：越界则放弃跳转，不做半截定位。
+    if (match.end > _contentController.document.toPlainText().length) return;
+    // 滚动：目标行移到视口上方约 1/4 处（animateTo 平滑到位）。
+    try {
+      final startRect = renderEditor.getLocalRectForCaret(
+        TextPosition(offset: match.start),
+      );
+      final scroll = editorState.scrollController;
+      if (scroll.hasClients) {
+        final target =
+            (startRect.top - scroll.position.viewportDimension * 0.25).clamp(
+              0.0,
+              scroll.position.maxScrollExtent,
+            );
+        if ((target - scroll.offset).abs() > 4) {
+          scroll.animateTo(
+            target,
+            duration: const Duration(milliseconds: 300),
+            curve: Curves.easeOutCubic,
+          );
+        }
+      }
+    } on RangeError {
+      // offset 越界（文档刚被改写）：放弃滚动，仍尝试高亮可见部分。
+    }
+    _showSearchHighlight(match);
+  }
+
+  /// 显示关键词高亮浮层：全屏 Overlay + CustomPaint 画匹配矩形，
+  /// 2s 保持后 0.8s 渐隐移除（TweenSequence 两段）；滚动跟随由
+  /// _onEditorScroll 的 markNeedsBuild 驱动重建（每次重取全局坐标）。
+  void _showSearchHighlight(EditorSearchMatch match) {
+    _removeSearchHighlight();
+    final editorState = _quillEditorKey.currentState;
+    if (editorState == null) return;
+    final renderEditor = editorState.renderEditor;
+    List<Rect> rects;
+    try {
+      rects = _matchRects(renderEditor, match.start, match.end);
+    } on RangeError {
+      return; // 文档刚被改写，offset 失效：不显示高亮。
+    }
+    final anim = AnimationController(vsync: this, duration: _highlightDuration);
+    // 保持 2s（用户确认：显示 2 秒后渐渐隐去）→ 0.8s 渐隐。
+    final fade = TweenSequence<double>([
+      TweenSequenceItem(tween: ConstantTween(1.0), weight: 2.0),
+      TweenSequenceItem(tween: Tween(begin: 1.0, end: 0.0), weight: 0.8),
+    ]).animate(anim);
+    final pageContext = context;
+    late final OverlayEntry entry;
+    entry = OverlayEntry(
+      builder: (_) => AnimatedBuilder(
+        animation: fade,
+        builder: (context, child) {
+          if (!renderEditor.attached) return const SizedBox.shrink();
+          // 内容坐标 → 全局坐标：renderEditor 随滚动平移，滚动后
+          // markNeedsBuild 重建时重新取 origin，高亮始终钉在关键词上。
+          final origin = renderEditor.localToGlobal(Offset.zero);
+          final color = Theme.of(
+            pageContext,
+          ).colorScheme.primary.withValues(alpha: 0.30 * fade.value);
+          return IgnorePointer(
+            child: CustomPaint(
+              size: MediaQuery.sizeOf(pageContext),
+              painter: _SearchHighlightPainter(
+                rects.map((r) => r.shift(origin)).toList(),
+                color,
+              ),
+            ),
+          );
+        },
+      ),
+    );
+    Overlay.of(context).insert(entry);
+    _searchHighlightEntry = entry;
+    _searchHighlightAnim = anim;
+    anim.forward().whenComplete(_removeSearchHighlight);
+  }
+
+  /// 匹配区间在 renderEditor 内容坐标系中的矩形（getLocalRectForCaret
+  /// 推导，quill 未公开 getBoxesForSelection）：
+  /// - 同一行：起点 caret 左缘 → 终点 caret 左缘；
+  /// - 跨行：首行从起点到右缘 + 中间整行（行高步进）+ 末行到终点。
+  List<Rect> _matchRects(RenderEditor renderEditor, int start, int end) {
+    final startRect = renderEditor.getLocalRectForCaret(
+      TextPosition(offset: start),
+    );
+    // 终点用 upstream affinity：关键词恰好在行尾结束时，downstream 会把
+    // caret 归到下一行行首（多画一整行高亮），upstream 停在本行行尾。
+    final endRect = renderEditor.getLocalRectForCaret(
+      TextPosition(offset: end, affinity: TextAffinity.upstream),
+    );
+    final rects = <Rect>[];
+    if ((startRect.top - endRect.top).abs() < 0.5) {
+      final left = startRect.left.clamp(0.0, endRect.left);
+      rects.add(
+        Rect.fromLTRB(left, startRect.top, endRect.left, startRect.bottom),
+      );
+      return rects;
+    }
+    final contentWidth = renderEditor.size.width;
+    rects.add(
+      Rect.fromLTRB(
+        startRect.left,
+        startRect.top,
+        contentWidth,
+        startRect.bottom,
+      ),
+    );
+    final lineHeight = startRect.height;
+    var y = startRect.bottom;
+    // 防呆上限（行高异常时避免死循环）。
+    var guard = 0;
+    while (y < endRect.top - 0.5 && guard++ < 1000) {
+      final bottom = (y + lineHeight).clamp(y, endRect.top);
+      rects.add(Rect.fromLTRB(0, y, contentWidth, bottom));
+      y += lineHeight;
+    }
+    rects.add(Rect.fromLTRB(0, endRect.top, endRect.left, endRect.bottom));
+    return rects;
+  }
+
+  /// 移除关键词高亮浮层（渐隐完成 / 内容变化 / 页面销毁时调用）。
+  void _removeSearchHighlight() {
+    _searchHighlightEntry?.remove();
+    _searchHighlightEntry = null;
+    _searchHighlightAnim?.dispose();
+    _searchHighlightAnim = null;
+  }
+
   // ---------- 仅本机保存 ----------
 
   /// 切换「仅本机保存」（AppBar 开关，同步层按此标记拦截内容传输）。
@@ -786,10 +962,7 @@ class _EditorPageState extends ConsumerState<EditorPage> {
             _SaveStatusIndicator(status: _saveStatus),
             // 原「移到回收站」按钮位置改为「仅本机保存」开关（用户确认：
             // 编辑页不再提供删除入口，删除走列表菜单）。
-            _LocalOnlyToggle(
-              value: _localOnly,
-              onChanged: _toggleLocalOnly,
-            ),
+            _LocalOnlyToggle(value: _localOnly, onChanged: _toggleLocalOnly),
             const SizedBox(width: 8),
           ],
         ),
@@ -818,7 +991,8 @@ class _EditorPageState extends ConsumerState<EditorPage> {
           duration: const Duration(milliseconds: 200),
           curve: Curves.easeOut,
           padding: EdgeInsets.only(
-            bottom: MediaQuery.of(context).viewInsets.bottom +
+            bottom:
+                MediaQuery.of(context).viewInsets.bottom +
                 MediaQuery.paddingOf(context).bottom,
           ),
           child: _buildToolbar(),
@@ -841,9 +1015,9 @@ class _EditorPageState extends ConsumerState<EditorPage> {
           focusNode: _titleFocusNode,
           onChanged: (_) => _onChanged(),
         ),
+
         // 标签编辑（task-28）：仅编辑态展示——新建态首次保存前无笔记
         // 可打标签（保存成功后路由替换为编辑态再展示）。
-
         Expanded(
           // 编辑区全局 Listener：记录每次右键位置（判断是否在图片上，
           // 供 contextMenuBuilder 精确决定是否追加「保存图片」）。
@@ -855,50 +1029,51 @@ class _EditorPageState extends ConsumerState<EditorPage> {
               _lastRightClickPosition = event.position;
             },
             child: QuillEditor.basic(
-            key: _editorKey,
-            controller: _contentController,
-            focusNode: _contentFocusNode,
-            scrollController: _contentScrollController,
-            config: QuillEditorConfig(
-              placeholder: '正文',
-              expands: true,
-              padding: EdgeInsets.symmetric(vertical: 8),
-              embedBuilders: [
-                _LocalImageEmbedBuilder(
-                  onImageTap: _onImageTap,
-                  onKeyReady: _registerImageKey,
-                  onKeyDispose: _unregisterImageKey,
-                  onSave: (file) {
-                    if (mounted) _saveToLocal(context, file);
-                  },
-                  onShowMenu: _showImageMenu,
-                ),
-              ],
-              // 显示前拦截：图片右键（标志）→ 空菜单；其他情况 → 默认菜单
-              // （复制/粘贴正常）。比事后 removeAny 更干净（无闪烁）。
-              contextMenuBuilder: (context, state) {
-                // 右键位置命中图片：quill 菜单返回空并立即关闭——
-                // 保存菜单由编辑页 Overlay 统一管理（可每次右键重新定位、
-                // 可跟随图片滚动；quill 菜单无法做到，且已开菜单会短路
-                // 后续右键——showToolbar 源码 `toolbar != null` 直接 return）。
-                final position = _lastRightClickPosition;
-                final imageFile = position == null
-                    ? null
-                    : _imageAtPosition(position);
-                if (imageFile != null) {
-                  WidgetsBinding.instance.addPostFrameCallback((_) {
-                    state.hideToolbar();
-                  });
-                  return const SizedBox.shrink();
-                }
-                // 默认 4 选项菜单（剪切/复制/粘贴/全选）。曾尝试自定义紧凑
-                // 工具栏/精简项数，用户要求恢复原样（宽度不强改）。
-                return QuillRawEditorConfig.defaultContextMenuBuilder(
-                  context,
-                  state,
-                );
-              },
-            ),
+              key: _editorKey,
+              controller: _contentController,
+              focusNode: _contentFocusNode,
+              scrollController: _contentScrollController,
+              config: QuillEditorConfig(
+                editorKey: _quillEditorKey,
+                placeholder: '正文',
+                expands: true,
+                padding: EdgeInsets.symmetric(vertical: 8),
+                embedBuilders: [
+                  _LocalImageEmbedBuilder(
+                    onImageTap: _onImageTap,
+                    onKeyReady: _registerImageKey,
+                    onKeyDispose: _unregisterImageKey,
+                    onSave: (file) {
+                      if (mounted) _saveToLocal(context, file);
+                    },
+                    onShowMenu: _showImageMenu,
+                  ),
+                ],
+                // 显示前拦截：图片右键（标志）→ 空菜单；其他情况 → 默认菜单
+                // （复制/粘贴正常）。比事后 removeAny 更干净（无闪烁）。
+                contextMenuBuilder: (context, state) {
+                  // 右键位置命中图片：quill 菜单返回空并立即关闭——
+                  // 保存菜单由编辑页 Overlay 统一管理（可每次右键重新定位、
+                  // 可跟随图片滚动；quill 菜单无法做到，且已开菜单会短路
+                  // 后续右键——showToolbar 源码 `toolbar != null` 直接 return）。
+                  final position = _lastRightClickPosition;
+                  final imageFile = position == null
+                      ? null
+                      : _imageAtPosition(position);
+                  if (imageFile != null) {
+                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                      state.hideToolbar();
+                    });
+                    return const SizedBox.shrink();
+                  }
+                  // 默认 4 选项菜单（剪切/复制/粘贴/全选）。曾尝试自定义紧凑
+                  // 工具栏/精简项数，用户要求恢复原样（宽度不强改）。
+                  return QuillRawEditorConfig.defaultContextMenuBuilder(
+                    context,
+                    state,
+                  );
+                },
+              ),
             ),
           ),
         ),
@@ -913,45 +1088,69 @@ class _EditorPageState extends ConsumerState<EditorPage> {
 
   /// 富文本工具栏（task-29）：精简 QuillSimpleToolbar，只留基础格式按钮
   /// （加粗/斜体/下划线/标题/列表/引用/代码块/清除格式）+ 本地插图按钮。
+  ///
+  /// 底行为常驻结构（用户确认）：[锤子][撤销][重做][搜索]…[字数] 无论
+  /// 格式面板是否展开都显示——撤销/重做从格式面板提出（showUndo/showRedo
+  /// = false），不用展开即可直接点击；锤子即展开/收起切换。
   Widget _buildToolbar() {
     // 底部工具栏：贴底（bottomNavigationBar，Scaffold 默认随键盘顶起——
     // 键盘弹出时工具栏保持在输入法上方）。
-    //
-    // 收起态（默认）：单个「格式」按钮，不碍眼；点击展开完整工具栏。
-    if (_toolbarCollapsed) {
-      return SafeArea(
-        top: false,
-        child: Container(
-          decoration: BoxDecoration(
-            color: Theme.of(context).colorScheme.surface.withValues(alpha: 0.6),
-            border: Border(
-              top: BorderSide(
-                color: Theme.of(context).colorScheme.outlineVariant,
-                width: 0.5,
+    final children = <Widget>[
+      if (_toolbarCollapsed)
+        const SizedBox.shrink()
+      else
+        QuillSimpleToolbar(
+          controller: _contentController,
+          config: QuillSimpleToolbarConfig(
+            multiRowsDisplay: true,
+            showDividers: false,
+            // 紧凑：缩小图标与按钮触控区（iconSize 14 × factor 1.2 ≈ 17px，
+            // 默认 15×1.6=24px），按钮排列更密集、占用面积更小。
+            buttonOptions: const QuillSimpleToolbarButtonOptions(
+              base: QuillToolbarBaseButtonOptions(
+                iconSize: 14,
+                iconButtonFactor: 1.2,
               ),
             ),
-          ),
-          child: Row(
-            children: [
-              IconButton(
-                tooltip: '展开格式工具栏',
-                icon: _LucideHammerIcon(
-                  size: 21,
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
-                ),
-                onPressed: () => setState(() => _toolbarCollapsed = false),
-              ),
-              const Spacer(),
-              // 右缘留 12px：原贴边太靠右，与展开态对齐（见下）。
-              Padding(
-                padding: const EdgeInsets.only(right: 12),
-                child: _WordCountBar(count: _wordCount),
+            showFontFamily: false,
+            showFontSize: false,
+            showBoldButton: true,
+            showItalicButton: true,
+            showUnderLineButton: true,
+            showStrikeThrough: false,
+            showInlineCode: false,
+            showColorButton: false,
+            showBackgroundColorButton: false,
+            showClearFormat: true,
+            showAlignmentButtons: false,
+            showHeaderStyle: true,
+            showListNumbers: true,
+            showListBullets: true,
+            showListCheck: false,
+            showCodeBlock: true,
+            showQuote: true,
+            showIndent: false,
+            showLink: false,
+            // 撤销/重做已提到常驻底行（不在此重复）。
+            showUndo: false,
+            showRedo: false,
+            showDirection: false,
+            showSearchButton: false,
+            showSubscript: false,
+            showSuperscript: false,
+            showSmallButton: false,
+            showLineHeightButton: false,
+            customButtons: [
+              QuillToolbarCustomButtonOptions(
+                icon: const Icon(Icons.image_outlined, size: 20),
+                tooltip: '插入图片',
+                onPressed: _insertImage,
               ),
             ],
           ),
         ),
-      );
-    }
+      _buildToolbarBaseRow(),
+    ];
     return SafeArea(
       top: false,
       child: Container(
@@ -964,78 +1163,79 @@ class _EditorPageState extends ConsumerState<EditorPage> {
             ),
           ),
         ),
-        child: Padding(
-          // 右缘 12px 与收起态对齐（字数统计两种状态下位置一致）。
-          padding: const EdgeInsets.fromLTRB(8, 4, 12, 4),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-            QuillSimpleToolbar(
-            controller: _contentController,
-            config: QuillSimpleToolbarConfig(
-              multiRowsDisplay: true,
-              showDividers: false,
-              // 紧凑：缩小图标与按钮触控区（iconSize 14 × factor 1.2 ≈ 17px，
-              // 默认 15×1.6=24px），按钮排列更密集、占用面积更小。
-              buttonOptions: const QuillSimpleToolbarButtonOptions(
-                base: QuillToolbarBaseButtonOptions(
-                  iconSize: 14,
-                  iconButtonFactor: 1.2,
-                ),
-              ),
-              showFontFamily: false,
-              showFontSize: false,
-              showBoldButton: true,
-              showItalicButton: true,
-              showUnderLineButton: true,
-              showStrikeThrough: false,
-              showInlineCode: false,
-              showColorButton: false,
-              showBackgroundColorButton: false,
-              showClearFormat: true,
-              showAlignmentButtons: false,
-              showHeaderStyle: true,
-              showListNumbers: true,
-          showListBullets: true,
-          showListCheck: false,
-          showCodeBlock: true,
-          showQuote: true,
-          showIndent: false,
-          showLink: false,
-          showUndo: true,
-          showRedo: true,
-          showDirection: false,
-          showSearchButton: false,
-          showSubscript: false,
-          showSuperscript: false,
-          showSmallButton: false,
-          showLineHeightButton: false,
-          customButtons: [
-            QuillToolbarCustomButtonOptions(
-              icon: const Icon(Icons.image_outlined, size: 20),
-              tooltip: '插入图片',
-              onPressed: _insertImage,
-            ),
-          ],
-        ),
-        ),
-        Row(
-          children: [
-            // 收起按钮与字数同行（不独占工具栏格位）。
-            IconButton(
-              tooltip: '收起工具栏',
-              visualDensity: VisualDensity.compact,
-              iconSize: 18,
-              icon: const Icon(Icons.keyboard_arrow_down),
-              onPressed: () => setState(() => _toolbarCollapsed = true),
-            ),
-            const Spacer(),
-            _WordCountBar(count: _wordCount),
-          ],
-        ),
-      ],
+        child: Column(mainAxisSize: MainAxisSize.min, children: children),
       ),
-      ),
+    );
+  }
+
+  /// 常驻底行：锤子（格式面板开关）+ 撤销/重做 + 笔记内搜索 + 字数。
+  ///
+  /// 撤销/重做监听 controller：hasUndo/hasRedo 为 false 时置灰
+  /// （controller 是 ChangeNotifier，任何文档/历史变化都会通知重建）。
+  Widget _buildToolbarBaseRow() {
+    final scheme = Theme.of(context).colorScheme;
+    final expanded = !_toolbarCollapsed;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(4, 2, 12, 2),
+      child: Row(
+        children: [
+          IconButton(
+            tooltip: expanded ? '收起格式工具栏' : '展开格式工具栏',
+            icon: _LucideHammerIcon(
+              size: 21,
+              color: expanded ? scheme.primary : scheme.onSurfaceVariant,
+            ),
+            // 直接对字段取反：expanded 是本次 build 的旧值快照，再取反
+            // 会写回原值（展开/收起永远不生效）。
+            onPressed: () =>
+                setState(() => _toolbarCollapsed = !_toolbarCollapsed),
+          ),
+          // 撤销/重做：从格式面板提出来常驻（用户确认），直接点击。
+          ListenableBuilder(
+            listenable: _contentController,
+            builder: (context, _) {
+              return Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  IconButton(
+                    tooltip: '撤销',
+                    visualDensity: VisualDensity.compact,
+                    iconSize: 20,
+                    color: _contentController.hasUndo
+                        ? scheme.onSurfaceVariant
+                        : scheme.onSurfaceVariant.withValues(alpha: 0.3),
+                    icon: const Icon(Icons.undo),
+                    onPressed: _contentController.hasUndo
+                        ? _contentController.undo
+                        : null,
+                  ),
+                  IconButton(
+                    tooltip: '重做',
+                    visualDensity: VisualDensity.compact,
+                    iconSize: 20,
+                    color: _contentController.hasRedo
+                        ? scheme.onSurfaceVariant
+                        : scheme.onSurfaceVariant.withValues(alpha: 0.3),
+                    icon: const Icon(Icons.redo),
+                    onPressed: _contentController.hasRedo
+                        ? _contentController.redo
+                        : null,
+                  ),
+                ],
+              );
+            },
+          ),
+          IconButton(
+            tooltip: '笔记内搜索',
+            visualDensity: VisualDensity.compact,
+            iconSize: 20,
+            color: scheme.onSurfaceVariant,
+            icon: const Icon(Icons.search),
+            onPressed: _openNoteSearch,
+          ),
+          const Spacer(),
+          _WordCountBar(count: _wordCount),
+        ],
       ),
     );
   }
@@ -1052,15 +1252,15 @@ class _EditorPageState extends ConsumerState<EditorPage> {
         withData: true,
       );
       final file = result?.files.single;
-      final bytes = file?.bytes ??
+      final bytes =
+          file?.bytes ??
           (file?.path == null ? null : await File(file!.path!).readAsBytes());
       if (bytes == null) return; // 用户取消
       final relative = await _attachments.saveImage(bytes);
       if (!mounted) return;
       // 光标处插入 block image embed（选中文本则替换选中区）。
       final index = _contentController.selection.baseOffset;
-      final length =
-          _contentController.selection.extentOffset - index;
+      final length = _contentController.selection.extentOffset - index;
       _contentController.replaceText(
         index,
         length,
@@ -1204,12 +1404,11 @@ class _AttachmentImageState extends State<_AttachmentImage> {
   /// 图片根节点 key：注册给编辑页 State 做实时右键命中判断。
   final GlobalKey _imageKey = GlobalKey();
 
-
-
   /// 本图 hash（`attachments/<16位hex>.<ext>` → 16 位 hex；无法提取返回 null）。
   String? get _hash {
-    final match = RegExp(r'attachments/([a-f0-9]{16})\.[a-z0-9]+')
-        .firstMatch(widget.relative);
+    final match = RegExp(
+      r'attachments/([a-f0-9]{16})\.[a-z0-9]+',
+    ).firstMatch(widget.relative);
     return match?.group(1);
   }
 
@@ -1220,9 +1419,7 @@ class _AttachmentImageState extends State<_AttachmentImage> {
       widget.relative,
     );
     // 注册 GlobalKey（文件就绪后）；右键命中判断实时取 key 矩形。
-    _LocalImageEmbedBuilder._attachments
-        .resolveFile(widget.relative)
-        .then((f) {
+    _LocalImageEmbedBuilder._attachments.resolveFile(widget.relative).then((f) {
       if (!mounted || f == null) return;
       widget.onKeyReady?.call(_imageKey, f);
     });
@@ -1304,9 +1501,9 @@ class _AttachmentImageState extends State<_AttachmentImage> {
                       height: 80,
                       alignment: Alignment.center,
                       decoration: BoxDecoration(
-                        color: Theme.of(context)
-                            .colorScheme
-                            .surfaceContainerHighest,
+                        color: Theme.of(
+                          context,
+                        ).colorScheme.surfaceContainerHighest,
                         borderRadius: BorderRadius.circular(8),
                       ),
                       child: const Text('此格式不支持预览（原图已保存）'),
@@ -1320,8 +1517,8 @@ class _AttachmentImageState extends State<_AttachmentImage> {
       },
     );
   }
-
 }
+
 /// 编辑页底部字数统计（task-28）：标题+正文合计，中英文按字符计。
 class _WordCountBar extends StatelessWidget {
   const _WordCountBar({required this.count});
@@ -1359,9 +1556,7 @@ class _LocalOnlyToggle extends StatelessWidget {
     final colorScheme = Theme.of(context).colorScheme;
     final color = value ? colorScheme.primary : colorScheme.onSurfaceVariant;
     return Tooltip(
-      message: value
-          ? '仅本机保存中：不同步到其他设备'
-          : '仅本机保存：开启后不同步到其他设备',
+      message: value ? '仅本机保存中：不同步到其他设备' : '仅本机保存：开启后不同步到其他设备',
       child: InkWell(
         borderRadius: BorderRadius.circular(8),
         onTap: () => onChanged(!value),
@@ -1441,31 +1636,32 @@ class _SaveStatusIndicatorState extends State<_SaveStatusIndicator>
       null => const SizedBox.shrink(),
       // 保存中/同步中：旋转刷新图标（不转圈占位动画，观感更轻）。
       _SaveStatus.saving => RotationTransition(
-          turns: _spin,
-          child: Icon(
-            Icons.refresh,
-            size: 16,
-            color: colorScheme.onSurfaceVariant,
-          ),
+        turns: _spin,
+        child: Icon(
+          Icons.refresh,
+          size: 16,
+          color: colorScheme.onSurfaceVariant,
         ),
+      ),
       // 保存完成 + 同步完成（单机时也成立：已保存，后续自动同步）。
       _SaveStatus.saved => Icon(
-          Icons.check_circle,
-          size: 16,
-          color: colorScheme.primary,
-        ),
+        Icons.check_circle,
+        size: 16,
+        color: colorScheme.primary,
+      ),
       _SaveStatus.error => Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Icons.error_outline, size: 16, color: colorScheme.error),
-            const SizedBox(width: 4),
-            Text(
-              '保存失败',
-              style: theme.textTheme.labelMedium
-                  ?.copyWith(color: colorScheme.error),
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.error_outline, size: 16, color: colorScheme.error),
+          const SizedBox(width: 4),
+          Text(
+            '保存失败',
+            style: theme.textTheme.labelMedium?.copyWith(
+              color: colorScheme.error,
             ),
-          ],
-        ),
+          ),
+        ],
+      ),
     };
     return Padding(
       padding: const EdgeInsets.only(left: 8, right: 4),
@@ -1473,7 +1669,6 @@ class _SaveStatusIndicatorState extends State<_SaveStatusIndicator>
     );
   }
 }
-
 
 /// 手绘 Lucide 标准「锤子」图标（lucide hammer，viewBox 24x24，stroke）。
 ///
@@ -1572,4 +1767,34 @@ class _LucideHammerPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _LucideHammerPainter old) => old.color != color;
+}
+
+/// 搜索关键词高亮画笔：把匹配矩形（已换算为全局坐标）涂上半透明色。
+///
+/// 矩形列表与颜色每次渐隐帧都由 AnimatedBuilder 重建传入（color 随
+/// 动画值变化驱动重绘；矩形滚动变化由 entry.markNeedsBuild 驱动重建）。
+class _SearchHighlightPainter extends CustomPainter {
+  _SearchHighlightPainter(this.rects, this.color);
+
+  final List<Rect> rects;
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (color.a == 0) return;
+    final paint = Paint()..color = color;
+    for (final rect in rects) {
+      if (rect.isEmpty) continue;
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(rect, const Radius.circular(3)),
+        paint,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _SearchHighlightPainter old) =>
+      old.color != color ||
+      old.rects.length != rects.length ||
+      (rects.isNotEmpty && old.rects.first != rects.first);
 }

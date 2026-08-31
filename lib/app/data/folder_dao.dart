@@ -20,7 +20,9 @@ class FolderDao extends DatabaseAccessor<AppDatabase> with _$FolderDaoMixin {
   /// 与 [NoteDao.insertOrReplace] 同理由：用 InsertMode.insertOrReplace
   /// 保证全列字面写入（含 NULL），软删除/恢复状态精确落库。
   Future<void> insertOrReplace(Folder folder) {
-    return into(folders).insert(folder.toRow(), mode: InsertMode.insertOrReplace);
+    return into(
+      folders,
+    ).insert(folder.toRow(), mode: InsertMode.insertOrReplace);
   }
 
   /// 重命名：name 置值 + version+1 + updatedAt 刷新。
@@ -89,24 +91,28 @@ class FolderDao extends DatabaseAccessor<AppDatabase> with _$FolderDaoMixin {
     for (var i = 0; i < newOrder.length; i++) {
       final current = byId[newOrder[i].id] ?? newOrder[i];
       if (current.sortOrder == i) continue; // 幂等：位置未变
-      pending.add(Folder(
-        id: current.id,
-        name: current.name,
-        createdAt: current.createdAt,
-        updatedAt: now,
-        version: current.version + 1,
-        deletedAt: current.deletedAt,
-        isPinned: current.isPinned,
-        sortOrder: i,
-        origin: current.origin,
-      ));
+      pending.add(
+        Folder(
+          id: current.id,
+          name: current.name,
+          createdAt: current.createdAt,
+          updatedAt: now,
+          version: current.version + 1,
+          deletedAt: current.deletedAt,
+          isPinned: current.isPinned,
+          sortOrder: i,
+          origin: current.origin,
+        ),
+      );
     }
     if (pending.isEmpty) return const [];
-    await batch((b) => b.insertAll(
-          folders,
-          pending.map((f) => f.toRow()).toList(),
-          mode: InsertMode.insertOrReplace,
-        ));
+    await batch(
+      (b) => b.insertAll(
+        folders,
+        pending.map((f) => f.toRow()).toList(),
+        mode: InsertMode.insertOrReplace,
+      ),
+    );
     return pending;
   }
 
@@ -179,8 +185,9 @@ class FolderDao extends DatabaseAccessor<AppDatabase> with _$FolderDaoMixin {
 
   /// 按 id 查询单条文件夹，不存在返回 null。
   Future<Folder?> getById(String id) async {
-    final row =
-        await (select(folders)..where((t) => t.id.equals(id))).getSingleOrNull();
+    final row = await (select(
+      folders,
+    )..where((t) => t.id.equals(id))).getSingleOrNull();
     return row == null ? null : Folder.fromRow(row);
   }
 

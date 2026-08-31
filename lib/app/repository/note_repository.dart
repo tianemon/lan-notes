@@ -43,7 +43,11 @@ class NoteRestoredEvent extends NoteChangeEvent {
 
 /// 笔记删除（对应同步协议 note_delete，携带 version 防乱序）。
 class NoteDeletedEvent extends NoteChangeEvent {
-  const NoteDeletedEvent({required this.id, required this.version, this.deletedAt});
+  const NoteDeletedEvent({
+    required this.id,
+    required this.version,
+    this.deletedAt,
+  });
 
   final String id;
 
@@ -61,7 +65,11 @@ class NoteDeletedEvent extends NoteChangeEvent {
 /// 与 [NoteDeletedEvent] 载荷一致，语义上专指回收站「清空」入口
 /// （写墓碑防复活）；同步层同样推送 note_delete。
 class NotePurgedEvent extends NoteChangeEvent {
-  const NotePurgedEvent({required this.id, required this.version, this.deletedAt});
+  const NotePurgedEvent({
+    required this.id,
+    required this.version,
+    this.deletedAt,
+  });
 
   final String id;
 
@@ -219,11 +227,13 @@ class NoteRepository {
       return;
     }
     final tombstone = await _dao.getTombstone(id);
-    _changes.add(NoteDeletedEvent(
-      id: id,
-      version: version,
-      deletedAt: tombstone?.deletedAt,
-    ));
+    _changes.add(
+      NoteDeletedEvent(
+        id: id,
+        version: version,
+        deletedAt: tombstone?.deletedAt,
+      ),
+    );
   }
 
   /// 软删除：笔记进回收站（deletedAt 置时间 + version+1），内容保留。
@@ -255,11 +265,13 @@ class NoteRepository {
       return;
     }
     final tombstone = await _dao.getTombstone(id);
-    _changes.add(NotePurgedEvent(
-      id: id,
-      version: version,
-      deletedAt: tombstone?.deletedAt,
-    ));
+    _changes.add(
+      NotePurgedEvent(
+        id: id,
+        version: version,
+        deletedAt: tombstone?.deletedAt,
+      ),
+    );
   }
 
   /// 全量笔记流（正常笔记，deletedAt IS NULL）：按 updatedAt 倒序。
@@ -310,7 +322,8 @@ class NoteRepository {
     final tombstone = await _dao.getTombstone(remote.id);
     if (tombstone != null) {
       final remoteOpTime = remote.deletedAt ?? remote.updatedAt;
-      final blocked = remote.version < tombstone.version ||
+      final blocked =
+          remote.version < tombstone.version ||
           (remote.version == tombstone.version &&
               remoteOpTime <= tombstone.deletedAt);
       if (blocked) {
@@ -339,7 +352,8 @@ class NoteRepository {
     //（3.3 节合并规则②）。
     final remoteOpTime = remote.deletedAt ?? remote.updatedAt;
     final localOpTime = local.deletedAt ?? local.updatedAt;
-    final remoteWins = remote.version > local.version ||
+    final remoteWins =
+        remote.version > local.version ||
         (remote.version == local.version && remoteOpTime > localOpTime);
     if (!remoteWins) {
       return false;
@@ -439,8 +453,7 @@ class NoteRepository {
     // 本地笔记与墓碑共存（复活场景）时墓碑 version 恒 ≤ 本地 version，
     // 显式取 max 保证任何路径下墓碑版本不回落。
     final tombstone = await _dao.getTombstone(id);
-    final tombstoneVersion =
-        (tombstone == null || version > tombstone.version)
+    final tombstoneVersion = (tombstone == null || version > tombstone.version)
         ? version
         : tombstone.version;
     final tombstoneDeletedAt =
@@ -483,7 +496,8 @@ class NoteRepository {
     final localNote = await _dao.getById(id);
     if (localNote != null) {
       final noteOpTime = localNote.deletedAt ?? localNote.updatedAt;
-      final blocked = localNote.version < version ||
+      final blocked =
+          localNote.version < version ||
           (localNote.version == version && noteOpTime <= deletedAt);
       if (blocked) {
         await _dao.deleteById(id);

@@ -129,8 +129,10 @@ class HelloMessage extends SyncMessage {
     protocolVersion: (json['protocolVersion'] as int?) ?? 1,
     port: (json['port'] as num?)?.toInt(),
     manual: (json['manual'] as bool?) ?? false,
-    syncTo: (json['syncTo'] as Map<String, dynamic>?)
-            ?.map((k, v) => MapEntry(k, v as bool)) ??
+    syncTo:
+        (json['syncTo'] as Map<String, dynamic>?)?.map(
+          (k, v) => MapEntry(k, v as bool),
+        ) ??
         const {},
   );
 }
@@ -319,11 +321,7 @@ class ChallengeResponseMessage extends SyncMessage {
   String get type => 'challenge_response';
 
   @override
-  Map<String, dynamic> toJson() => {
-    'type': type,
-    'nonce': nonce,
-    'hmac': hmac,
-  };
+  Map<String, dynamic> toJson() => {'type': type, 'nonce': nonce, 'hmac': hmac};
 
   factory ChallengeResponseMessage.fromJson(Map<String, dynamic> json) =>
       ChallengeResponseMessage(
@@ -408,11 +406,11 @@ class SyncDataMessage extends SyncMessage {
 
   @override
   Map<String, dynamic> toJson() => {
-        'type': type,
-        'notes': notes.map((note) => note.toJson()).toList(),
-        'tombstones': tombstones.map((t) => t.toJson()).toList(),
-        'folders': folders.map((f) => f.toJson()).toList(),
-      };
+    'type': type,
+    'notes': notes.map((note) => note.toJson()).toList(),
+    'tombstones': tombstones.map((t) => t.toJson()).toList(),
+    'folders': folders.map((f) => f.toJson()).toList(),
+  };
 
   factory SyncDataMessage.fromJson(Map<String, dynamic> json) {
     final notes = <Note>[];
@@ -470,10 +468,10 @@ class FolderUpsertMessage extends SyncMessage {
 
   @override
   Map<String, dynamic> toJson() => {
-        'type': type,
-        'folder': folder.toJson(),
-        'origin': origin,
-      };
+    'type': type,
+    'folder': folder.toJson(),
+    'origin': origin,
+  };
 
   factory FolderUpsertMessage.fromJson(Map<String, dynamic> json) =>
       FolderUpsertMessage(
@@ -498,10 +496,10 @@ class NoteUpsertMessage extends SyncMessage {
 
   @override
   Map<String, dynamic> toJson() => {
-        'type': type,
-        'note': note.toJson(),
-        'origin': origin,
-      };
+    'type': type,
+    'note': note.toJson(),
+    'origin': origin,
+  };
 
   factory NoteUpsertMessage.fromJson(Map<String, dynamic> json) =>
       NoteUpsertMessage(
@@ -769,15 +767,14 @@ class SyncConfigMessage extends SyncMessage {
   String get type => 'sync_config';
 
   @override
-  Map<String, dynamic> toJson() => {
-        'type': type,
-        'syncTo': syncTo,
-      };
+  Map<String, dynamic> toJson() => {'type': type, 'syncTo': syncTo};
 
   factory SyncConfigMessage.fromJson(Map<String, dynamic> json) =>
       SyncConfigMessage(
-        syncTo: (json['syncTo'] as Map<String, dynamic>?)
-                ?.map((k, v) => MapEntry(k, v as bool)) ??
+        syncTo:
+            (json['syncTo'] as Map<String, dynamic>?)?.map(
+              (k, v) => MapEntry(k, v as bool),
+            ) ??
             const {},
       );
 }

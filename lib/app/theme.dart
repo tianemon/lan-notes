@@ -24,6 +24,7 @@ const double kAppRadius = 16;
 
 /// 亮色（暖米白，用户确认：从冷白调整——背景 #F7F5F0、强调色 #4F6EF7）。
 const Color kLightBackground = Color(0xFFF7F5F0);
+
 /// 亮色主题强调色（默认蓝；task-32 曾临时改黑，已恢复）。
 const Color kLightAccent = Color(0xFF4F6EF7);
 
@@ -64,12 +65,10 @@ Color appSurfaceColor(BuildContext context, AppSurface layer) {
   final isDark = Theme.of(context).brightness == Brightness.dark;
   return switch (layer) {
     AppSurface.background => isDark ? kDarkBackground : kLightBackground,
-    AppSurface.card => isDark
-        ? kDarkCard
-        : const Color(0xFFFDFCF9).withValues(alpha: 0.90),
-    AppSurface.floating => isDark
-        ? kDarkFloating
-        : const Color(0xFFFDFCF9).withValues(alpha: 0.95),
+    AppSurface.card =>
+      isDark ? kDarkCard : const Color(0xFFFDFCF9).withValues(alpha: 0.90),
+    AppSurface.floating =>
+      isDark ? kDarkFloating : const Color(0xFFFDFCF9).withValues(alpha: 0.95),
   };
 }
 
@@ -84,7 +83,9 @@ Color shadowFromSurface(Color surface, {double strength = 0.12}) {
 
 /// 全局主题模式通知器（main.dart 以 ValueListenableBuilder 接入
 /// MaterialApp.themeMode，参考 EE app.dart 的 themeMode 处理）。
-final ValueNotifier<ThemeMode> themeModeNotifier = ValueNotifier(ThemeMode.system);
+final ValueNotifier<ThemeMode> themeModeNotifier = ValueNotifier(
+  ThemeMode.system,
+);
 
 // ============================================================
 // 页面转场（滑动 + 淡入，替代默认 Material 转场，task-25）
@@ -128,35 +129,36 @@ class AppPageTransitionsBuilder extends PageTransitionsBuilder {
 // ============================================================
 
 ThemeData buildLightTheme() {
-  final scheme = ColorScheme.light(
-    primary: kLightAccent,
-    onPrimary: Colors.white,
-    primaryContainer: const Color(0xFFE4E8FF),
-    onPrimaryContainer: const Color(0xFF2B3FA0),
-    secondary: const Color(0xFF5B9BD5),
-    onSecondary: Colors.white,
-    secondaryContainer: const Color(0xFFD8EAF9),
-    onSecondaryContainer: const Color(0xFF1D4E73),
-    tertiary: kStatusConnecting,
-    onTertiary: Colors.white,
-    tertiaryContainer: const Color(0xFFFFE8CC),
-    onTertiaryContainer: const Color(0xFF7A4A00),
-    error: const Color(0xFFE5484D),
-    onError: Colors.white,
-    errorContainer: const Color(0xFFFFE3E3),
-    onErrorContainer: const Color(0xFF8A1F1F),
-    surface: Colors.white,
-    onSurface: kLightTextPrimary,
-    onSurfaceVariant: kLightTextSecondary,
-    outline: const Color(0xFF9C978F),
-    outlineVariant: const Color(0xFFDCD7CE),
-  ).copyWith(
-    surfaceContainerLowest: const Color(0xFFFBFAF7),
-    surfaceContainerLow: const Color(0xFFEDE9E2),
-    surfaceContainer: const Color(0xFFE7E3DB),
-    surfaceContainerHigh: const Color(0xFFE1DCD4),
-    surfaceContainerHighest: const Color(0xFFDDD8D0),
-  );
+  final scheme =
+      ColorScheme.light(
+        primary: kLightAccent,
+        onPrimary: Colors.white,
+        primaryContainer: const Color(0xFFE4E8FF),
+        onPrimaryContainer: const Color(0xFF2B3FA0),
+        secondary: const Color(0xFF5B9BD5),
+        onSecondary: Colors.white,
+        secondaryContainer: const Color(0xFFD8EAF9),
+        onSecondaryContainer: const Color(0xFF1D4E73),
+        tertiary: kStatusConnecting,
+        onTertiary: Colors.white,
+        tertiaryContainer: const Color(0xFFFFE8CC),
+        onTertiaryContainer: const Color(0xFF7A4A00),
+        error: const Color(0xFFE5484D),
+        onError: Colors.white,
+        errorContainer: const Color(0xFFFFE3E3),
+        onErrorContainer: const Color(0xFF8A1F1F),
+        surface: Colors.white,
+        onSurface: kLightTextPrimary,
+        onSurfaceVariant: kLightTextSecondary,
+        outline: const Color(0xFF9C978F),
+        outlineVariant: const Color(0xFFDCD7CE),
+      ).copyWith(
+        surfaceContainerLowest: const Color(0xFFFBFAF7),
+        surfaceContainerLow: const Color(0xFFEDE9E2),
+        surfaceContainer: const Color(0xFFE7E3DB),
+        surfaceContainerHigh: const Color(0xFFE1DCD4),
+        surfaceContainerHighest: const Color(0xFFDDD8D0),
+      );
 
   return ThemeData(
     useMaterial3: true,
@@ -179,7 +181,9 @@ ThemeData buildLightTheme() {
       color: Colors.transparent,
       surfaceTintColor: Colors.transparent,
       margin: EdgeInsets.zero,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(kAppRadius)),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(kAppRadius),
+      ),
     ),
     dividerTheme: DividerThemeData(
       color: scheme.outlineVariant,
@@ -197,14 +201,10 @@ ThemeData buildLightTheme() {
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
     ),
     outlinedButtonTheme: OutlinedButtonThemeData(
-      style: OutlinedButton.styleFrom(
-        foregroundColor: kLightButtonForeground,
-      ),
+      style: OutlinedButton.styleFrom(foregroundColor: kLightButtonForeground),
     ),
     textButtonTheme: TextButtonThemeData(
-      style: TextButton.styleFrom(
-        foregroundColor: kLightButtonForeground,
-      ),
+      style: TextButton.styleFrom(foregroundColor: kLightButtonForeground),
     ),
     inputDecorationTheme: InputDecorationTheme(
       filled: false,
@@ -248,35 +248,36 @@ ThemeData buildLightTheme() {
 // ============================================================
 
 ThemeData buildDarkTheme() {
-  final scheme = ColorScheme.dark(
-    primary: kDarkAccent,
-    onPrimary: const Color(0xFF062033),
-    primaryContainer: const Color(0xFF1A3A5C),
-    onPrimaryContainer: const Color(0xFFB0D0F0),
-    secondary: const Color(0xFF7FB3E0),
-    onSecondary: const Color(0xFF0A2A40),
-    secondaryContainer: const Color(0xFF1E3A52),
-    onSecondaryContainer: const Color(0xFFB8D8F0),
-    tertiary: kStatusConnecting,
-    onTertiary: const Color(0xFF3A2400),
-    tertiaryContainer: const Color(0xFF4A3008),
-    onTertiaryContainer: const Color(0xFFFFD9A0),
-    error: const Color(0xFFFF6B6B),
-    onError: const Color(0xFF4A0A0A),
-    errorContainer: const Color(0xFF5C1F1F),
-    onErrorContainer: const Color(0xFFFFD0D0),
-    surface: kDarkCard,
-    onSurface: kDarkTextPrimary,
-    onSurfaceVariant: const Color(0xFF9FB0C0),
-    outline: const Color(0xFF6B7B8D),
-    outlineVariant: const Color(0xFF2A3A4A),
-  ).copyWith(
-    surfaceContainerLowest: const Color(0xFF0A1520),
-    surfaceContainerLow: kDarkCard,
-    surfaceContainer: kDarkFloating,
-    surfaceContainerHigh: const Color(0xFF263548),
-    surfaceContainerHighest: const Color(0xFF2A3A4A),
-  );
+  final scheme =
+      ColorScheme.dark(
+        primary: kDarkAccent,
+        onPrimary: const Color(0xFF062033),
+        primaryContainer: const Color(0xFF1A3A5C),
+        onPrimaryContainer: const Color(0xFFB0D0F0),
+        secondary: const Color(0xFF7FB3E0),
+        onSecondary: const Color(0xFF0A2A40),
+        secondaryContainer: const Color(0xFF1E3A52),
+        onSecondaryContainer: const Color(0xFFB8D8F0),
+        tertiary: kStatusConnecting,
+        onTertiary: const Color(0xFF3A2400),
+        tertiaryContainer: const Color(0xFF4A3008),
+        onTertiaryContainer: const Color(0xFFFFD9A0),
+        error: const Color(0xFFFF6B6B),
+        onError: const Color(0xFF4A0A0A),
+        errorContainer: const Color(0xFF5C1F1F),
+        onErrorContainer: const Color(0xFFFFD0D0),
+        surface: kDarkCard,
+        onSurface: kDarkTextPrimary,
+        onSurfaceVariant: const Color(0xFF9FB0C0),
+        outline: const Color(0xFF6B7B8D),
+        outlineVariant: const Color(0xFF2A3A4A),
+      ).copyWith(
+        surfaceContainerLowest: const Color(0xFF0A1520),
+        surfaceContainerLow: kDarkCard,
+        surfaceContainer: kDarkFloating,
+        surfaceContainerHigh: const Color(0xFF263548),
+        surfaceContainerHighest: const Color(0xFF2A3A4A),
+      );
 
   return ThemeData(
     useMaterial3: true,
@@ -299,7 +300,9 @@ ThemeData buildDarkTheme() {
       color: Colors.transparent,
       surfaceTintColor: Colors.transparent,
       margin: EdgeInsets.zero,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(kAppRadius)),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(kAppRadius),
+      ),
     ),
     dividerTheme: DividerThemeData(
       color: scheme.outlineVariant,
@@ -475,16 +478,21 @@ class _AppSnackBarHostState extends State<_AppSnackBarHost>
               // 底部间距 66 = 基础 16 + 用户指定再抬高 50。
               padding: const EdgeInsets.only(bottom: 66),
               child: FadeTransition(
-                opacity:
-                    CurvedAnimation(parent: _controller, curve: Curves.easeOut),
+                opacity: CurvedAnimation(
+                  parent: _controller,
+                  curve: Curves.easeOut,
+                ),
                 child: SlideTransition(
-                  position: Tween<Offset>(
-                    begin: const Offset(0, 0.4),
-                    end: Offset.zero,
-                  ).animate(CurvedAnimation(
-                    parent: _controller,
-                    curve: Curves.easeOutCubic,
-                  )),
+                  position:
+                      Tween<Offset>(
+                        begin: const Offset(0, 0.4),
+                        end: Offset.zero,
+                      ).animate(
+                        CurvedAnimation(
+                          parent: _controller,
+                          curve: Curves.easeOutCubic,
+                        ),
+                      ),
                   // 必须包一层 Material：通知条挂在根 Overlay 上，不在任何
                   // Scaffold/Material 内。缺了它，Text 会吃到 Flutter 的
                   // DefaultTextStyle.fallback()——那是一套醒目的警告样式
@@ -502,7 +510,9 @@ class _AppSnackBarHostState extends State<_AppSnackBarHost>
                         child: Container(
                           constraints: BoxConstraints(maxWidth: maxW),
                           padding: const EdgeInsets.symmetric(
-                              horizontal: 16, vertical: 8),
+                            horizontal: 16,
+                            vertical: 8,
+                          ),
                           decoration: BoxDecoration(
                             color: isDark
                                 ? Colors.white.withValues(alpha: 0.12)

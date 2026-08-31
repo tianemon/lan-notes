@@ -117,13 +117,13 @@ class DiscoveryService {
     ],
     Duration replyCooldown = const Duration(seconds: 30),
     List<InternetAddress>? broadcastAddresses,
-  })  : _announceInterval = announceInterval,
-        _scanWindow = scanWindow,
-        _localDeviceId = deviceId,
-        _localDeviceName = deviceName ?? '',
-        _initialAnnounceDelays = initialAnnounceDelays,
-        _replyCooldown = replyCooldown,
-        _broadcastAddresses = broadcastAddresses;
+  }) : _announceInterval = announceInterval,
+       _scanWindow = scanWindow,
+       _localDeviceId = deviceId,
+       _localDeviceName = deviceName ?? '',
+       _initialAnnounceDelays = initialAnnounceDelays,
+       _replyCooldown = replyCooldown,
+       _broadcastAddresses = broadcastAddresses;
 
   /// 周期通告间隔（默认 30s；可配置，测试用短间隔验证周期通告维持在线）。
   final Duration _announceInterval;
@@ -386,8 +386,7 @@ class DiscoveryService {
       final now = DateTime.now();
       final before = _devices.length;
       _devices.removeWhere(
-        (_, entry) =>
-            now.difference(entry.lastSeen) > _scanInactiveThreshold,
+        (_, entry) => now.difference(entry.lastSeen) > _scanInactiveThreshold,
       );
       if (_devices.length != before) _pushMerged();
     });
@@ -467,13 +466,15 @@ class DiscoveryService {
     final deviceId = _localDeviceId;
     final port = _localPort;
     if (socket == null || deviceId == null || port == null) return;
-    final payload = utf8.encode(json.encode({
-      'v': kAnnounceVersion,
-      'deviceId': deviceId,
-      'name': _localDeviceName,
-      'port': port,
-      'ts': DateTime.now().millisecondsSinceEpoch,
-    }));
+    final payload = utf8.encode(
+      json.encode({
+        'v': kAnnounceVersion,
+        'deviceId': deviceId,
+        'name': _localDeviceName,
+        'port': port,
+        'ts': DateTime.now().millisecondsSinceEpoch,
+      }),
+    );
     // iOS 特例：无法发送 UDP **广播**（需 multicast entitlement，无正式
     // 开发者账号无法申请；dart socket 发广播静默丢包、原生 Network.framework
     // 报 Permission denied，均有实测）。改为 **子网全 IP 单播**——枚举本机
@@ -493,7 +494,9 @@ class DiscoveryService {
       if (freshSocket == null) return;
       final targets = await _broadcastTargets();
       // ignore: avoid_print
-      print('[discovery] iOS 广播重建后 targets=${targets.map((t) => t.address).toList()}');
+      print(
+        '[discovery] iOS 广播重建后 targets=${targets.map((t) => t.address).toList()}',
+      );
       for (final target in targets) {
         try {
           freshSocket.send(payload, target, kDiscoveryPort);
@@ -516,9 +519,7 @@ class DiscoveryService {
         print('[discovery] 广播已发送 -> ${target.address}');
       } catch (e) {
         // 发送失败（网络抖动/网卡变化/路由不可达）容忍：不影响后续通告。
-        stderr.writeln(
-          '[discovery] 通告发送失败 -> $target: $e',
-        );
+        stderr.writeln('[discovery] 通告发送失败 -> $target: $e');
       }
     }
   }
@@ -673,7 +674,9 @@ class DiscoveryService {
     final datagram = socket.receive();
     if (datagram == null) return;
     // ignore: avoid_print
-    print('[discovery] 收到 UDP 包 ${datagram.address.address}:${datagram.port} len=${datagram.data.length}');
+    print(
+      '[discovery] 收到 UDP 包 ${datagram.address.address}:${datagram.port} len=${datagram.data.length}',
+    );
     final announcement = _parseAnnouncement(datagram.data);
     if (announcement == null) return; // 坏包/非本协议：忽略
     _handleAnnouncement(announcement, datagram.address);
@@ -774,7 +777,6 @@ class DiscoveryService {
       _devices.values.map((entry) => entry.device).toList(),
     );
   }
-
 }
 
 /// 一条 UDP 通告（解析后的结构化表示）。

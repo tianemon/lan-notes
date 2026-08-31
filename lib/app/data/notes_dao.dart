@@ -48,7 +48,7 @@ class NoteDao extends DatabaseAccessor<AppDatabase> with _$NoteDaoMixin {
         deletedAt: current.deletedAt,
         isPinned: current.isPinned,
         tags: current.tags,
-      origin: current.origin,
+        origin: current.origin,
         folderId: current.folderId,
         localOnly: current.localOnly,
       );
@@ -73,7 +73,7 @@ class NoteDao extends DatabaseAccessor<AppDatabase> with _$NoteDaoMixin {
         deletedAt: current.deletedAt,
         isPinned: isPinned,
         tags: current.tags,
-      origin: current.origin,
+        origin: current.origin,
         folderId: current.folderId,
         localOnly: current.localOnly,
       );
@@ -181,8 +181,14 @@ class NoteDao extends DatabaseAccessor<AppDatabase> with _$NoteDaoMixin {
 
   /// 软删除：deletedAt 置当前时间 + version+1（笔记进回收站，内容保留）。
   ///
-  /// 幂等：已处于回收站（deletedAt 非 null）时直接返回当前值，不重复
-  /// 递增版本。返回软删除后的笔记（含新 version / deletedAt）。
+  /// updatedAt **保持不变**（保留删除前的原值）：若在此把它改成删除时间，
+  /// 恢复（restore 保留 updatedAt）后列表就会显示「刚刚」，丢失原本的更新
+  /// 日期——列表按 updatedAt 排序，恢复后应回到原时间位置。回收站的
+  /// 「删除于」用 deletedAt（独立字段），不受影响；version+1 已保证软删除
+  /// 经 note_upsert 跨设备传播（同步 LWW 以 version 优先、软删除条目操作
+  /// 时间以 deletedAt 计）。幂等：已处于回收站（deletedAt 非 null）时直接
+  /// 返回当前值，不重复递增版本。返回软删除后的笔记（含新 version /
+  /// deletedAt）。
   Future<Note> softDelete(String id) async {
     final current = await getById(id);
     if (current == null) {
@@ -197,14 +203,14 @@ class NoteDao extends DatabaseAccessor<AppDatabase> with _$NoteDaoMixin {
       title: current.title,
       content: current.content,
       createdAt: current.createdAt,
-      updatedAt: now,
+      updatedAt: current.updatedAt,
       version: current.version + 1,
       deletedAt: now,
       isPinned: current.isPinned,
       tags: current.tags,
       origin: current.origin,
-        folderId: current.folderId,
-        localOnly: current.localOnly,
+      folderId: current.folderId,
+      localOnly: current.localOnly,
     );
     await update(notes).replace(trashed.toRow());
     return trashed;
@@ -234,8 +240,8 @@ class NoteDao extends DatabaseAccessor<AppDatabase> with _$NoteDaoMixin {
       isPinned: current.isPinned,
       tags: current.tags,
       origin: current.origin,
-        folderId: current.folderId,
-        localOnly: current.localOnly,
+      folderId: current.folderId,
+      localOnly: current.localOnly,
     );
     await update(notes).replace(restored.toRow());
     return restored;
@@ -306,8 +312,9 @@ class NoteDao extends DatabaseAccessor<AppDatabase> with _$NoteDaoMixin {
 
   /// 按 id 查询单条笔记，不存在返回 null。
   Future<Note?> getById(String id) async {
-    final row =
-        await (select(notes)..where((t) => t.id.equals(id))).getSingleOrNull();
+    final row = await (select(
+      notes,
+    )..where((t) => t.id.equals(id))).getSingleOrNull();
     return row == null ? null : Note.fromRow(row);
   }
 
@@ -317,9 +324,9 @@ class NoteDao extends DatabaseAccessor<AppDatabase> with _$NoteDaoMixin {
   /// 自动推送新值（编辑页据此实时刷新）；笔记不存在时推 null。
   Stream<Note?> watchById(String id) {
     final query = select(notes)..where((t) => t.id.equals(id));
-    return query
-        .watchSingleOrNull()
-        .map((row) => row == null ? null : Note.fromRow(row));
+    return query.watchSingleOrNull().map(
+      (row) => row == null ? null : Note.fromRow(row),
+    );
   }
 
   /// 搜索流：关键字同时匹配标题与正文（LIKE 模糊匹配），置顶优先 →
@@ -334,10 +341,12 @@ class NoteDao extends DatabaseAccessor<AppDatabase> with _$NoteDaoMixin {
     }
     final pattern = '%${_escapeLikePattern(trimmed)}%';
     final query = select(notes)
-      ..where((t) =>
-          t.deletedAt.isNull() &
-          (t.title.like(pattern, escapeChar: r'\') |
-              t.content.like(pattern, escapeChar: r'\')))
+      ..where(
+        (t) =>
+            t.deletedAt.isNull() &
+            (t.title.like(pattern, escapeChar: r'\') |
+                t.content.like(pattern, escapeChar: r'\')),
+      )
       ..orderBy([
         (t) => OrderingTerm.desc(t.isPinned),
         (t) => OrderingTerm.desc(t.updatedAt),
@@ -381,8 +390,9 @@ class NoteDao extends DatabaseAccessor<AppDatabase> with _$NoteDaoMixin {
 
   /// 按 id 读取墓碑（墓碑拦截判断用），不存在返回 null。
   Future<Tombstone?> getTombstone(String id) async {
-    return (select(tombstones)..where((t) => t.id.equals(id)))
-        .getSingleOrNull();
+    return (select(
+      tombstones,
+    )..where((t) => t.id.equals(id))).getSingleOrNull();
   }
 
   /// 全部墓碑（全量同步携带，对端据此拦截过期数据防复活）。

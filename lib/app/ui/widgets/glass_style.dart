@@ -54,10 +54,7 @@ BoxDecoration styledDecoration({
         ? Colors.white.withValues(alpha: 0.1)
         : Colors.white.withValues(alpha: alpha),
     borderRadius: BorderRadius.circular(radius),
-    border: Border.all(
-      color: Colors.white.withValues(alpha: 0.12),
-      width: 0.5,
-    ),
+    border: Border.all(color: Colors.white.withValues(alpha: 0.12), width: 0.5),
     boxShadow: [
       BoxShadow(
         color: Colors.black.withValues(alpha: 0.08),
@@ -131,7 +128,10 @@ class _GlassCardState extends State<GlassCard> {
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final decoration = styledListDecoration(isDark: isDark, radius: widget.radius);
+    final decoration = styledListDecoration(
+      isDark: isDark,
+      radius: widget.radius,
+    );
 
     Widget card = AnimatedScale(
       scale: _hovered ? 1.012 : 1.0,
@@ -228,9 +228,9 @@ class GlassDialog extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               DefaultTextStyle(
-                style: Theme.of(context).textTheme.titleLarge!.copyWith(
-                  fontWeight: FontWeight.w600,
-                ),
+                style: Theme.of(
+                  context,
+                ).textTheme.titleLarge!.copyWith(fontWeight: FontWeight.w600),
                 child: title,
               ),
               const SizedBox(height: 12),
@@ -269,11 +269,8 @@ Future<T?> showGlassDialog<T>({
   return showDialog<T>(
     context: context,
     barrierDismissible: barrierDismissible,
-    builder: (_) => GlassDialog(
-      title: title,
-      content: content,
-      actions: actions,
-    ),
+    builder: (_) =>
+        GlassDialog(title: title, content: content, actions: actions),
   );
 }
 

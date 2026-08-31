@@ -20,7 +20,9 @@ import '../theme.dart';
 /// v4（task-27）：配对去密码改**请求-同意**——弹窗为「xx 请求连接」，
 /// 用户点「同意」（[accept] → [SyncService.acceptPairing]）或「拒绝」
 /// （[reject] → [SyncService.rejectPairing]），不再输入密码。
-final pairingDialogControllerProvider = Provider<PairingDialogController>((ref) {
+final pairingDialogControllerProvider = Provider<PairingDialogController>((
+  ref,
+) {
   final controller = PairingDialogController(
     service: ref.watch(syncServiceProvider),
     navigatorKey: rootNavigatorKey,
@@ -31,10 +33,7 @@ final pairingDialogControllerProvider = Provider<PairingDialogController>((ref) 
 
 /// 配对弹窗 UI 状态（全局控制器驱动）。
 class _PairingDialogState {
-  const _PairingDialogState({
-    this.request,
-    this.queued = 0,
-  });
+  const _PairingDialogState({this.request, this.queued = 0});
 
   /// 当前展示的配对请求（配对队列队首）。
   final PairingRequestedEvent? request;
@@ -68,8 +67,9 @@ class PairingDialogController {
   final List<PairingRequestedEvent> _pending = [];
 
   /// 弹窗内容状态（ValueListenableBuilder 驱动，实时更新排队数）。
-  final ValueNotifier<_PairingDialogState> _state =
-      ValueNotifier(const _PairingDialogState());
+  final ValueNotifier<_PairingDialogState> _state = ValueNotifier(
+    const _PairingDialogState(),
+  );
 
   StreamSubscription<PairingEvent>? _sub;
   StreamSubscription<DeviceIdConflictEvent>? _conflictSub;
@@ -102,7 +102,9 @@ class PairingDialogController {
         _pending.removeWhere((e) => e.deviceId == event.deviceId);
         _refresh();
         _maybeCloseDialog();
-        _showSnack('与「${_displayName(event.deviceName, deviceId: event.deviceId)}」配对成功');
+        _showSnack(
+          '与「${_displayName(event.deviceName, deviceId: event.deviceId)}」配对成功',
+        );
       case PairingCancelledEvent(): // 请求失效（断开/取消/拒绝）：移除
         _pending.removeWhere((e) => e.connectionId == event.connectionId);
         _refresh();
@@ -121,10 +123,7 @@ class PairingDialogController {
   void _refresh() {
     final next = _pending.isEmpty
         ? const _PairingDialogState()
-        : _PairingDialogState(
-            request: _pending.first,
-            queued: _pending.length,
-          );
+        : _PairingDialogState(request: _pending.first, queued: _pending.length);
     _state.value = next;
   }
 
@@ -148,7 +147,10 @@ class PairingDialogController {
             });
             return const SizedBox.shrink();
           }
-          final name = _displayName(request.deviceName, deviceId: request.deviceId);
+          final name = _displayName(
+            request.deviceName,
+            deviceId: request.deviceId,
+          );
           return GlassDialog(
             title: Text('「$name」请求连接'),
             content: Column(
@@ -177,14 +179,8 @@ class PairingDialogController {
               ],
             ),
             actions: [
-              TextButton(
-                onPressed: reject,
-                child: const Text('拒绝'),
-              ),
-              FilledButton(
-                onPressed: accept,
-                child: const Text('同意'),
-              ),
+              TextButton(onPressed: reject, child: const Text('拒绝')),
+              FilledButton(onPressed: accept, child: const Text('同意')),
             ],
           );
         },

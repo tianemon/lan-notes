@@ -16,6 +16,7 @@ import 'attachments.dart';
 import 'device_identity.dart';
 import 'folder_repository.dart';
 import 'note_repository.dart';
+import 'search_history.dart';
 
 /// 全局数据库单例：drift_flutter 的 driftDatabase 跨平台统一初始化
 /// （桌面/移动端走系统 SQLite，见 docs/技术架构.md 第 6 节）。
@@ -145,7 +146,10 @@ final dropZoneRegistryProvider = Provider<DropZoneRegistry>((ref) {
 /// 文件夹仓库：文件夹数据读写统一入口，UI 与同步层共用。
 final folderRepositoryProvider = Provider<FolderRepository>((ref) {
   final db = ref.watch(databaseProvider);
-  final repo = FolderRepository(db.folderDao, ref.watch(noteRepositoryProvider));
+  final repo = FolderRepository(
+    db.folderDao,
+    ref.watch(noteRepositoryProvider),
+  );
   ref.onDispose(repo.dispose);
   return repo;
 });
@@ -166,6 +170,15 @@ final activeNotesStreamProvider = StreamProvider<List<Note>>((ref) {
 /// （幂等，见 [AppSettingsStore.ensureLoaded]），加载完成前返回平台默认值。
 final appSettingsProvider = Provider<AppSettingsStore>((ref) {
   final store = AppSettingsStore(ref.watch(databaseProvider).deviceDao);
+  unawaited(store.ensureLoaded());
+  return store;
+});
+
+/// 搜索历史存储（编辑页笔记内搜索 / 首页列表搜索各一份，互不相通）：
+/// 构造即触发加载（幂等，见 [SearchHistoryStore.ensureLoaded]），加载
+/// 完成前 [SearchHistoryStore.entries] 返回空列表。
+final searchHistoryProvider = Provider<SearchHistoryStore>((ref) {
+  final store = SearchHistoryStore(ref.watch(databaseProvider).deviceDao);
   unawaited(store.ensureLoaded());
   return store;
 });
@@ -198,9 +211,13 @@ final notesStreamProvider = StreamProvider<List<Note>>((ref) {
   }
   // 文件夹筛选：在搜索流基础上按 folderId 过滤（个人量级 Dart 侧过滤
   // 开销可忽略）。「未分类」= folderId 为 null 的笔记。
-  return repo.search(keyword).map((notes) => folderId == kUncategorizedFolderId
-      ? notes.where((n) => n.folderId == null).toList()
-      : notes.where((n) => n.folderId == folderId).toList());
+  return repo
+      .search(keyword)
+      .map(
+        (notes) => folderId == kUncategorizedFolderId
+            ? notes.where((n) => n.folderId == null).toList()
+            : notes.where((n) => n.folderId == folderId).toList(),
+      );
 });
 
 /// 回收站流：drift 流式查询，按 deletedAt 倒序（回收站页数据源）。

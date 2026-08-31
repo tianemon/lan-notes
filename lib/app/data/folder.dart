@@ -37,16 +37,16 @@ class Folder {
   });
 
   Folder copyWith({String? origin}) => Folder(
-        id: id,
-        name: name,
-        createdAt: createdAt,
-        updatedAt: updatedAt,
-        version: version,
-        deletedAt: deletedAt,
-        isPinned: isPinned,
-        sortOrder: sortOrder,
-        origin: origin ?? this.origin,
-      );
+    id: id,
+    name: name,
+    createdAt: createdAt,
+    updatedAt: updatedAt,
+    version: version,
+    deletedAt: deletedAt,
+    isPinned: isPinned,
+    sortOrder: sortOrder,
+    origin: origin ?? this.origin,
+  );
 
   /// 从 drift 行数据转换（数据库读取 → 领域对象）。
   factory Folder.fromRow(FolderRow row) {

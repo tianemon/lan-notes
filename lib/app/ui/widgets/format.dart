@@ -34,9 +34,8 @@ String relativeTime(int epochMs) {
   final time = DateTime.fromMillisecondsSinceEpoch(epochMs);
   // 按「自然日」判断当天（而非 24h 差值）：昨天 23:00 的笔记在今天 01:00
   // 看也属于非当天，直接显示具体日期时间（用户需求）。
-  final isToday = time.year == now.year &&
-      time.month == now.month &&
-      time.day == now.day;
+  final isToday =
+      time.year == now.year && time.month == now.month && time.day == now.day;
   if (isToday) {
     final diff = now.difference(time);
     if (diff.inMinutes < 1) {

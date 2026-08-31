@@ -41,10 +41,14 @@ class FolderDrawer extends ConsumerWidget {
     // stale 条目（已删除文件夹）由 rectOf 返回 null 自动跳过。
     final registry = ref.read(dropZoneRegistryProvider);
 
-    final folders =
-        foldersAsync.maybeWhen(data: (d) => d, orElse: () => const <Folder>[]);
-    final notes =
-        notesAsync.maybeWhen(data: (d) => d, orElse: () => const <Note>[]);
+    final folders = foldersAsync.maybeWhen(
+      data: (d) => d,
+      orElse: () => const <Folder>[],
+    );
+    final notes = notesAsync.maybeWhen(
+      data: (d) => d,
+      orElse: () => const <Note>[],
+    );
     // 各文件夹活跃笔记数（计数展示；folderId 指向已删除文件夹的笔记
     // 不属任何活跃文件夹，只计入「全部」）。
     final countOf = <String, int>{};
@@ -65,8 +69,8 @@ class FolderDrawer extends ConsumerWidget {
           Positioned.fill(
             child: GestureDetector(
               behavior: HitTestBehavior.opaque,
-              onTap: () => ref.read(folderDrawerOpenProvider.notifier).state =
-                  false,
+              onTap: () =>
+                  ref.read(folderDrawerOpenProvider.notifier).state = false,
             ),
           ),
         // 抽屉本体：AnimatedPositioned 滑入滑出（左对齐，宽 200）。
@@ -99,122 +103,122 @@ class FolderDrawer extends ConsumerWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                  // 顶部虚线「+ 新建文件夹」拖放目标（常驻显示，
-                  // 落点处理在 notes_list 拖拽收尾）。
-                  const Padding(
-                    padding: EdgeInsets.fromLTRB(10, 10, 10, 9),
-                    child: _NewFolderDropTarget(),
-                  ),
-                  Expanded(
-                    child: ListView(
-                      // auto-scroll（拖拽到抽屉边缘自动滚动）：controller +
-                      // 列表 key 由 DropZoneRegistry 持有，notes_list 拖拽时
-                      // 取可视区域矩形判边缘并驱动滚动。
-                      key: registry.drawerListKey,
-                      controller: registry.drawerScroll,
-                      padding: const EdgeInsets.only(bottom: 24),
-                      children: [
-                        // 「全部」：默认选中；可拖放落点（用户确认：样式
-                        // 与普通文件夹一致、图标一致、可拖入=移出文件夹）。
-                        _FixedDropTarget(
-                          id: '__all__',
-                          child: _FolderItem(
-                            id: null,
-                            name: '全部',
-                            icon: const AppFolderIcon(),
-                            count: notes.length,
-                            selected: selected == null,
-                            onTap: () {
-                              ref
-                                  .read(folderFilterProvider.notifier)
-                                  .state = null;
-                              ref
-                                  .read(folderDrawerOpenProvider.notifier)
-                                  .state = false;
-                            },
-                          ),
-                        ),
-                        if (pinned.isNotEmpty) ...[
-                          const _SectionLabel('置顶'),
-                          _ReorderZone(
-                            key: const ValueKey('pinned'),
-                            folders: pinned,
-                            selected: selected,
-                            countOf: countOf,
-                            onReorder: (newOrder) => _reorderZone(
-                              ref,
-                              folders: folders,
-                              zone: pinned,
-                              newOrder: newOrder,
-                            ),
-                          ),
-                        ],
-                        if (normal.isNotEmpty) ...[
-                          // 普通区标题已去掉（用户确认：普通文件夹与置顶
-                          // 文件夹连续排列，不显示「文件夹」分区标签；
-                          // 分区逻辑保留——置顶在前、普通在后，区内拖拽
-                          // 排序、跨区走菜单置顶/取消置顶）。
-                          _ReorderZone(
-                            key: const ValueKey('normal'),
-                            folders: normal,
-                            selected: selected,
-                            countOf: countOf,
-                            onReorder: (newOrder) => _reorderZone(
-                              ref,
-                              folders: folders,
-                              zone: normal,
-                              newOrder: newOrder,
-                            ),
-                          ),
-                        ],
-                        // 「未分类」：固定置底（文件夹列表最下方）——显示
-                        // 不属于任何文件夹的笔记；可拖放落点（拖入 = 移出
-                        // 文件夹，与拖到「全部」同语义）。
-                        _FixedDropTarget(
-                          id: kUncategorizedFolderId,
-                          child: _FolderItem(
-                            id: kUncategorizedFolderId,
-                            name: '未分类',
-                            icon: const AppFolderOffIcon(),
-                            count: uncategorizedCount,
-                            selected: selected == kUncategorizedFolderId,
-                            fixed: true,
-                            onTap: () {
-                              ref
-                                      .read(folderFilterProvider.notifier)
-                                      .state =
-                                  kUncategorizedFolderId;
-                              ref
-                                  .read(folderDrawerOpenProvider.notifier)
-                                  .state = false;
-                              // 多选态切筛选：退出多选（与普通文件夹同语义）。
-                              if (ref.read(multiSelectProvider).isNotEmpty) {
-                                ref.read(multiSelectProvider.notifier).exit();
-                              }
-                            },
-                          ),
-                        ),
-                      ],
+                    // 顶部虚线「+ 新建文件夹」拖放目标（常驻显示，
+                    // 落点处理在 notes_list 拖拽收尾）。
+                    const Padding(
+                      padding: EdgeInsets.fromLTRB(10, 10, 10, 9),
+                      child: _NewFolderDropTarget(),
                     ),
-                  ),
-                ],
+                    Expanded(
+                      child: ListView(
+                        // auto-scroll（拖拽到抽屉边缘自动滚动）：controller +
+                        // 列表 key 由 DropZoneRegistry 持有，notes_list 拖拽时
+                        // 取可视区域矩形判边缘并驱动滚动。
+                        key: registry.drawerListKey,
+                        controller: registry.drawerScroll,
+                        padding: const EdgeInsets.only(bottom: 24),
+                        children: [
+                          // 「全部」：默认选中；可拖放落点（用户确认：样式
+                          // 与普通文件夹一致、图标一致、可拖入=移出文件夹）。
+                          _FixedDropTarget(
+                            id: '__all__',
+                            child: _FolderItem(
+                              id: null,
+                              name: '全部',
+                              icon: const AppFolderIcon(),
+                              count: notes.length,
+                              selected: selected == null,
+                              onTap: () {
+                                ref.read(folderFilterProvider.notifier).state =
+                                    null;
+                                ref
+                                        .read(folderDrawerOpenProvider.notifier)
+                                        .state =
+                                    false;
+                              },
+                            ),
+                          ),
+                          if (pinned.isNotEmpty) ...[
+                            const _SectionLabel('置顶'),
+                            _ReorderZone(
+                              key: const ValueKey('pinned'),
+                              folders: pinned,
+                              selected: selected,
+                              countOf: countOf,
+                              onReorder: (newOrder) => _reorderZone(
+                                ref,
+                                folders: folders,
+                                zone: pinned,
+                                newOrder: newOrder,
+                              ),
+                            ),
+                          ],
+                          if (normal.isNotEmpty) ...[
+                            // 普通区标题已去掉（用户确认：普通文件夹与置顶
+                            // 文件夹连续排列，不显示「文件夹」分区标签；
+                            // 分区逻辑保留——置顶在前、普通在后，区内拖拽
+                            // 排序、跨区走菜单置顶/取消置顶）。
+                            _ReorderZone(
+                              key: const ValueKey('normal'),
+                              folders: normal,
+                              selected: selected,
+                              countOf: countOf,
+                              onReorder: (newOrder) => _reorderZone(
+                                ref,
+                                folders: folders,
+                                zone: normal,
+                                newOrder: newOrder,
+                              ),
+                            ),
+                          ],
+                          // 「未分类」：固定置底（文件夹列表最下方）——显示
+                          // 不属于任何文件夹的笔记；可拖放落点（拖入 = 移出
+                          // 文件夹，与拖到「全部」同语义）。
+                          _FixedDropTarget(
+                            id: kUncategorizedFolderId,
+                            child: _FolderItem(
+                              id: kUncategorizedFolderId,
+                              name: '未分类',
+                              icon: const AppFolderOffIcon(),
+                              count: uncategorizedCount,
+                              selected: selected == kUncategorizedFolderId,
+                              fixed: true,
+                              onTap: () {
+                                ref.read(folderFilterProvider.notifier).state =
+                                    kUncategorizedFolderId;
+                                ref
+                                        .read(folderDrawerOpenProvider.notifier)
+                                        .state =
+                                    false;
+                                // 多选态切筛选：退出多选（与普通文件夹同语义）。
+                                if (ref.read(multiSelectProvider).isNotEmpty) {
+                                  ref.read(multiSelectProvider.notifier).exit();
+                                }
+                              },
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
           ),
         ),
-      ),
-    ],
-  );
+      ],
+    );
   }
 
   /// 区内拖拽重排：把 [zone] 换成 [newOrder]，与另一区原顺序组装完整
   /// 列表（置顶区在前），按位置归一化 sortOrder（[FolderRepository.reorder]）。
   /// 透传是否实际写库（幂等拖回原位 = false，用于乐观覆盖兜底释放）。
   Future<bool> _reorderZone(
-    WidgetRef ref,
-    {required List<Folder> folders,
+    WidgetRef ref, {
+    required List<Folder> folders,
     required List<Folder> zone,
-    required List<Folder> newOrder}) async {
+    required List<Folder> newOrder,
+  }) async {
     final other = folders.where((f) => !zone.contains(f)).toList();
     final merged = <Folder>[
       for (final f in other.where((f) => f.isPinned)) f,
@@ -224,7 +228,6 @@ class FolderDrawer extends ConsumerWidget {
     ];
     return ref.read(folderRepositoryProvider).reorder(merged);
   }
-
 }
 
 /// 分区标题（置顶）。
@@ -348,15 +351,18 @@ class _ReorderZoneState extends ConsumerState<_ReorderZone> {
         //   （顺序本就一致，无闪烁）；
         // - 写库异常：流不会推送，同样立即清除（回滚到库状态）。
         unawaited(
-          widget.onReorder(list).then((changed) {
-            if (!changed && mounted) {
-              setState(() => _optimistic = null);
-            }
-          }).catchError((Object _) {
-            if (mounted) {
-              setState(() => _optimistic = null);
-            }
-          }),
+          widget
+              .onReorder(list)
+              .then((changed) {
+                if (!changed && mounted) {
+                  setState(() => _optimistic = null);
+                }
+              })
+              .catchError((Object _) {
+                if (mounted) {
+                  setState(() => _optimistic = null);
+                }
+              }),
         );
       },
       itemBuilder: (context, index) {
@@ -386,9 +392,7 @@ class _ReorderZoneState extends ConsumerState<_ReorderZone> {
             index: index,
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 4),
-              child: _DragHandleIcon(
-                size: isDesktopPlatform ? 16 : 20,
-              ),
+              child: _DragHandleIcon(size: isDesktopPlatform ? 16 : 20),
             ),
           ),
         );
@@ -528,11 +532,11 @@ class _FolderItemState extends ConsumerState<_FolderItem> {
             final isDark = Theme.of(context).brightness == Brightness.dark;
             final bgColor = highlightedBg
                 ? (isDark
-                    ? colorScheme.surfaceContainerHighest
-                    : colorScheme.surfaceContainer)
+                      ? colorScheme.surfaceContainerHighest
+                      : colorScheme.surfaceContainer)
                 : (_hovered && isDesktopPlatform
-                    ? colorScheme.surfaceContainerLow
-                    : null);
+                      ? colorScheme.surfaceContainerLow
+                      : null);
             // 选中/悬停背景左右各缩进 10px（用户确认：看起来窄一些），
             // 内容同步缩进（与新建按钮水平 padding 对齐）。
             // 项高度：桌面 36、手机 40（用户确认：手机端内容略小，
@@ -584,7 +588,10 @@ class _FolderItemState extends ConsumerState<_FolderItem> {
                       color: colorScheme.outline,
                     ),
                   ),
-                  if (dragHandle != null) ...[const SizedBox(width: 2), dragHandle!],
+                  if (dragHandle != null) ...[
+                    const SizedBox(width: 2),
+                    dragHandle!,
+                  ],
                 ],
               ),
             );
@@ -643,8 +650,7 @@ class _FolderItemState extends ConsumerState<_FolderItem> {
     if (id == null || !context.mounted) return;
     final overlay = Overlay.of(context);
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final bgColor =
-        isDark ? const Color(0xFF1B2838) : const Color(0xFFFDFCF9);
+    final bgColor = isDark ? const Color(0xFF1B2838) : const Color(0xFFFDFCF9);
     final borderColor = isDark
         ? Colors.white.withValues(alpha: 0.08)
         : Colors.black.withValues(alpha: 0.06);
@@ -688,16 +694,20 @@ class _FolderItemState extends ConsumerState<_FolderItem> {
         iconColor: Theme.of(context).colorScheme.error,
         onTap: () {
           overlayEntry.remove();
-          final folder = ref.read(foldersStreamProvider).value?.where(
-                (f) => f.id == id,
-              ).firstOrNull;
+          final folder = ref
+              .read(foldersStreamProvider)
+              .value
+              ?.where((f) => f.id == id)
+              .firstOrNull;
           if (folder == null) return;
           // 计数：从当前活跃笔记流计算。
-          final noteCount = ref
-              .read(activeNotesStreamProvider)
-              .value
-              ?.where((n) => n.folderId == folder.id)
-              .length ?? 0;
+          final noteCount =
+              ref
+                  .read(activeNotesStreamProvider)
+                  .value
+                  ?.where((n) => n.folderId == folder.id)
+                  .length ??
+              0;
           showDeleteFolderDialog(
             context,
             ref,
@@ -748,10 +758,7 @@ class _FolderItemState extends ConsumerState<_FolderItem> {
                   ],
                 ),
                 clipBehavior: Clip.antiAlias,
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: items,
-                ),
+                child: Column(mainAxisSize: MainAxisSize.min, children: items),
               ),
             ),
           ),
@@ -834,8 +841,8 @@ class _NewFolderDropTargetState extends ConsumerState<_NewFolderDropTarget> {
                   color: dropHover
                       ? colorScheme.primary.withValues(alpha: 0.12)
                       : (_mouseHover
-                          ? colorScheme.surfaceContainerHighest
-                          : colorScheme.surfaceContainerLow),
+                            ? colorScheme.surfaceContainerHighest
+                            : colorScheme.surfaceContainerLow),
                   border: Border.all(
                     color: dropHover
                         ? colorScheme.primary

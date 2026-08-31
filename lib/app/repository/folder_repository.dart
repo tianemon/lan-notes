@@ -184,7 +184,8 @@ class FolderRepository {
     }
     final remoteOpTime = remote.deletedAt ?? remote.updatedAt;
     final localOpTime = local.deletedAt ?? local.updatedAt;
-    final remoteWins = remote.version > local.version ||
+    final remoteWins =
+        remote.version > local.version ||
         (remote.version == local.version && remoteOpTime > localOpTime);
     if (!remoteWins) {
       return false;

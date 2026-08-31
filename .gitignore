@@ -29,3 +29,4 @@ macos/Podfile.lock
 
 # 私有开发文档（本地独立维护，不公开）
 docs/
+.workbuddy/

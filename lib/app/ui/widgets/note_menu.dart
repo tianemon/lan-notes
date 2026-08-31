@@ -114,9 +114,9 @@ Future<void> runNoteMenuAction(
             content: Text(
               ids.length == 1
                   ? '开启后这篇笔记不再同步到其他设备，'
-                      '其他设备上已有的副本会被删除。'
+                        '其他设备上已有的副本会被删除。'
                   : '开启后这 ${ids.length} 条笔记不再同步到其他设备，'
-                      '其他设备上已有的副本会被删除。',
+                        '其他设备上已有的副本会被删除。',
             ),
             actions: [
               TextButton(
@@ -131,7 +131,9 @@ Future<void> runNoteMenuAction(
           );
           if (confirmed != true) return;
         }
-        await ref.read(noteRepositoryProvider).setLocalOnlyForNotes(ids, enable);
+        await ref
+            .read(noteRepositoryProvider)
+            .setLocalOnlyForNotes(ids, enable);
         if (!context.mounted) return;
         showAppSnackBar(enable ? '已设为仅本机保存' : '已恢复同步到其他设备');
       }
@@ -144,9 +146,7 @@ Future<void> runNoteMenuAction(
         if (confirmed != true || !context.mounted) return;
         await ref.read(noteRepositoryProvider).softDeleteNotes(ids);
         if (!context.mounted) return;
-        showAppSnackBar(
-          ids.length == 1 ? '已移到回收站' : '已删除 ${ids.length} 条笔记',
-        );
+        showAppSnackBar(ids.length == 1 ? '已移到回收站' : '已删除 ${ids.length} 条笔记');
       }
   }
   // 操作完成：退出多选态（右键菜单场景下集合本就为空，无副作用）。

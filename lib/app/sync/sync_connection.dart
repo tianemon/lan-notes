@@ -16,23 +16,20 @@ class _SyncChannel {
     required Stream<dynamic> stream,
     required void Function(Object?) send,
     required Future<void> Function() close,
-  })  : _stream = stream,
-        _send = send,
-        _close = close;
+  }) : _stream = stream,
+       _send = send,
+       _close = close;
 
   /// 包装服务端升级后的 WebSocket。
-  factory _SyncChannel.server(WebSocket socket) => _SyncChannel._(
-        stream: socket,
-        send: socket.add,
-        close: socket.close,
-      );
+  factory _SyncChannel.server(WebSocket socket) =>
+      _SyncChannel._(stream: socket, send: socket.add, close: socket.close);
 
   /// 包装客户端连接得到的 IOWebSocketChannel。
   factory _SyncChannel.client(IOWebSocketChannel channel) => _SyncChannel._(
-        stream: channel.stream,
-        send: channel.sink.add,
-        close: channel.sink.close,
-      );
+    stream: channel.stream,
+    send: channel.sink.add,
+    close: channel.sink.close,
+  );
 
   final Stream<dynamic> _stream;
   final void Function(Object?) _send;
@@ -52,8 +49,8 @@ class SyncServerConnection {
     required this.remoteAddress,
     required _SyncChannel channel,
     required void Function(SyncServerConnection) onClosed,
-  })  : _channel = channel,
-        _onClosed = onClosed {
+  }) : _channel = channel,
+       _onClosed = onClosed {
     _subscription = channel.stream.listen(
       _onData,
       onError: (Object _) => _handleClosed(),
@@ -282,6 +279,7 @@ class SyncClient {
       completer.complete(_state == SyncConnectionState.connected);
       sub.cancel();
     }
+
     sub = stateChanges.listen((state) {
       if (state == SyncConnectionState.connected ||
           state == SyncConnectionState.disconnected) {

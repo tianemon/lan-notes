@@ -149,7 +149,11 @@ class _TrashItem extends ConsumerWidget {
 }
 
 /// 恢复单条：调 [NoteRepository.restoreNote]，SnackBar 提示「已恢复」。
-Future<void> _restoreNote(BuildContext context, WidgetRef ref, Note note) async {
+Future<void> _restoreNote(
+  BuildContext context,
+  WidgetRef ref,
+  Note note,
+) async {
   await ref.read(noteRepositoryProvider).restoreNote(note.id);
   if (!context.mounted) return;
   showAppSnackBar('已恢复', duration: const Duration(seconds: 1));

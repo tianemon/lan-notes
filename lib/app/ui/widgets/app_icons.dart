@@ -13,7 +13,14 @@ import 'package:flutter/material.dart';
 // `AppIcon(icon: AppIconData.folder, size: 17, color: ...)`。
 
 /// 手绘图标枚举（避免运行时 IconData 变量引用 + 不依赖字体）。
-enum AppIconData { folder, folderOff, desktopWindows, smartphone, laptopMac, tablet }
+enum AppIconData {
+  folder,
+  folderOff,
+  desktopWindows,
+  smartphone,
+  laptopMac,
+  tablet,
+}
 
 /// 手绘图标组件：用法同 Icon，但走 CustomPainter。
 class AppIcon extends StatelessWidget {
@@ -50,7 +57,10 @@ class AppFolderIcon extends StatelessWidget {
     return AppIcon(
       AppIconData.folder,
       size: size ?? theme.size ?? 24,
-      color: color ?? theme.color ?? Theme.of(context).colorScheme.onSurfaceVariant,
+      color:
+          color ??
+          theme.color ??
+          Theme.of(context).colorScheme.onSurfaceVariant,
     );
   }
 }
@@ -69,7 +79,10 @@ class AppFolderOffIcon extends StatelessWidget {
     return AppIcon(
       AppIconData.folderOff,
       size: size ?? theme.size ?? 24,
-      color: color ?? theme.color ?? Theme.of(context).colorScheme.onSurfaceVariant,
+      color:
+          color ??
+          theme.color ??
+          Theme.of(context).colorScheme.onSurfaceVariant,
     );
   }
 }

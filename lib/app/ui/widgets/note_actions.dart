@@ -52,8 +52,9 @@ class _FolderNameField extends StatefulWidget {
 }
 
 class _FolderNameFieldState extends State<_FolderNameField> {
-  late final TextEditingController _controller =
-      TextEditingController(text: widget.initial);
+  late final TextEditingController _controller = TextEditingController(
+    text: widget.initial,
+  );
 
   /// 当前输入文本（确认按钮经 GlobalKey 读取）。
   String get text => _controller.text;
@@ -135,9 +136,9 @@ class _MoveToSheet extends ConsumerWidget {
               padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
               child: Text(
                 '移动到',
-                style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                  fontWeight: FontWeight.w600,
-                ),
+                style: Theme.of(
+                  context,
+                ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
               ),
             ),
             const Divider(height: 1),

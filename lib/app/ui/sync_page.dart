@@ -215,8 +215,6 @@ class _SyncPageState extends ConsumerState<SyncPage> {
     }
   }
 
-
-
   /// 切换某已配对设备的同步方向（task-32）：向对端同步 / 从对端同步。
   ///
   /// 只控制数据推送/接收，不影响连接（配对成功永远自动连接）。
@@ -322,28 +320,28 @@ class _SyncPageState extends ConsumerState<SyncPage> {
                       width: 72,
                       child: Text(
                         '设备名称',
-                        style:
-                            Theme.of(context).textTheme.titleMedium?.copyWith(
-                                  fontWeight: FontWeight.w600,
-                                  color: Theme.of(context)
-                                      .colorScheme
-                                      .onSurfaceVariant,
-                                ),
+                        style: Theme.of(context).textTheme.titleMedium
+                            ?.copyWith(
+                              fontWeight: FontWeight.w600,
+                              color: Theme.of(
+                                context,
+                              ).colorScheme.onSurfaceVariant,
+                            ),
                       ),
                     ),
                     Expanded(
                       child: TextField(
                         controller: _nameController,
-                        style:
-                            Theme.of(context).textTheme.titleMedium?.copyWith(
-                                  fontWeight: FontWeight.w600,
-                                ),
+                        style: Theme.of(context).textTheme.titleMedium
+                            ?.copyWith(fontWeight: FontWeight.w600),
                         // 参考端口输入框：描边 + 内边距，不贴边。
                         decoration: const InputDecoration(
                           isDense: true,
                           border: OutlineInputBorder(),
                           contentPadding: EdgeInsets.symmetric(
-                              horizontal: 10, vertical: 8),
+                            horizontal: 10,
+                            vertical: 8,
+                          ),
                         ),
                         onChanged: (_) => _scheduleSaveDeviceName(),
                       ),
@@ -356,8 +354,8 @@ class _SyncPageState extends ConsumerState<SyncPage> {
                   child: Text(
                     '其他设备看到的名称',
                     style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: Theme.of(context).colorScheme.outline,
-                        ),
+                      color: Theme.of(context).colorScheme.outline,
+                    ),
                   ),
                 ),
               ],
@@ -406,6 +404,7 @@ class _SyncPageState extends ConsumerState<SyncPage> {
       ),
     );
   }
+
   /// 顶部同步总开关（task-31/32 去文案）+ 端口行（task-32）：
   /// 单行「同步」标题 + 精致开关；下方端口输入框 + 重启按钮。
   Widget _buildSwitchCard(BuildContext context) {
@@ -458,43 +457,45 @@ class _SyncPageState extends ConsumerState<SyncPage> {
             const SizedBox(height: 10),
             Row(
               children: [
-              SizedBox(
-                width: 72,
-                child: Text(
-                  '端口',
-                  style: theme.textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w600,
-                    color: colorScheme.onSurfaceVariant,
+                SizedBox(
+                  width: 72,
+                  child: Text(
+                    '端口',
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w600,
+                      color: colorScheme.onSurfaceVariant,
+                    ),
                   ),
                 ),
-              ),
-              Expanded(
-                child: TextField(
-                  controller: _portController,
-                  keyboardType: TextInputType.number,
-                  enabled: !_busy,
-                  style: theme.textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w600,
-                  ),
-                  decoration: const InputDecoration(
-                    isDense: true,
-                    border: OutlineInputBorder(),
-                    contentPadding:
-                        EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                Expanded(
+                  child: TextField(
+                    controller: _portController,
+                    keyboardType: TextInputType.number,
+                    enabled: !_busy,
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w600,
+                    ),
+                    decoration: const InputDecoration(
+                      isDense: true,
+                      border: OutlineInputBorder(),
+                      contentPadding: EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 8,
+                      ),
+                    ),
                   ),
                 ),
-              ),
-              const SizedBox(width: 8),
-              OutlinedButton(
-                onPressed: _busy ? null : _restartSyncWithPort,
-                style: OutlinedButton.styleFrom(
-                  visualDensity: VisualDensity.compact,
-                  padding: const EdgeInsets.symmetric(horizontal: 14),
+                const SizedBox(width: 8),
+                OutlinedButton(
+                  onPressed: _busy ? null : _restartSyncWithPort,
+                  style: OutlinedButton.styleFrom(
+                    visualDensity: VisualDensity.compact,
+                    padding: const EdgeInsets.symmetric(horizontal: 14),
+                  ),
+                  child: const Text('重启'),
                 ),
-                child: const Text('重启'),
-              ),
-            ],
-          ),
+              ],
+            ),
             // 端口说明小字：与输入框起点对齐（需求 3）。
             Padding(
               padding: const EdgeInsets.only(left: 72, top: 4),
@@ -656,10 +657,12 @@ class _SyncPageState extends ConsumerState<SyncPage> {
     final colorScheme = theme.colorScheme;
     // 设备列表：过滤本机 + 已配对（已配对在「已配对设备」卡展示，task-32）。
     final devices = _discoveredDevices
-        .where((d) =>
-            !d.isSelf &&
-            !(d.deviceId != null &&
-                _service.trustedDeviceIds.contains(d.deviceId)))
+        .where(
+          (d) =>
+              !d.isSelf &&
+              !(d.deviceId != null &&
+                  _service.trustedDeviceIds.contains(d.deviceId)),
+        )
         .toList();
 
     return GlassCard(
@@ -693,8 +696,9 @@ class _SyncPageState extends ConsumerState<SyncPage> {
                                 child: SizedBox(
                                   width: 14,
                                   height: 14,
-                                  child:
-                                      CircularProgressIndicator(strokeWidth: 2),
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
                                 ),
                               ),
                             )
@@ -729,8 +733,7 @@ class _SyncPageState extends ConsumerState<SyncPage> {
                 SlimSwitch(
                   value: _announcing,
                   onChanged: _syncEnabled
-                      ? (value) =>
-                          value ? _announceNow() : _stopAnnouncing()
+                      ? (value) => value ? _announceNow() : _stopAnnouncing()
                       : null,
                 ),
               ],
@@ -768,9 +771,7 @@ class _SyncPageState extends ConsumerState<SyncPage> {
       _scanning = true;
       _scanSeq++; // 重置转圈动画（KeyedSubtree key 变化强制重建）
     });
-    unawaited(
-      _service.scanOnce(window: kDiscoveryWindow, restart: true),
-    );
+    unawaited(_service.scanOnce(window: kDiscoveryWindow, restart: true));
     _scanUiTimer = Timer(kDiscoveryWindow, () {
       if (mounted) setState(() => _scanning = false);
     });
@@ -802,7 +803,6 @@ class _SyncPageState extends ConsumerState<SyncPage> {
     await _service.stopAnnouncing();
     if (mounted) setState(() => _announcing = false);
   }
-
 }
 
 /// 单个发现设备的列表项：设备名 + IP:端口（+ 设备 ID 前缀）+ 配对状态标记。
@@ -934,10 +934,7 @@ class _StatusBadge extends StatelessWidget {
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: color.withValues(alpha: 0.5)),
       ),
-      child: Text(
-        label,
-        style: TextStyle(fontSize: 11, color: color),
-      ),
+      child: Text(label, style: TextStyle(fontSize: 11, color: color)),
     );
   }
 }
@@ -947,10 +944,7 @@ class _StatusBadge extends StatelessWidget {
 /// [pulse] 为 true 时透明度循环呼吸（连接中/自动连接中状态），
 /// 动画轻量（单个 FadeTransition，不叠加 GPU 开销）。
 class _StatusDot extends StatefulWidget {
-  const _StatusDot({
-    required this.color,
-    this.pulse = false,
-  });
+  const _StatusDot({required this.color, this.pulse = false});
 
   final Color color;
   final bool pulse;
@@ -995,9 +989,10 @@ class _StatusDotState extends State<_StatusDot>
   @override
   Widget build(BuildContext context) {
     final opacity = widget.pulse
-        ? Tween<double>(begin: 0.4, end: 1).animate(
-            CurvedAnimation(parent: _pulse, curve: Curves.easeInOut),
-          )
+        ? Tween<double>(
+            begin: 0.4,
+            end: 1,
+          ).animate(CurvedAnimation(parent: _pulse, curve: Curves.easeInOut))
         : const AlwaysStoppedAnimation(1.0);
     return FadeTransition(
       opacity: opacity,
@@ -1132,9 +1127,7 @@ class _PeerTile extends StatelessWidget {
           MenuAnchor(
             style: MenuStyle(
               shape: WidgetStatePropertyAll(
-                RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
               ),
               backgroundColor: WidgetStatePropertyAll(colorScheme.surface),
               padding: WidgetStatePropertyAll(EdgeInsets.zero),
@@ -1173,7 +1166,7 @@ class _PeerTile extends StatelessWidget {
     );
   }
 
-/// 开关行：左侧小标签 + 右侧 [SlimSwitch]（紧凑行）。
+  /// 开关行：左侧小标签 + 右侧 [SlimSwitch]（紧凑行）。
   Widget _buildSwitchRow({
     required BuildContext context,
     required String label,

@@ -58,19 +58,19 @@ class Note {
   });
 
   Note copyWith({String? origin, bool? localOnly}) => Note(
-        id: id,
-        title: title,
-        content: content,
-        createdAt: createdAt,
-        updatedAt: updatedAt,
-        version: version,
-        deletedAt: deletedAt,
-        isPinned: isPinned,
-        tags: tags,
-        origin: origin ?? this.origin,
-        folderId: folderId,
-        localOnly: localOnly ?? this.localOnly,
-      );
+    id: id,
+    title: title,
+    content: content,
+    createdAt: createdAt,
+    updatedAt: updatedAt,
+    version: version,
+    deletedAt: deletedAt,
+    isPinned: isPinned,
+    tags: tags,
+    origin: origin ?? this.origin,
+    folderId: folderId,
+    localOnly: localOnly ?? this.localOnly,
+  );
 
   /// 同步载荷：仅本机保存的笔记**只传标记、不传内容**。
   ///

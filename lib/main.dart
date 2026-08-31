@@ -1,7 +1,8 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:flutter_quill/flutter_quill.dart' show FlutterQuillLocalizations;
+import 'package:flutter_quill/flutter_quill.dart'
+    show FlutterQuillLocalizations;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'app/repository/intro_note.dart';
@@ -9,7 +10,6 @@ import 'app/repository/providers.dart';
 import 'app/router.dart';
 import 'app/theme.dart';
 import 'app/ui/pairing_dialog_controller.dart';
-
 
 void main() async {
   // 首帧前加载持久化 UI 设置（主题模式等）：本地 SQLite 毫秒级完成，
@@ -34,10 +34,9 @@ void main() async {
       container.read(noteRepositoryProvider),
     );
   } catch (_) {}
-  runApp(UncontrolledProviderScope(
-    container: container,
-    child: const LanNotesApp(),
-  ));
+  runApp(
+    UncontrolledProviderScope(container: container, child: const LanNotesApp()),
+  );
 }
 
 /// 应用根组件：MaterialApp.router 接入 GoRouter（见 docs/技术架构.md 第 5 节）。
@@ -151,7 +150,8 @@ class _LanNotesAppState extends ConsumerState<LanNotesApp>
         themeMode: mode,
         // flutter_quill 工具栏/编辑器本地化（task-29 富文本）：不带这些
         // delegate 时 QuillSimpleToolbar 会抛 MissingFlutterQuillLocalization。
-        localizationsDelegates: FlutterQuillLocalizations.localizationsDelegates,
+        localizationsDelegates:
+            FlutterQuillLocalizations.localizationsDelegates,
         supportedLocales: FlutterQuillLocalizations.supportedLocales,
         // 主题切换全局过渡：默认 200ms 偏生硬，350ms + easeInOutCubic
         // 让背景/卡片/文字整体平滑渐变（丝滑主题切换）。

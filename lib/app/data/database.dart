@@ -214,66 +214,64 @@ class AppDatabase extends _$AppDatabase {
   /// 全新库走 onCreate 建全部表。
   @override
   MigrationStrategy get migration => MigrationStrategy(
-        onCreate: (m) => m.createAll(),
-        onUpgrade: (m, from, to) async {
-          if (from < 2) {
-            await m.createTable(deviceSettings);
-            await m.createTable(trustedDevices);
-          }
-          if (from < 3) {
-            await m.addColumn(trustedDevices, trustedDevices.autoConnect);
-          }
-          if (from < 4) {
-            await m.addColumn(notes, notes.deletedAt);
-            await m.createTable(tombstones);
-          }
-          if (from < 5) {
-            await m.addColumn(trustedDevices, trustedDevices.secret);
-          }
-          if (from < 6) {
-            await m.addColumn(notes, notes.isPinned);
-          }
-          if (from < 7) {
-            await m.addColumn(notes, notes.tags);
-          }
-          if (from < 8) {
-            await _migrateContentToDeltaV8();
-          }
-          if (from < 9) {
-            await m.addColumn(trustedDevices, trustedDevices.syncToPeer);
-            await m.addColumn(trustedDevices, trustedDevices.syncFromPeer);
-          }
-          if (from < 10) {
-            await m.addColumn(notes, notes.origin);
-          }
-          if (from < 11) {
-            // 幂等：表/列可能已存在（此前部分迁移残留——数据库 schemaVersion
-            // 未更新但表与列已建，实测用户库 duplicate column / table exists
-            // 报错）。建表前查 sqlite_master，加列前查 PRAGMA。
-            final tableExists = await customSelect(
-              "SELECT name FROM sqlite_master WHERE type='table' AND name='folders'",
-            ).get();
-            if (tableExists.isEmpty) {
-              await m.createTable(folders);
-            }
-            final cols = await customSelect('PRAGMA table_info(notes)').get();
-            final hasFolderId =
-                cols.any((c) => c.data['name'] == 'folder_id');
-            if (!hasFolderId) {
-              await m.addColumn(notes, notes.folderId);
-            }
-          }
-          if (from < 12) {
-            // 同 v11 的幂等处理：列可能已残留存在（PRAGMA 查到即跳过）。
-            final cols = await customSelect('PRAGMA table_info(notes)').get();
-            final hasLocalOnly =
-                cols.any((c) => c.data['name'] == 'local_only');
-            if (!hasLocalOnly) {
-              await m.addColumn(notes, notes.localOnly);
-            }
-          }
-        },
-      );
+    onCreate: (m) => m.createAll(),
+    onUpgrade: (m, from, to) async {
+      if (from < 2) {
+        await m.createTable(deviceSettings);
+        await m.createTable(trustedDevices);
+      }
+      if (from < 3) {
+        await m.addColumn(trustedDevices, trustedDevices.autoConnect);
+      }
+      if (from < 4) {
+        await m.addColumn(notes, notes.deletedAt);
+        await m.createTable(tombstones);
+      }
+      if (from < 5) {
+        await m.addColumn(trustedDevices, trustedDevices.secret);
+      }
+      if (from < 6) {
+        await m.addColumn(notes, notes.isPinned);
+      }
+      if (from < 7) {
+        await m.addColumn(notes, notes.tags);
+      }
+      if (from < 8) {
+        await _migrateContentToDeltaV8();
+      }
+      if (from < 9) {
+        await m.addColumn(trustedDevices, trustedDevices.syncToPeer);
+        await m.addColumn(trustedDevices, trustedDevices.syncFromPeer);
+      }
+      if (from < 10) {
+        await m.addColumn(notes, notes.origin);
+      }
+      if (from < 11) {
+        // 幂等：表/列可能已存在（此前部分迁移残留——数据库 schemaVersion
+        // 未更新但表与列已建，实测用户库 duplicate column / table exists
+        // 报错）。建表前查 sqlite_master，加列前查 PRAGMA。
+        final tableExists = await customSelect(
+          "SELECT name FROM sqlite_master WHERE type='table' AND name='folders'",
+        ).get();
+        if (tableExists.isEmpty) {
+          await m.createTable(folders);
+        }
+        final cols = await customSelect('PRAGMA table_info(notes)').get();
+        final hasFolderId = cols.any((c) => c.data['name'] == 'folder_id');
+        if (!hasFolderId) {
+          await m.addColumn(notes, notes.folderId);
+        }
+      }
+      if (from < 12) {
+        // 同 v11 的幂等处理：列可能已残留存在（PRAGMA 查到即跳过）。
+        final cols = await customSelect('PRAGMA table_info(notes)').get();
+        final hasLocalOnly = cols.any((c) => c.data['name'] == 'local_only');
+        if (!hasLocalOnly) {
+          await m.addColumn(notes, notes.localOnly);
+        }
+      }
+    },
+  );
 
   /// 单条 content 转 delta JSON（v8 迁移与纯 Dart 验证脚本共用）。
   ///
@@ -290,7 +288,9 @@ class AppDatabase extends _$AppDatabase {
       // 非 JSON：纯文本，走转换
     }
     final text = content.endsWith('\n') ? content : '$content\n';
-    return jsonEncode([{'insert': text}]);
+    return jsonEncode([
+      {'insert': text},
+    ]);
   }
 
   /// v8 迁移（task-29 富文本）：存量 notes.content 逐行转换为 delta JSON。
@@ -304,8 +304,9 @@ class AppDatabase extends _$AppDatabase {
     for (final row in rows) {
       final converted = contentToDeltaJson(row.content);
       if (converted != row.content) {
-        await (update(notes)..where((t) => t.id.equals(row.id)))
-            .write(NotesCompanion(content: Value(converted)));
+        await (update(notes)..where((t) => t.id.equals(row.id))).write(
+          NotesCompanion(content: Value(converted)),
+        );
       }
     }
   }

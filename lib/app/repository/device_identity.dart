@@ -45,22 +45,20 @@ const String kPeerAddressKeyPrefix = 'peer_addr_';
 /// SyncService 在握手/配对等身份敏感路径前 await [ensureLoaded]，
 /// 保证对外使用的始终是持久化身份（而非启动时的临时值）。
 class DeviceIdentityStore {
-  DeviceIdentityStore(
-    this._dao, {
-    String? deviceId,
-    String? deviceName,
-  })  : // 先给内存临时值（构造后即可同步读取）；ensureLoaded 后为持久化权威值。
-        // 注入参数用于验证脚本构造确定性身份（见 temp/drafts/verify_sync.dart）。
-        _deviceId = deviceId ?? const Uuid().v4(),
-        _deviceName = deviceName ?? _defaultDeviceName() {
+  DeviceIdentityStore(this._dao, {String? deviceId, String? deviceName})
+    : // 先给内存临时值（构造后即可同步读取）；ensureLoaded 后为持久化权威值。
+      // 注入参数用于验证脚本构造确定性身份（见 temp/drafts/verify_sync.dart）。
+      _deviceId = deviceId ?? const Uuid().v4(),
+      _deviceName = deviceName ?? _defaultDeviceName() {
     // task-32：主机名取不到时（落到默认兜底名），改用 deviceId 前 8 位
     // 作为设备名（避免对端看到「lan-notes」/「Android 设备」这类无意义名）。
     if (deviceName == null &&
         (_deviceName == 'lan-notes' ||
             _deviceName == 'Android 设备' ||
             _deviceName.isEmpty)) {
-      _deviceName =
-          _deviceId.length <= 8 ? _deviceId : _deviceId.substring(0, 8);
+      _deviceName = _deviceId.length <= 8
+          ? _deviceId
+          : _deviceId.substring(0, 8);
     }
   }
 
@@ -210,12 +208,11 @@ class DeviceIdentityStore {
     String deviceId, {
     required bool syncToPeer,
     required bool syncFromPeer,
-  }) =>
-      _dao.setSyncDirections(
-        deviceId,
-        syncToPeer: syncToPeer,
-        syncFromPeer: syncFromPeer,
-      );
+  }) => _dao.setSyncDirections(
+    deviceId,
+    syncToPeer: syncToPeer,
+    syncFromPeer: syncFromPeer,
+  );
 
   /// 全部已配对设备（按配对时间倒序）。
   Future<List<TrustedDevice>> getTrustedDevices() => _dao.getAllTrusted();
@@ -227,10 +224,7 @@ class DeviceIdentityStore {
     if (deviceId.isEmpty || address.isEmpty || port <= 0) {
       return Future.value();
     }
-    return _dao.setSetting(
-      '$kPeerAddressKeyPrefix$deviceId',
-      '$address:$port',
-    );
+    return _dao.setSetting('$kPeerAddressKeyPrefix$deviceId', '$address:$port');
   }
 
   /// 读取某对端设备的缓存地址（`ip:port`；无缓存返回 null）。
@@ -278,9 +272,7 @@ String _defaultDeviceName() {
     final name = Platform.localHostname.trim();
     // Android 上 gethostname 常返回空或 'localhost'（无实际设备名），
     // 直接回退平台默认名，避免对方看到空名/localhost（真机反馈修复）。
-    if (name.isNotEmpty &&
-        name != 'localhost' &&
-        name != 'localhost.local') {
+    if (name.isNotEmpty && name != 'localhost' && name != 'localhost.local') {
       return name;
     }
   } catch (_) {

@@ -22,16 +22,16 @@ class SettingsPage extends ConsumerWidget {
 
   /// 主题档位 → ThemeMode：0=亮 / 1=暗 / 2=跟随系统（与 EE 顺序一致）。
   ThemeMode _modeOf(int index) => switch (index) {
-        0 => ThemeMode.light,
-        1 => ThemeMode.dark,
-        _ => ThemeMode.system,
-      };
+    0 => ThemeMode.light,
+    1 => ThemeMode.dark,
+    _ => ThemeMode.system,
+  };
 
   int _indexOf(ThemeMode mode) => switch (mode) {
-        ThemeMode.light => 0,
-        ThemeMode.dark => 1,
-        ThemeMode.system => 2,
-      };
+    ThemeMode.light => 0,
+    ThemeMode.dark => 1,
+    ThemeMode.system => 2,
+  };
 
   void _onThemeChanged(BuildContext context, WidgetRef ref, int index) {
     final mode = _modeOf(index);
@@ -125,98 +125,108 @@ class _ThemeSliderState extends State<_ThemeSlider> {
     // 当前显示位置：拖拽中用 _dragValue，否则用 widget.value。
     final displayValue = _dragValue ?? widget.value.toDouble();
 
-    return LayoutBuilder(builder: (context, constraints) {
-      final totalWidth = constraints.maxWidth;
-      const height = 52.0;
-      const padding = 4.0;
-      final segmentWidth = (totalWidth - padding * 2) / 3;
-      final thumbWidth = segmentWidth - 2;
-      final thumbLeft = padding + 1 + displayValue * segmentWidth;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final totalWidth = constraints.maxWidth;
+        const height = 52.0;
+        const padding = 4.0;
+        final segmentWidth = (totalWidth - padding * 2) / 3;
+        final thumbWidth = segmentWidth - 2;
+        final thumbLeft = padding + 1 + displayValue * segmentWidth;
 
-      return GestureDetector(
-        onHorizontalDragStart: (details) {
-          setState(() => _dragValue = widget.value.toDouble());
-        },
-        onHorizontalDragUpdate: (details) {
-          if (_dragValue == null) return;
-          final newVal = _dragValue! + details.delta.dx / segmentWidth;
-          setState(() => _dragValue = newVal.clamp(0.0, 2.0));
-        },
-        onHorizontalDragEnd: (details) {
-          if (_dragValue == null) return;
-          final snapped = _dragValue!.round().clamp(0, 2);
-          setState(() => _dragValue = null);
-          widget.onChanged(snapped);
-        },
-        child: AnimatedContainer(
-          // 颜色过渡与全局主题动画（350ms）同步，切换时平滑渐变
-          duration: const Duration(milliseconds: 350),
-          curve: Curves.easeInOutCubic,
-          height: height,
-          decoration: BoxDecoration(
-            color: bgColor,
-            borderRadius: BorderRadius.circular(14),
-          ),
-          child: Stack(children: [
-            // 滑动滑块背景
-            AnimatedPositioned(
-              duration: _dragValue != null
-                  ? Duration.zero
-                  : const Duration(milliseconds: 250),
-              curve: Curves.easeOutCubic,
-              left: thumbLeft,
-              top: padding,
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 350),
-                curve: Curves.easeInOutCubic,
-                width: thumbWidth,
-                height: height - padding * 2,
-                decoration: BoxDecoration(
-                  color: thumbColor,
-                  borderRadius: BorderRadius.circular(11),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.12),
-                      blurRadius: 8,
-                      offset: const Offset(0, 2),
-                    ),
-                  ],
-                ),
-              ),
+        return GestureDetector(
+          onHorizontalDragStart: (details) {
+            setState(() => _dragValue = widget.value.toDouble());
+          },
+          onHorizontalDragUpdate: (details) {
+            if (_dragValue == null) return;
+            final newVal = _dragValue! + details.delta.dx / segmentWidth;
+            setState(() => _dragValue = newVal.clamp(0.0, 2.0));
+          },
+          onHorizontalDragEnd: (details) {
+            if (_dragValue == null) return;
+            final snapped = _dragValue!.round().clamp(0, 2);
+            setState(() => _dragValue = null);
+            widget.onChanged(snapped);
+          },
+          child: AnimatedContainer(
+            // 颜色过渡与全局主题动画（350ms）同步，切换时平滑渐变
+            duration: const Duration(milliseconds: 350),
+            curve: Curves.easeInOutCubic,
+            height: height,
+            decoration: BoxDecoration(
+              color: bgColor,
+              borderRadius: BorderRadius.circular(14),
             ),
-            // 三个选项：图标 + 文案（选中主色高亮）
-            Row(children: List.generate(3, (i) {
-              final selected = widget.value == i;
-              return Expanded(
-                child: GestureDetector(
-                  behavior: HitTestBehavior.opaque,
-                  onTap: () => widget.onChanged(i),
-                  child: SizedBox(
-                    height: height,
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(_items[i].$1,
-                            size: 18,
-                            color: selected ? accent : Colors.grey),
-                        const SizedBox(width: 4),
-                        Text(_items[i].$2,
-                            style: TextStyle(
-                              fontSize: 13,
-                              fontWeight: selected
-                                  ? FontWeight.w600
-                                  : FontWeight.normal,
-                              color: selected ? accent : Colors.grey,
-                            )),
+            child: Stack(
+              children: [
+                // 滑动滑块背景
+                AnimatedPositioned(
+                  duration: _dragValue != null
+                      ? Duration.zero
+                      : const Duration(milliseconds: 250),
+                  curve: Curves.easeOutCubic,
+                  left: thumbLeft,
+                  top: padding,
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 350),
+                    curve: Curves.easeInOutCubic,
+                    width: thumbWidth,
+                    height: height - padding * 2,
+                    decoration: BoxDecoration(
+                      color: thumbColor,
+                      borderRadius: BorderRadius.circular(11),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.12),
+                          blurRadius: 8,
+                          offset: const Offset(0, 2),
+                        ),
                       ],
                     ),
                   ),
                 ),
-              );
-            })),
-          ]),
-        ),
-      );
-    });
+                // 三个选项：图标 + 文案（选中主色高亮）
+                Row(
+                  children: List.generate(3, (i) {
+                    final selected = widget.value == i;
+                    return Expanded(
+                      child: GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onTap: () => widget.onChanged(i),
+                        child: SizedBox(
+                          height: height,
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(
+                                _items[i].$1,
+                                size: 18,
+                                color: selected ? accent : Colors.grey,
+                              ),
+                              const SizedBox(width: 4),
+                              Text(
+                                _items[i].$2,
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: selected
+                                      ? FontWeight.w600
+                                      : FontWeight.normal,
+                                  color: selected ? accent : Colors.grey,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    );
+                  }),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
   }
 }

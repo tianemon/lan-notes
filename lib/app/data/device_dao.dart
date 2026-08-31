@@ -19,17 +19,17 @@ class DeviceDao extends DatabaseAccessor<AppDatabase> with _$DeviceDaoMixin {
 
   /// 读取一条设置（不存在返回 null）。
   Future<String?> getSetting(String key) async {
-    final row = await (select(deviceSettings)
-          ..where((t) => t.key.equals(key)))
-        .getSingleOrNull();
+    final row = await (select(
+      deviceSettings,
+    )..where((t) => t.key.equals(key))).getSingleOrNull();
     return row?.value;
   }
 
   /// 按前缀读取全部设置（task-27：地址缓存遍历）。
   Future<Map<String, String>> getSettingsByPrefix(String prefix) async {
-    final rows = await (select(deviceSettings)
-          ..where((t) => t.key.like('$prefix%')))
-        .get();
+    final rows = await (select(
+      deviceSettings,
+    )..where((t) => t.key.like('$prefix%'))).get();
     return {for (final row in rows) row.key: row.value};
   }
 
@@ -47,17 +47,17 @@ class DeviceDao extends DatabaseAccessor<AppDatabase> with _$DeviceDaoMixin {
 
   /// 设备是否在信任列表中（已配对）。
   Future<bool> isTrusted(String deviceId) async {
-    final row = await (select(trustedDevices)
-          ..where((t) => t.deviceId.equals(deviceId)))
-        .getSingleOrNull();
+    final row = await (select(
+      trustedDevices,
+    )..where((t) => t.deviceId.equals(deviceId))).getSingleOrNull();
     return row != null;
   }
 
   /// 读取某已配对设备的认证密钥（未配对/无密钥返回 null）。
   Future<String?> getSecret(String deviceId) async {
-    final row = await (select(trustedDevices)
-          ..where((t) => t.deviceId.equals(deviceId)))
-        .getSingleOrNull();
+    final row = await (select(
+      trustedDevices,
+    )..where((t) => t.deviceId.equals(deviceId))).getSingleOrNull();
     return row?.secret;
   }
 
@@ -87,8 +87,9 @@ class DeviceDao extends DatabaseAccessor<AppDatabase> with _$DeviceDaoMixin {
 
   /// 从信任列表移除（取消配对）。
   Future<void> removeTrusted(String deviceId) async {
-    await (delete(trustedDevices)..where((t) => t.deviceId.equals(deviceId)))
-        .go();
+    await (delete(
+      trustedDevices,
+    )..where((t) => t.deviceId.equals(deviceId))).go();
   }
 
   /// 设置某已配对设备的「自动连接」开关（task-16，WiFi 式）。
@@ -106,17 +107,20 @@ class DeviceDao extends DatabaseAccessor<AppDatabase> with _$DeviceDaoMixin {
     required bool syncToPeer,
     required bool syncFromPeer,
   }) async {
-    await (update(trustedDevices)..where((t) => t.deviceId.equals(deviceId)))
-        .write(TrustedDevicesCompanion(
-      syncToPeer: Value(syncToPeer),
-      syncFromPeer: Value(syncFromPeer),
-    ));
+    await (update(
+      trustedDevices,
+    )..where((t) => t.deviceId.equals(deviceId))).write(
+      TrustedDevicesCompanion(
+        syncToPeer: Value(syncToPeer),
+        syncFromPeer: Value(syncFromPeer),
+      ),
+    );
   }
 
   /// 全部已配对设备（按配对时间倒序）。
   Future<List<TrustedDevice>> getAllTrusted() async {
-    return (select(trustedDevices)
-          ..orderBy([(t) => OrderingTerm.desc(t.pairedAt)]))
-        .get();
+    return (select(
+      trustedDevices,
+    )..orderBy([(t) => OrderingTerm.desc(t.pairedAt)])).get();
   }
 }

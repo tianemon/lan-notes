@@ -158,10 +158,7 @@ class _NotesListState extends ConsumerState<NotesList> {
           // 改为顶对齐（列表从顶部开始）；空态内部自行居中（见 _EmptyState）。
           layoutBuilder: (currentChild, previousChildren) => Stack(
             alignment: Alignment.topCenter,
-            children: [
-              ...previousChildren,
-              ?currentChild,
-            ],
+            children: [...previousChildren, ?currentChild],
           ),
           transitionBuilder: (child, animation) => FadeTransition(
             opacity: animation,
@@ -322,8 +319,7 @@ class _NotesListState extends ConsumerState<NotesList> {
     // ghost 层（Overlay 顶层渲染，不挤压列表；笔记数据快照传入）。
     // 必须包 Material（透明）——Overlay 顶层无 Material 上下文时，
     // Text 会继承 MaterialApp 的调试默认样式（黄色下划线）。
-    final currentNotes =
-        ref.read(notesStreamProvider).value ?? const <Note>[];
+    final currentNotes = ref.read(notesStreamProvider).value ?? const <Note>[];
     _ghostEntry = OverlayEntry(
       builder: (_) => Material(
         type: MaterialType.transparency,
@@ -351,8 +347,7 @@ class _NotesListState extends ConsumerState<NotesList> {
   final Map<String, GlobalKey> _cardKeyRegistry = {};
 
   /// 注册卡片 key（NoteListItem build 时调用；按 id 复用稳定实例）。
-  GlobalKey registerCardKey(String id) =>
-      _cardKeyRegistry[id] ??= GlobalKey();
+  GlobalKey registerCardKey(String id) => _cardKeyRegistry[id] ??= GlobalKey();
 
   GlobalKey? _cardKeyOf(String id) => _cardKeyRegistry[id];
 
@@ -589,10 +584,7 @@ class _NoteListBody extends StatelessWidget {
             // 抽卡占位：高度收缩动画（补位平滑），松手恢复。
             return _ShrinkPlaceholder(key: ValueKey('ph-${note.id}'));
           }
-          return NoteListItem(
-            key: onRegisterCard(note.id),
-            note: note,
-          );
+          return NoteListItem(key: onRegisterCard(note.id), note: note);
         },
       );
     }
@@ -686,14 +678,9 @@ class _ShrinkPlaceholderState extends State<_ShrinkPlaceholder> {
 /// （[GlassCard]）；布局三段式——标题 16bold（无标题兜底）+ 摘要 13 灰
 /// （[maxSummaryLines] 行截断）+ 时间 11 outline。
 class NoteListItem extends ConsumerStatefulWidget {
-  const NoteListItem({
-    super.key,
-    required this.note,
-    this.maxSummaryLines = 2,
-  });
+  const NoteListItem({super.key, required this.note, this.maxSummaryLines = 2});
 
   final Note note;
-
 
   /// 摘要最大行数：单列/双列 2 行、四列 1 行（窄列适配，task-26）。
   final int maxSummaryLines;
@@ -844,10 +831,7 @@ class _NoteListItemState extends ConsumerState<NoteListItem> {
   /// 多选态：按住卡片移动即拖拽（drag 识别器赢竞技场，列表滚动被压制）。
   void _onVerticalDragStart(DragStartDetails d) {
     if (ref.read(multiSelectProvider).isEmpty) return;
-    _notesListState?._beginDrag(
-      d.globalPosition,
-      mainId: widget.note.id,
-    );
+    _notesListState?._beginDrag(d.globalPosition, mainId: widget.note.id);
   }
 
   void _onVerticalDragUpdate(DragUpdateDetails d) {
@@ -886,42 +870,42 @@ class _NoteListItemState extends ConsumerState<NoteListItem> {
         // 点按（含桌面右键 secondary tap，弹统一笔记菜单）+ 多选切换选中。
         TapGestureRecognizer:
             GestureRecognizerFactoryWithHandlers<TapGestureRecognizer>(
-          TapGestureRecognizer.new,
-          (r) {
-            r.onTapDown = multiActive ? (d) => _onTapDown(note.id) : null;
-            r.onTapUp = multiActive ? (d) => _onTapUp(note.id) : null;
-            r.onTapCancel = multiActive ? _onTapCancel : null;
-            // 桌面右键：弹统一笔记菜单（在鼠标位置）。
-            r.onSecondaryTapUp =
-                (d) => _showContextMenu(context, d.globalPosition);
-            r.onTap =
-                multiActive ? null : () => context.push('/editor/${note.id}');
-          },
-        ),
+              TapGestureRecognizer.new,
+              (r) {
+                r.onTapDown = multiActive ? (d) => _onTapDown(note.id) : null;
+                r.onTapUp = multiActive ? (d) => _onTapUp(note.id) : null;
+                r.onTapCancel = multiActive ? _onTapCancel : null;
+                // 桌面右键：弹统一笔记菜单（在鼠标位置）。
+                r.onSecondaryTapUp = (d) =>
+                    _showContextMenu(context, d.globalPosition);
+                r.onTap = multiActive
+                    ? null
+                    : () => context.push('/editor/${note.id}');
+              },
+            ),
         // 长按识别器常驻（进入多选后不中断，延续为拖拽）。
         LongPressGestureRecognizer:
             GestureRecognizerFactoryWithHandlers<LongPressGestureRecognizer>(
-          LongPressGestureRecognizer.new,
-          (r) {
-            r.onLongPressStart = _onLongPressStart;
-            r.onLongPressMoveUpdate = _onLongPressMoveUpdate;
-            r.onLongPressEnd = (_) => _onLongPressEnd();
-            r.onLongPressCancel = _onLongPressCancel;
-          },
-        ),
+              LongPressGestureRecognizer.new,
+              (r) {
+                r.onLongPressStart = _onLongPressStart;
+                r.onLongPressMoveUpdate = _onLongPressMoveUpdate;
+                r.onLongPressEnd = (_) => _onLongPressEnd();
+                r.onLongPressCancel = _onLongPressCancel;
+              },
+            ),
         // 多选：鼠标按住即拖（压掉列表滚动）；触摸/触控板滚动不参与。
         // 非多选不注册（回调全 null 的识别器仍会参与竞技场抢滚动）。
         if (multiActive)
           _MouseVerticalDragRecognizer:
-              GestureRecognizerFactoryWithHandlers<_MouseVerticalDragRecognizer>(
-            _MouseVerticalDragRecognizer.new,
-            (r) {
-              r.onStart = _onVerticalDragStart;
-              r.onUpdate = (d) => _onVerticalDragUpdate(d);
-              r.onEnd = (_) => _onVerticalDragEnd();
-              r.onCancel = _onVerticalDragCancel;
-            },
-          ),
+              GestureRecognizerFactoryWithHandlers<
+                _MouseVerticalDragRecognizer
+              >(_MouseVerticalDragRecognizer.new, (r) {
+                r.onStart = _onVerticalDragStart;
+                r.onUpdate = (d) => _onVerticalDragUpdate(d);
+                r.onEnd = (_) => _onVerticalDragEnd();
+                r.onCancel = _onVerticalDragCancel;
+              }),
       },
       child: GlassCard(
         heroTag: null,
@@ -1002,16 +986,12 @@ class _NoteListItemState extends ConsumerState<NoteListItem> {
   ///
   /// 自定义 Overlay 弹层：菜单项 hover/涟漪圆角贴合容器；宽度自适应
   /// 内容；定位在鼠标位置。
-  Future<void> _showContextMenu(
-    BuildContext context,
-    Offset tapGlobal,
-  ) async {
+  Future<void> _showContextMenu(BuildContext context, Offset tapGlobal) async {
     if (!context.mounted) return;
     final note = widget.note;
     final overlay = Overlay.of(context);
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final bgColor =
-        isDark ? const Color(0xFF1B2838) : const Color(0xFFFDFCF9);
+    final bgColor = isDark ? const Color(0xFF1B2838) : const Color(0xFFFDFCF9);
     final borderColor = isDark
         ? Colors.white.withValues(alpha: 0.08)
         : Colors.black.withValues(alpha: 0.06);
@@ -1033,8 +1013,8 @@ class _NoteListItemState extends ConsumerState<NoteListItem> {
           radius: i == 0
               ? BorderRadius.vertical(top: Radius.circular(radius))
               : (i == menuItems.length - 1
-                  ? BorderRadius.vertical(bottom: Radius.circular(radius))
-                  : BorderRadius.zero),
+                    ? BorderRadius.vertical(bottom: Radius.circular(radius))
+                    : BorderRadius.zero),
           icon: menuItems[i].icon,
           label: menuItems[i].label,
           labelColor: menuItems[i].danger
@@ -1087,10 +1067,7 @@ class _NoteListItemState extends ConsumerState<NoteListItem> {
                   ],
                 ),
                 clipBehavior: Clip.antiAlias,
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: items,
-                ),
+                child: Column(mainAxisSize: MainAxisSize.min, children: items),
               ),
             ),
           ),
@@ -1111,7 +1088,6 @@ class _NoteListItemState extends ConsumerState<NoteListItem> {
     // +4 余量：TextPainter 测量与真实渲染有亚像素差（曾 0.8px 溢出）。
     return (14 * 2 + 16 + 10 + tp.width + 4).ceilToDouble();
   }
-
 }
 
 /// 空态：区分「还没有笔记」与「搜索无结果」两种引导（图标 + 淡入）。
@@ -1130,7 +1106,9 @@ class _EmptyState extends StatelessWidget {
       // 撑满可用高度：空态内容垂直居中（列表态由 AnimatedSwitcher
       // topCenter 对齐顶置，空态在此内部居中）。
       height: double.infinity,
-      child: Center(child: EmptyHint(icon: icon, title: title, subtitle: subtitle)),
+      child: Center(
+        child: EmptyHint(icon: icon, title: title, subtitle: subtitle),
+      ),
     );
   }
 }
@@ -1169,10 +1147,7 @@ class _MenuButton extends StatelessWidget {
         onTap: onTap,
         borderRadius: radius, // hover 圆角贴合容器（首/末/单项圆角、中间直角）。
         child: ConstrainedBox(
-          constraints: BoxConstraints(
-            minWidth: width,
-            minHeight: height,
-          ),
+          constraints: BoxConstraints(minWidth: width, minHeight: height),
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 14),
             child: Row(
@@ -1210,15 +1185,10 @@ class _CheckCircle extends StatelessWidget {
           shape: BoxShape.circle,
           color: checked
               ? colorScheme.primary
-              : (isDark
-                    ? const Color(0xFF1B2838)
-                    : const Color(0xFFFDFCF9)),
+              : (isDark ? const Color(0xFF1B2838) : const Color(0xFFFDFCF9)),
           border: checked
               ? null
-              : Border.all(
-                  color: colorScheme.outlineVariant,
-                  width: 1.4,
-                ),
+              : Border.all(color: colorScheme.outlineVariant, width: 1.4),
         ),
         child: checked
             ? Icon(Icons.check, size: 15, color: colorScheme.onPrimary)
@@ -1239,8 +1209,7 @@ class _MultiSelectSheet extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final selected = ref.watch(multiSelectProvider);
     final notes = ref.watch(notesStreamProvider).value ?? const <Note>[];
-    final selectedNotes =
-        notes.where((n) => selected.contains(n.id)).toList();
+    final selectedNotes = notes.where((n) => selected.contains(n.id)).toList();
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final colorScheme = Theme.of(context).colorScheme;
 
@@ -1249,19 +1218,15 @@ class _MultiSelectSheet extends ConsumerWidget {
       tween: Tween(begin: const Offset(0, 1), end: Offset.zero),
       duration: const Duration(milliseconds: 280),
       curve: const Cubic(0.32, 0.72, 0, 1),
-      builder: (context, t, child) => FractionalTranslation(
-        translation: t,
-        child: child,
-      ),
+      builder: (context, t, child) =>
+          FractionalTranslation(translation: t, child: child),
       child: Container(
         // 底边贴紧窗口底部（用户确认：无底部间距、底部直角）。
         margin: const EdgeInsets.fromLTRB(12, 0, 12, 0),
         constraints: const BoxConstraints(maxWidth: 480),
         decoration: BoxDecoration(
           color: isDark ? const Color(0xFF223344) : const Color(0xFFFDFCF9),
-          borderRadius: const BorderRadius.vertical(
-            top: Radius.circular(20),
-          ),
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
           border: Border.all(
             color: isDark
                 ? Colors.white.withValues(alpha: 0.08)
@@ -1342,10 +1307,9 @@ class _SheetItemState extends State<_SheetItem> {
           padding: const EdgeInsets.symmetric(vertical: 8),
           decoration: BoxDecoration(
             color: _hovered
-                ? Theme.of(context)
-                    .colorScheme
-                    .onSurface
-                    .withValues(alpha: 0.06)
+                ? Theme.of(
+                    context,
+                  ).colorScheme.onSurface.withValues(alpha: 0.06)
                 : null,
             borderRadius: BorderRadius.circular(14),
           ),
@@ -1479,22 +1443,27 @@ class _GhostLayerState extends State<_GhostLayer>
   /// 拿起进场动画（跟随模式）：主卡从原卡尺寸缩到迷你卡 + 淡入，
   /// 副卡依次淡入；180ms easeOutCubic。完成后停止重建（_enterDone），
   /// 之后重建交给 drag 监听 / 弹簧 ticker。
-  late final AnimationController _enter = AnimationController(
-    vsync: this,
-    duration: const Duration(milliseconds: 180),
-  )..addListener(() {
-      if (!_enterDone) setState(() {});
-    });
+  late final AnimationController _enter =
+      AnimationController(
+        vsync: this,
+        duration: const Duration(milliseconds: 180),
+      )..addListener(() {
+        if (!_enterDone) setState(() {});
+      });
 
-  late final Animation<double> _enterCurve =
-      CurvedAnimation(parent: _enter, curve: Curves.easeOutCubic);
+  late final Animation<double> _enterCurve = CurvedAnimation(
+    parent: _enter,
+    curve: Curves.easeOutCubic,
+  );
 
   /// 进场动画是否已播完（完成后不再由动画驱动重建）。
   bool _enterDone = false;
 
   /// 归位动画曲线（缓起缓停，停靠自然）。
-  late final Animation<double> _flyCurve =
-      CurvedAnimation(parent: _controller, curve: Curves.easeInOutCubic);
+  late final Animation<double> _flyCurve = CurvedAnimation(
+    parent: _controller,
+    curve: Curves.easeInOutCubic,
+  );
 
   /// 回弹起始位置快照（松手瞬间各卡实际显示位置）：跟随模式的链位置
   /// 与 drag.position+rel 不同，直接以 drag.position 为起点会跳变。
@@ -1647,9 +1616,7 @@ class _GhostLayerState extends State<_GhostLayer>
         // 弹簧运行中：历史采样依次延迟（拉开动画）。
         final now = DateTime.now().microsecondsSinceEpoch;
         _history.add(_HistoryPoint(now, _displayPos));
-        _history.removeWhere(
-          (p) => now - p.micros > _historyLifetimeMicros,
-        );
+        _history.removeWhere((p) => now - p.micros > _historyLifetimeMicros);
         for (var i = 1; i < _chain.length; i++) {
           final sampled = _sampleHistory(now - i * _delayPerLevelMicros);
           _chain[i] = sampled + Offset(5.0 * i, 5.0 * i);
@@ -1697,11 +1664,7 @@ class _GhostLayerState extends State<_GhostLayer>
           listenable: drag,
           builder: (context, _) {
             _onTargetChanged(drag.position);
-            return _buildStack(
-              context,
-              progress: null,
-              notes: notes,
-            );
+            return _buildStack(context, progress: null, notes: notes);
           },
         ),
       );
@@ -1712,11 +1675,7 @@ class _GhostLayerState extends State<_GhostLayer>
         animation: _controller,
         builder: (context, child) {
           final t = _flyCurve.value;
-          return _buildStack(
-            context,
-            progress: t,
-            notes: notes,
-          );
+          return _buildStack(context, progress: t, notes: notes);
         },
       ),
     );
@@ -1733,8 +1692,7 @@ class _GhostLayerState extends State<_GhostLayer>
     final mainNote = notes.where((n) => n.id == drag.mainId).firstOrNull;
     if (mainNote == null) return const SizedBox.shrink();
     final cards = <Widget>[];
-    final others =
-        drag.ids.where((id) => id != drag.mainId).toList();
+    final others = drag.ids.where((id) => id != drag.mainId).toList();
     if (progress == null) {
       // 跟随模式：链式位置渲染（安卓移动图标——底层卡依次延迟跟随，
       // 制造拖影效果；静止时链收敛为规则层叠）。
@@ -1763,16 +1721,18 @@ class _GhostLayerState extends State<_GhostLayer>
           const Offset(cardSize, cardSize),
           0,
         );
-        cards.add(_ghostCard(
-          context,
-          note: note,
-          offset: pos,
-          width: cardSize,
-          height: cardSize,
-          opacity: opacity,
-          styleT: 0,
-          isDark: isDark,
-        ));
+        cards.add(
+          _ghostCard(
+            context,
+            note: note,
+            offset: pos,
+            width: cardSize,
+            height: cardSize,
+            opacity: opacity,
+            styleT: 0,
+            isDark: isDark,
+          ),
+        );
       }
       // 主卡（最上层）：原卡位置 → 指针位置、原卡尺寸 → 96 方形、
       // 原卡布局 → 迷你卡布局，全部随进场进度插值（morph 从原卡
@@ -1781,31 +1741,31 @@ class _GhostLayerState extends State<_GhostLayer>
       final mainPos = mainRect == null
           ? chainPos
           : Offset.lerp(mainRect.topLeft, chainPos, enterT)!;
-      final mainW =
-          mainRect == null ? cardSize : lerpDouble(mainRect.width, cardSize, enterT)!;
-      final mainH =
-          mainRect == null ? cardSize : lerpDouble(mainRect.height, cardSize, enterT)!;
+      final mainW = mainRect == null
+          ? cardSize
+          : lerpDouble(mainRect.width, cardSize, enterT)!;
+      final mainH = mainRect == null
+          ? cardSize
+          : lerpDouble(mainRect.height, cardSize, enterT)!;
       _visual[drag.mainId] = _GhostVisual(
         mainPos,
         1.0,
         Offset(mainW, mainH),
         mainRect == null ? 0 : 1 - enterT,
       );
-      cards.add(_ghostCard(
-        context,
-        note: mainNote,
-        offset: mainPos,
-        width: mainW,
-        height: mainH,
-        opacity: 1.0,
-        styleT: mainRect == null ? 0 : 1 - enterT,
-        isDark: isDark,
-      ));
-      return Stack(
-        children: [
-          for (final c in cards) c,
-        ],
+      cards.add(
+        _ghostCard(
+          context,
+          note: mainNote,
+          offset: mainPos,
+          width: mainW,
+          height: mainH,
+          opacity: 1.0,
+          styleT: mainRect == null ? 0 : 1 - enterT,
+          isDark: isDark,
+        ),
       );
+      return Stack(children: [for (final c in cards) c]);
     }
     // 回弹模式（归位 morph）：各卡从松手时的迷你卡形状「变形展开」回
     // 各自原卡形状——位置/尺寸/布局同步插值（t=1 时与列表恢复的原卡
@@ -1826,16 +1786,18 @@ class _GhostLayerState extends State<_GhostLayer>
       final fromW = v?.size.dx ?? cardSize;
       final fromH = v?.size.dy ?? cardSize;
       final fromStyleT = v?.styleT ?? 0.0;
-      cards.add(_ghostCard(
-        context,
-        note: note,
-        offset: _fly(ti, drag, others[i]),
-        width: rect == null ? fromW : lerpDouble(fromW, rect.width, ti)!,
-        height: rect == null ? fromH : lerpDouble(fromH, rect.height, ti)!,
-        opacity: fromOpacity * _fadeOut(ti),
-        styleT: rect == null ? fromStyleT : lerpDouble(fromStyleT, 1.0, ti)!,
-        isDark: isDark,
-      ));
+      cards.add(
+        _ghostCard(
+          context,
+          note: note,
+          offset: _fly(ti, drag, others[i]),
+          width: rect == null ? fromW : lerpDouble(fromW, rect.width, ti)!,
+          height: rect == null ? fromH : lerpDouble(fromH, rect.height, ti)!,
+          opacity: fromOpacity * _fadeOut(ti),
+          styleT: rect == null ? fromStyleT : lerpDouble(fromStyleT, 1.0, ti)!,
+          isDark: isDark,
+        ),
+      );
     }
     final v = _visual[drag.mainId];
     final mainRect = drag.rects[drag.mainId];
@@ -1843,30 +1805,28 @@ class _GhostLayerState extends State<_GhostLayer>
     final fromW = v?.size.dx ?? cardSize;
     final fromH = v?.size.dy ?? cardSize;
     final fromStyleT = v?.styleT ?? 0.0;
-    cards.add(_ghostCard(
-      context,
-      note: mainNote,
-      offset: _fly(t, drag, drag.mainId),
-      width: mainRect == null ? fromW : lerpDouble(fromW, mainRect.width, t)!,
-      height:
-          mainRect == null ? fromH : lerpDouble(fromH, mainRect.height, t)!,
-      opacity: fromOpacity * _fadeOut(t),
-      styleT: mainRect == null ? fromStyleT : lerpDouble(fromStyleT, 1.0, t)!,
-      isDark: isDark,
-    ));
-    return Stack(
-      children: [
-        for (final c in cards) c,
-      ],
+    cards.add(
+      _ghostCard(
+        context,
+        note: mainNote,
+        offset: _fly(t, drag, drag.mainId),
+        width: mainRect == null ? fromW : lerpDouble(fromW, mainRect.width, t)!,
+        height: mainRect == null
+            ? fromH
+            : lerpDouble(fromH, mainRect.height, t)!,
+        opacity: fromOpacity * _fadeOut(t),
+        styleT: mainRect == null ? fromStyleT : lerpDouble(fromStyleT, 1.0, t)!,
+        isDark: isDark,
+      ),
     );
+    return Stack(children: [for (final c in cards) c]);
   }
 
   /// 位置插值：归位 = 显示状态快照（拿起中途松手时取插值中间位置，
   /// 无缝衔接）→ 原卡左上角（尺寸同时插值，t=1 时 ghost 与列表恢复
   /// 的原卡完全重叠）。
   Offset _fly(double progress, _DragState drag, String id) {
-    final base =
-        _visual[id]?.position ?? _flyStart[id] ?? drag.position;
+    final base = _visual[id]?.position ?? _flyStart[id] ?? drag.position;
     final rect = drag.rects[id];
     if (rect == null) return base;
     return Offset.lerp(base, rect.topLeft, progress)!;
@@ -1912,8 +1872,7 @@ class _GhostLayerState extends State<_GhostLayer>
           height: height,
           padding: padding,
           decoration: BoxDecoration(
-            color:
-                isDark ? const Color(0xFF1B2838) : const Color(0xFFFDFCF9),
+            color: isDark ? const Color(0xFF1B2838) : const Color(0xFFFDFCF9),
             borderRadius: BorderRadius.circular(16),
             // 无边框（用户确认去掉蓝色描边）。
             boxShadow: [
@@ -1965,9 +1924,7 @@ class _GhostLayerState extends State<_GhostLayer>
       ),
     );
   }
-
 }
-
 
 /// 主卡位置历史点（采样时刻 + 位置）。
 class _HistoryPoint {
@@ -2001,9 +1958,9 @@ class _GhostVisual {
 /// 阻尼，初始速度传入使运动带惯性；到位后轻微回弹后稳定。
 class _Spring2D {
   _Spring2D(SpringDescription desc, Offset from, Offset to, Offset velocity)
-      : _x = SpringSimulation(desc, from.dx, to.dx, velocity.dx),
-        _y = SpringSimulation(desc, from.dy, to.dy, velocity.dy),
-        to = to;
+    : _x = SpringSimulation(desc, from.dx, to.dx, velocity.dx),
+      _y = SpringSimulation(desc, from.dy, to.dy, velocity.dy),
+      to = to;
 
   final SpringSimulation _x;
   final SpringSimulation _y;
@@ -2020,4 +1977,3 @@ class _Spring2D {
   /// t 秒时是否已稳定（两轴都停）。
   bool isDone(double t) => _x.isDone(t) && _y.isDone(t);
 }
-

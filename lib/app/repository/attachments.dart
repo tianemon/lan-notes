@@ -28,7 +28,7 @@ import 'package:path/path.dart' as p;
 /// 回收（个人量级可忽略，见 docs/开发进度.md 遗留问题）。
 class AttachmentsStore {
   AttachmentsStore({Future<Directory> Function()? directoryProvider})
-      : _directoryProvider = directoryProvider;
+    : _directoryProvider = directoryProvider;
 
   /// attachments 子目录名（delta embed 相对路径的第一段）。
   static const String dirName = 'attachments';
@@ -225,22 +225,37 @@ class AttachmentsStore {
     // JPEG: FFD8FF
     if (bytes[0] == 0xFF && bytes[1] == 0xD8 && bytes[2] == 0xFF) return 'jpg';
     // PNG: 89504E47
-    if (bytes[0] == 0x89 && bytes[1] == 0x50 && bytes[2] == 0x4E && bytes[3] == 0x47) {
+    if (bytes[0] == 0x89 &&
+        bytes[1] == 0x50 &&
+        bytes[2] == 0x4E &&
+        bytes[3] == 0x47) {
       return 'png';
     }
     // GIF: GIF87a / GIF89a
-    if (bytes[0] == 0x47 && bytes[1] == 0x49 && bytes[2] == 0x46 && bytes[3] == 0x38) {
+    if (bytes[0] == 0x47 &&
+        bytes[1] == 0x49 &&
+        bytes[2] == 0x46 &&
+        bytes[3] == 0x38) {
       return 'gif';
     }
     // WebP: RIFF....WEBP
-    if (bytes[0] == 0x52 && bytes[1] == 0x49 && bytes[2] == 0x46 && bytes[3] == 0x46 &&
-        bytes[8] == 0x57 && bytes[9] == 0x45 && bytes[10] == 0x42 && bytes[11] == 0x50) {
+    if (bytes[0] == 0x52 &&
+        bytes[1] == 0x49 &&
+        bytes[2] == 0x46 &&
+        bytes[3] == 0x46 &&
+        bytes[8] == 0x57 &&
+        bytes[9] == 0x45 &&
+        bytes[10] == 0x42 &&
+        bytes[11] == 0x50) {
       return 'webp';
     }
     // BMP: BM
     if (bytes[0] == 0x42 && bytes[1] == 0x4D) return 'bmp';
     // HEIC/HEIF: ftyp 盒（ftypheic/ftypheix/ftypmif1 等）
-    if (bytes[4] == 0x66 && bytes[5] == 0x74 && bytes[6] == 0x79 && bytes[7] == 0x70) {
+    if (bytes[4] == 0x66 &&
+        bytes[5] == 0x74 &&
+        bytes[6] == 0x79 &&
+        bytes[7] == 0x70) {
       return 'heic';
     }
     return null;
@@ -255,6 +270,4 @@ class AttachmentsStore {
     final file = File(p.join(dir.path, p.basename(relativePath)));
     return file.existsSync() ? file : null;
   }
-
-
 }

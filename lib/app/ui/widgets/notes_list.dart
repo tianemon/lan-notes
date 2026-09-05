@@ -122,7 +122,7 @@ class _NotesListState extends ConsumerState<NotesList> {
   PointerRoute? _globalRoute;
 
   /// 左侧拖放区是否显示（拖拽中）。
-  bool _dragging_ = false;
+  bool _dragging = false;
 
   /// 当前选中集合（watch 由 build 驱动，read 由手势用）。
   Set<String> _selectedNow() => ref.read(multiSelectProvider);
@@ -142,8 +142,8 @@ class _NotesListState extends ConsumerState<NotesList> {
     final multiActive = ref.watch(multiSelectProvider).isNotEmpty;
     // 兜底：多选退出（拖到文件夹落点移动后 exit）时残留的拖拽态一并清除
     //（拖拽回调因组件卸载不再触发清理的场景）。
-    if (!multiActive && _dragging_) {
-      _dragging_ = false;
+    if (!multiActive && _dragging) {
+      _dragging = false;
     }
 
     final body = notesAsync.when(
@@ -192,14 +192,14 @@ class _NotesListState extends ConsumerState<NotesList> {
       // 多选模式下点空白退出多选（卡片点击被消费，不冒泡到这里；
       // 拖拽中不触发退出）。
       behavior: HitTestBehavior.translucent,
-      onTap: multiActive && !_dragging_
+      onTap: multiActive && !_dragging
           ? () => ref.read(multiSelectProvider.notifier).exit()
           : null,
       child: Stack(
         children: [
           Positioned.fill(child: body),
           // 左侧圆角梯形触发区：拖拽动作开始后才出现（用户确认）。
-          if (_dragging_)
+          if (_dragging)
             Positioned(
               left: 0,
               top: 0,
@@ -214,7 +214,7 @@ class _NotesListState extends ConsumerState<NotesList> {
             ),
           // 底部多选操作面板：拖拽中隐藏、松手恢复（用户确认——
           // 与长按弹菜单不冲突，拖拽时菜单不挡视线）。
-          if (multiActive && !_dragging_)
+          if (multiActive && !_dragging)
             Positioned(
               left: 0,
               right: 0,
@@ -240,7 +240,7 @@ class _NotesListState extends ConsumerState<NotesList> {
   // ===== 拖拽 =====
 
   /// 是否正在拖拽（卡片手势回调查询）。
-  bool get isDraggingNow => _dragging_;
+  bool get isDraggingNow => _dragging;
 
   /// 当前拖拽是否由长按延续（onLongPressCancel/End 只结束长按路径的拖拽，
   /// 多选 drag 路径由 onVerticalDrag* 结束，避免竞技失败误结束）。
@@ -302,7 +302,7 @@ class _NotesListState extends ConsumerState<NotesList> {
     // 拖拽中：抽屉隐藏所有文件夹选中背景（拖到目标才显示高亮）。
     ref.read(dropZoneRegistryProvider).dragging.value = true;
     setState(() {
-      _dragging_ = true;
+      _dragging = true;
       // 抽卡：选中的卡片从列表抽走（其他卡片补位），松手恢复。
       _hiddenIds = Set<String>.of(selected);
       // 触发区：拖拽动作开始后才出现（用户确认）；矩形虚线蒙版，
@@ -441,7 +441,7 @@ class _NotesListState extends ConsumerState<NotesList> {
     ref.read(dropZoneRegistryProvider).dragging.value = false;
     final target = d.target;
     final wasDrawerByDrag = ref.read(folderDrawerByDragProvider);
-    _dragging_ = false;
+    _dragging = false;
     _zoneRect = null;
 
     if (target != null) {

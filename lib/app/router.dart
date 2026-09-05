@@ -16,7 +16,7 @@ import 'ui/trash_page.dart';
 ///   （go_router 不支持 `:id?` 可选路径段语法，可选 id 用两条路由表达）
 /// - `/sync` → SyncPage：同步管理
 /// - `/trash` → TrashPage：回收站（软删除笔记的恢复/清空）
-/// - `/settings` → SettingsPage：设置（主题三档 + 同步/回收站/设备设置入口，
+/// - `/settings` → SettingsPage：设置（主题三档 + 同步/回收站入口，
 ///   task-26）
 ///
 /// 页面间仅通过路由参数传 id，笔记数据一律从 Riverpod Provider 读取，

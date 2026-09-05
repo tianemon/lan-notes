@@ -198,6 +198,16 @@ class Note {
     return buffer.toString();
   }
 
+  /// 标签列表是否完全一致（**顺序敏感**，task-28 幂等/mergeRemoteNote
+  /// 对齐判断用——标签顺序有业务意义，不能只比较集合）。
+  static bool tagsEqual(List<String> a, List<String> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
+  }
+
   /// 实例便捷方法：等价于 [Note.plainTextOf]（供列表摘要/字数直接调用）。
   String toPlainText() => Note.plainTextOf(content);
 

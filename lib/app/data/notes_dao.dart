@@ -86,7 +86,7 @@ class NoteDao extends DatabaseAccessor<AppDatabase> with _$NoteDaoMixin {
   /// upsert 同步（列表页标签栏聚合筛选）。
   Future<Note> setTags(String id, List<String> tags) {
     return _mutate(id, '设置标签', (current) {
-      if (_sameTags(current.tags, tags)) return current; // 幂等
+      if (Note.tagsEqual(current.tags, tags)) return current; // 幂等
       final now = DateTime.now().millisecondsSinceEpoch;
       return Note(
         id: id,
@@ -362,17 +362,7 @@ class NoteDao extends DatabaseAccessor<AppDatabase> with _$NoteDaoMixin {
         .replaceAll('_', r'\_');
   }
 
-  /// 标签列表相等比较（顺序敏感，task-28 幂等判断用）。
-  static bool _sameTags(List<String> a, List<String> b) {
-    if (a.length != b.length) return false;
-    for (var i = 0; i < a.length; i++) {
-      if (a[i] != b[i]) return false;
-    }
-    return true;
-  }
-
   // ---- 墓碑读写（防复活，docs/技术架构.md 3.3 节） ----
-
   /// 写入/更新墓碑（UPSERT：同一 id 重复清空幂等刷新）。
   Future<void> upsertTombstone({
     required String id,

@@ -486,6 +486,10 @@ class _FolderItemState extends ConsumerState<_FolderItem> {
   /// 桌面鼠标悬浮（驱动 hover 背景；仅桌面平台生效）。
   bool _hovered = false;
 
+  /// 右键/长按菜单展示期间高亮本项（移动端长按、桌面右键均无 hover
+  /// 语义，不高亮则看不出菜单属于哪个文件夹——用户反馈）。
+  bool _menuOpen = false;
+
   String? get id => widget.id;
   String get name => widget.name;
   Widget get icon => widget.icon;
@@ -534,7 +538,7 @@ class _FolderItemState extends ConsumerState<_FolderItem> {
                 ? (isDark
                       ? colorScheme.surfaceContainerHighest
                       : colorScheme.surfaceContainer)
-                : (_hovered && isDesktopPlatform
+                : (_menuOpen || (_hovered && isDesktopPlatform)
                       ? colorScheme.surfaceContainerLow
                       : null);
             // 选中/悬停背景左右各缩进 10px（用户确认：看起来窄一些），
@@ -648,6 +652,8 @@ class _FolderItemState extends ConsumerState<_FolderItem> {
     Offset? tapGlobal,
   ) async {
     if (id == null || !context.mounted) return;
+    // 菜单展示期间高亮本项（关闭时经 removeMenu 清除）。
+    setState(() => _menuOpen = true);
     final overlay = Overlay.of(context);
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final bgColor = isDark ? const Color(0xFF1B2838) : const Color(0xFFFDFCF9);
@@ -659,13 +665,21 @@ class _FolderItemState extends ConsumerState<_FolderItem> {
     const radius = 12.0;
     final pinLabel = pinned ? '取消置顶' : '置顶';
     late final OverlayEntry overlayEntry;
+    // 菜单收口：移除浮层并清除本项高亮（浮层移除点共 4 处——ModalBarrier
+    // 点空 + 三个菜单项，统一走这里防漏清高亮）。
+    void removeMenu() {
+      if (!_menuOpen) return;
+      _menuOpen = false;
+      overlayEntry.remove();
+      if (mounted) setState(() {});
+    }
     final items = <Widget>[
       _MenuButton(
         icon: Icons.drive_file_rename_outline,
         label: '重命名',
         radius: BorderRadius.vertical(top: Radius.circular(radius)),
         onTap: () async {
-          overlayEntry.remove();
+          removeMenu();
           final newName = await showFolderNameDialog(
             context,
             title: '重命名文件夹',
@@ -682,7 +696,7 @@ class _FolderItemState extends ConsumerState<_FolderItem> {
         label: pinLabel,
         radius: BorderRadius.zero,
         onTap: () async {
-          overlayEntry.remove();
+          removeMenu();
           await ref.read(folderRepositoryProvider).setPinned(id!, !pinned);
         },
       ),
@@ -693,7 +707,7 @@ class _FolderItemState extends ConsumerState<_FolderItem> {
         labelColor: Theme.of(context).colorScheme.error,
         iconColor: Theme.of(context).colorScheme.error,
         onTap: () {
-          overlayEntry.remove();
+          removeMenu();
           final folder = ref
               .read(foldersStreamProvider)
               .value
@@ -736,7 +750,7 @@ class _FolderItemState extends ConsumerState<_FolderItem> {
           Positioned.fill(
             child: ModalBarrier(
               dismissible: true,
-              onDismiss: () => overlayEntry.remove(),
+              onDismiss: removeMenu,
             ),
           ),
           Positioned(

@@ -204,11 +204,18 @@ class GlassDialog extends StatelessWidget {
     required this.title,
     required this.content,
     this.actions = const [],
+    this.fullWidthActions = false,
   });
 
   final Widget title;
   final Widget content;
   final List<Widget> actions;
+
+  /// 操作按钮横排两端分布（spaceBetween）：首按钮贴左、末按钮贴右，
+  /// 左右留白对称——用于多按钮确认弹窗（如删除文件夹二选一：取消/
+  /// 笔记移到全部/同时删除笔记；尾对齐会让取消距左边远、删除贴右边，
+  /// 两侧不一致）。默认 false = 尾对齐 + 放不下自动换行（OverflowBar）。
+  final bool fullWidthActions;
 
   @override
   Widget build(BuildContext context) {
@@ -220,7 +227,9 @@ class GlassDialog extends StatelessWidget {
       child: glassWrap(
         child: Container(
           width: double.maxFinite,
-          constraints: const BoxConstraints(maxWidth: 420),
+          // 最大宽度 360（PC 窗口远超上限时生效；手机端由 insetPadding
+          // 决定 = 屏宽 − 64，不受影响）。420 → 380 → 360（用户反馈 PC 过宽）。
+          constraints: const BoxConstraints(maxWidth: 360),
           decoration: styledDecoration(isDark: isDark),
           padding: const EdgeInsets.fromLTRB(24, 20, 24, 12),
           child: Column(
@@ -237,15 +246,23 @@ class GlassDialog extends StatelessWidget {
               Flexible(child: SingleChildScrollView(child: content)),
               if (actions.isNotEmpty) ...[
                 const SizedBox(height: 16),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.end,
-                  children: [
-                    for (var i = 0; i < actions.length; i++) ...[
-                      if (i > 0) const SizedBox(width: 8),
-                      actions[i],
-                    ],
-                  ],
-                ),
+                if (fullWidthActions)
+                  // 横排两端分布：取消贴左、主操作贴右，两边留白对称。
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: actions,
+                  )
+                else
+                  // OverflowBar 替代 Row：放不下时自动换行（手机窄屏
+                  // 溢出右边框的兜底）；单行放得下时与 Row 一致
+                  // （尾部对齐 + 8 间距）。
+                  OverflowBar(
+                    alignment: MainAxisAlignment.end,
+                    spacing: 8,
+                    overflowSpacing: 8,
+                    overflowAlignment: OverflowBarAlignment.end,
+                    children: actions,
+                  ),
               ],
             ],
           ),
@@ -265,12 +282,17 @@ Future<T?> showGlassDialog<T>({
   required Widget content,
   required List<Widget> actions,
   bool barrierDismissible = true,
+  bool fullWidthActions = false,
 }) {
   return showDialog<T>(
     context: context,
     barrierDismissible: barrierDismissible,
-    builder: (_) =>
-        GlassDialog(title: title, content: content, actions: actions),
+    builder: (_) => GlassDialog(
+      title: title,
+      content: content,
+      actions: actions,
+      fullWidthActions: fullWidthActions,
+    ),
   );
 }
 

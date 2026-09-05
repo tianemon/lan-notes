@@ -12,9 +12,7 @@ import 'widgets/section_label.dart';
 ///   （照搬 EE settings_screen._ThemeSlider：支持点击 + 横向拖拽）；
 ///   选择写入 [themeModeNotifier] 并持久化（[AppSettingsStore]），
 ///   启动时由 main.dart 恢复；
-/// - **设备**：同步设置（push `/sync`）、回收站（push `/trash`）、
-///   设备设置（复用同步页 [DeviceSettingsDialog]——设备名/连接密码/
-///   自动同步/重置设备 ID，避免重复实现）。
+/// - **设备**：同步设置（push `/sync`）、回收站（push `/trash`）。
 ///
 /// 分组标题样式照搬 EE（13px outline 色标签，[SectionLabel] 共享组件）。
 class SettingsPage extends ConsumerWidget {

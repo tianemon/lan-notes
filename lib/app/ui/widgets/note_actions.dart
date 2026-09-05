@@ -185,25 +185,31 @@ Future<void> showDeleteFolderDialog(
   required Folder folder,
   required int noteCount,
 }) async {
+  // 三按钮横排两端分布（fullWidthActions）：取消贴左、删除贴右，两边
+  // 留白对称（此前尾对齐右侧贴边、左侧大片留白，用户反馈不一致）。
+  // 间距按「可见边界」均分：文字按钮用 _DialogTextAction（布局盒 = 文字
+  // 宽，避开 TextButton 的 minimumSize/tapTargetSize 透明撑大），红色
+  // 按钮盒 = 背景边界——spaceBetween 的等分间距即文字↔文字、文字↔红底
+  // 的视觉间距；红色按钮水平内边距 11（背景 +6px）、最小高度 36（-4px）。
   final deleteNotes = await showGlassDialog<bool>(
     context: context,
     title: Text('删除文件夹「${folder.name}」？'),
     content: noteCount > 0
         ? Text('文件夹内有 $noteCount 条笔记，如何处理？')
         : const Text('文件夹为空，删除后不可恢复。'),
+    fullWidthActions: true,
     actions: [
-      TextButton(
-        onPressed: () => Navigator.of(context).pop(),
-        child: const Text('取消'),
-      ),
+      _DialogTextAction(label: '取消', onTap: () => Navigator.of(context).pop()),
       if (noteCount > 0)
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(false),
-          child: const Text('笔记移到全部'),
+        _DialogTextAction(
+          label: '笔记移到全部',
+          onTap: () => Navigator.of(context).pop(false),
         ),
       FilledButton(
         style: FilledButton.styleFrom(
           backgroundColor: Theme.of(context).colorScheme.error,
+          padding: const EdgeInsets.symmetric(horizontal: 11),
+          minimumSize: const Size(0, 36),
         ),
         onPressed: () => Navigator.of(context).pop(true),
         child: Text(noteCount > 0 ? '同时删除笔记' : '删除'),
@@ -220,6 +226,78 @@ Future<void> showDeleteFolderDialog(
   }
   if (!context.mounted) return;
   showAppSnackBar('已删除文件夹「${folder.name}」');
+}
+
+/// 弹窗文字操作按钮（取消/笔记移到全部）：替代 Material TextButton。
+///
+/// 查证（Flutter SDK button_style_button.dart）：TextButton 的盒子受
+/// M3 `minimumSize`（默认 64×36）与 `tapTargetSize.padded`（48×48，
+/// _RenderInputPadding 直接撑大布局）双重下限——文字外的透明区污染
+/// spaceBetween 间距（间距不再按文字边界均分），且 ink 矩形与文字的
+/// 贴合程度随文字宽度变化（短文字 ink 远大于文字、长文字 ink 贴文字）。
+///
+/// 此处布局盒 = 文字宽（可见边界即盒边界，spaceBetween 均分 = 视觉等距）；
+/// hover/按压高亮经 Stack(clipBehavior: none) 向四周扩 8/5px **绘制**
+/// （呼吸边距不占布局）。字色/字重与 TextButton（M3 labelLarge + primary）
+/// 保持一致。
+class _DialogTextAction extends StatefulWidget {
+  const _DialogTextAction({required this.label, required this.onTap});
+
+  final String label;
+  final VoidCallback onTap;
+
+  @override
+  State<_DialogTextAction> createState() => _DialogTextActionState();
+}
+
+class _DialogTextActionState extends State<_DialogTextAction> {
+  bool _hovered = false;
+  bool _pressed = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: widget.onTap,
+        onTapDown: (_) => setState(() => _pressed = true),
+        onTapUp: (_) => setState(() => _pressed = false),
+        onTapCancel: () => setState(() => _pressed = false),
+        child: Stack(
+          clipBehavior: Clip.none,
+          children: [
+            // 高亮矩形：布局盒（文字）四周各扩 8/5px，M3 stateLayer 透明度。
+            Positioned.fill(
+              left: -8,
+              right: -8,
+              top: -5,
+              bottom: -5,
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: (_hovered || _pressed)
+                      ? colorScheme.onSurface.withValues(
+                          alpha: _pressed ? 0.12 : 0.08,
+                        )
+                      : Colors.transparent,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+              ),
+            ),
+            Text(
+              widget.label,
+              style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                color: colorScheme.primary,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 /// 批量删除确认（task-32 多选删除）：确认后软删除进回收站。

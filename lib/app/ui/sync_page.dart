@@ -17,13 +17,14 @@ import 'widgets/glass_style.dart';
 ///
 /// 布局（flat 风格，Material 3，见 docs/技术架构.md 第 4 节组件树）：
 /// - 顶部同步总开关：开启后本机同时担任服务端（固定端口 WebSocket 监听 +
-///   UDP 广播发布）与客户端（v4 智能扫描：直连优先 + 按需扫描），见
+///   常驻监听）与客户端（v4 智能扫描：直连优先 + 按需扫描），见
 ///   [SyncService.enable]；状态说明展示本机设备名与固定端口；
 /// - **已配对设备列表**（task-14）：信任列表 + 连接状态（已连接/连接中/
 ///   自动连接中），已连接设备可断开（断开后已配对设备进入退避扫描自动
 ///   重连，符合 v4 连接策略）；
-/// - **发现的设备列表**（v4）：**常态不自动扫描**——列表仅在手动
-///   「重新扫描」（3s 收集窗口后定格）与已配对断线退避扫描时更新；
+/// - **发现的设备列表**（v4）：**常态不自动扫描**——列表随常驻监听
+///   （enable 期间实时接收对端广播）与手动「重新扫描」（30s 收集窗口，
+///   期间每 5s 周期广播本机）更新；
 ///   未配对设备标「未配对」，点击连接发起配对请求（同意/拒绝弹窗由全局
 ///   [PairingDialogController] 弹出，任意页面可见）；
 /// - 设备 ID 冲突横幅：握手/发现/手动连接检测到同 ID 设备时置顶展示，
@@ -87,7 +88,7 @@ class _SyncPageState extends ConsumerState<SyncPage> {
   /// 发现的设备列表（UDP 广播发现，见 [SyncService.discoveredDevices]）。
   List<DiscoveredDevice> _discoveredDevices = const [];
 
-  /// 手动「重新扫描」进行中（v4：3s 收集窗口内显示「正在搜索设备…」）。
+  /// 手动「重新扫描」进行中（v4：30s 收集窗口内显示「正在搜索设备…」）。
   bool _scanning = false;
 
   /// 扫描次数（task-32）：每次点击扫描 +1，用于重置转圈动画（KeyedSubtree）。
@@ -285,8 +286,6 @@ class _SyncPageState extends ConsumerState<SyncPage> {
   }
 
   // ---------- 状态文案 ----------
-
-  /// 已配对设备行：设备名 + 手动连接开关（状态即连接状态）+ 自动连接开关。
 
   // ---------- UI ----------
 
@@ -649,8 +648,9 @@ class _SyncPageState extends ConsumerState<SyncPage> {
   /// 「已配对」（点击强制连接/更新目标）；与本机 deviceId 相同标
   /// 「设备 ID 冲突」（点击无效，提示重置）。
   ///
-  /// v4（task-27）：**常态不自动扫描**——列表仅在手动「重新扫描」（3s
-  /// 收集窗口）与已配对断线退避扫描时更新，两次扫描之间列表定格。
+  /// v4（task-27）：**常态不自动扫描**——列表随常驻监听（enable 期间
+  /// 实时接收对端广播）与手动「重新扫描」（30s 收集窗口，期间每 5s
+  /// 周期广播本机）更新。
   /// task-25：整卡玻璃装饰（[GlassCard]），与已配对设备卡风格一致。
   Widget _buildDiscoveryCard(BuildContext context) {
     final theme = Theme.of(context);

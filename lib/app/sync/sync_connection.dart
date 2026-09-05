@@ -232,13 +232,14 @@ class SyncServer {
   }
 }
 
-/// WebSocket 客户端：连接、心跳保活、指数退避自动重连（最多 5 次）。
+/// WebSocket 客户端：连接、心跳保活。**连接失败/中断后不再自动重连**（架构
+/// 决策：在线方不主动重连，断线只报 [SyncConnectionState.disconnected]，由
+/// 上层——上线方/手动连接/回前台恢复——重新 [connect]）。
 class SyncClient {
   SyncClient();
 
   _SyncChannel? _channel;
   StreamSubscription<dynamic>? _subscription;
-  Timer? _reconnectTimer;
   SyncConnectionState _state = SyncConnectionState.disconnected;
   String? _host;
   int? _port;
@@ -305,17 +306,13 @@ class SyncClient {
     _host = host;
     _port = port;
     _manualDisconnect = false;
-    _reconnectTimer?.cancel();
-    _reconnectTimer = null;
     _cleanupChannel();
     await _connectOnce();
   }
 
-  /// 手动断开：停止自动重连并释放连接（幂等）。
+  /// 手动断开：释放连接（幂等）。
   Future<void> disconnect() async {
     _manualDisconnect = true;
-    _reconnectTimer?.cancel();
-    _reconnectTimer = null;
     _cleanupChannel();
     _setState(SyncConnectionState.disconnected);
   }
@@ -328,8 +325,6 @@ class SyncClient {
     _host = host;
     _port = port;
     if (_state == SyncConnectionState.disconnected && !_manualDisconnect) {
-      _reconnectTimer?.cancel();
-      _reconnectTimer = null;
       unawaited(_connectOnce());
     }
   }
@@ -343,7 +338,7 @@ class SyncClient {
     try {
       channel.send(jsonEncode(message));
     } catch (_) {
-      // socket 已损坏：触发断开与自动重连。
+      // socket 已损坏：触发断开（上层按需重连）。
       _handleDisconnected();
     }
   }

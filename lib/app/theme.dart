@@ -356,9 +356,6 @@ ThemeData buildDarkTheme() {
   );
 }
 
-/// 兼容入口：默认亮色主题（main.dart 已改为 theme/darkTheme + themeMode）。
-ThemeData buildAppTheme() => buildLightTheme();
-
 // ============================================================
 // 全局横幅通知（Overlay 自绘，不随页面切换移动）
 // ============================================================

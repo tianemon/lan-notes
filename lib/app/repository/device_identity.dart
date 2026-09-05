@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:uuid/uuid.dart';
@@ -30,6 +31,12 @@ const String kDeviceSettingSyncSwitch = 'sync_switch';
 /// `addr_<deviceId>` → `ip:port`。打开软件/enable 时先凭缓存地址直连
 /// 已配对设备（3 次×2 组），失败再进入退避扫描；连接/发现时刷新。
 const String kPeerAddressKeyPrefix = 'peer_addr_';
+
+/// 本机 IPv4 地址缓存键（IP 变化检测，持久化）：存储 JSON 数组（排序后
+/// 的本机非回环 IPv4 地址）。enable/回前台时与当前网卡地址比对，变化则
+/// 临时广播 30s——本机地址变了即对端缓存里的本机地址失效，见 SyncService
+/// `_announceIfLocalAddressChanged`。
+const String kDeviceSettingLocalAddresses = 'local_ips';
 
 /// 本机设备身份与信任列表的统一入口。
 ///
@@ -186,7 +193,6 @@ class DeviceIdentityStore {
     );
   }
 
-  /// 刷新某已配对设备的认证密钥（确认回发/重新配对时）。
   /// 更新某已配对设备的设备名（task-32：存量 ID 条目握手时刷新）。
   Future<void> updateTrustedName(String deviceId, String deviceName) =>
       _dao.updateTrustedName(deviceId, deviceName);
@@ -243,6 +249,27 @@ class DeviceIdentityStore {
   /// 移除某对端设备的地址缓存（取消配对/地址失效时）。
   Future<void> removeCachedPeerAddress(String deviceId) =>
       _dao.removeSetting('$kPeerAddressKeyPrefix$deviceId');
+
+  // ===== 本机地址缓存（IP 变化检测：变了才广播） =====
+
+  /// 读取本机 IPv4 地址缓存（JSON 数组，已排序；从未记录返回 null）。
+  Future<List<String>?> getCachedLocalAddresses() async {
+    final raw = await _dao.getSetting(kDeviceSettingLocalAddresses);
+    if (raw == null || raw.isEmpty) return null;
+    try {
+      final decoded = json.decode(raw);
+      if (decoded is! List) return null;
+      return decoded.whereType<String>().toList()..sort();
+    } catch (_) {
+      return null; // 坏数据视为无基线（下次重新建立）
+    }
+  }
+
+  /// 缓存本机 IPv4 地址集合（排序后 JSON 落库，跨重启比对用）。
+  Future<void> cacheLocalAddresses(Set<String> addresses) {
+    final sorted = addresses.toList()..sort();
+    return _dao.setSetting(kDeviceSettingLocalAddresses, json.encode(sorted));
+  }
 
   /// 重置设备 ID：重新生成持久化 deviceId 并清空全部信任列表（task-14）。
   ///

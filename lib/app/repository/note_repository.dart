@@ -60,27 +60,6 @@ class NoteDeletedEvent extends NoteChangeEvent {
   final int? deletedAt;
 }
 
-/// 笔记清空（物理删除，对应同步协议 note_delete，携带 version 防乱序）。
-///
-/// 与 [NoteDeletedEvent] 载荷一致，语义上专指回收站「清空」入口
-/// （写墓碑防复活）；同步层同样推送 note_delete。
-class NotePurgedEvent extends NoteChangeEvent {
-  const NotePurgedEvent({
-    required this.id,
-    required this.version,
-    this.deletedAt,
-  });
-
-  final String id;
-
-  /// 物理删除时刻的本地 version（即墓碑 version）。
-  final int version;
-
-  /// 物理删除时刻（epoch ms，即墓碑 deletedAt，task-21 新增）：随
-  /// note_delete 携带，对端写墓碑时沿用该时间做时间裁决。
-  final int? deletedAt;
-}
-
 /// 笔记仓库：本地数据库读写的统一入口（UI 与同步层共用）。
 ///
 /// 单向数据流保证（见 docs/技术架构.md 第 6 节）：UI 变更一律走本类方法，
@@ -215,9 +194,9 @@ class NoteRepository {
   /// 删除笔记（物理删除 + 写墓碑）：**兼容保留，供现有 UI 调用**。
   ///
   /// 语义说明：本方法即「清空」——物理删除并写墓碑（docs/技术架构.md 3.3
-  /// v3 修订「清空 = 物理删除 + 写墓碑」），行为与 [purgeNote] 一致，仅变更
-  /// 事件类型不同（[NoteDeletedEvent] vs [NotePurgedEvent]，同步层均推送
-  /// note_delete）。幂等：本地不存在视为已删除，不推送。
+  /// v3 修订「清空 = 物理删除 + 写墓碑」），行为与 [purgeNote] 一致，均发
+  /// [NoteDeletedEvent]（同步层推送 note_delete）。幂等：本地不存在视为已
+  /// 删除，不推送。
   ///
   /// **UI 后续任务**：列表页/编辑页的删除入口将改为 [softDeleteNote]
   /// （软删除进回收站），届时本方法仅由回收站「清空」入口使用。
@@ -266,7 +245,7 @@ class NoteRepository {
     }
     final tombstone = await _dao.getTombstone(id);
     _changes.add(
-      NotePurgedEvent(
+      NoteDeletedEvent(
         id: id,
         version: version,
         deletedAt: tombstone?.deletedAt,
@@ -367,7 +346,7 @@ class NoteRepository {
         remote.isPinned == local.isPinned &&
         remote.folderId == local.folderId &&
         remote.localOnly == local.localOnly &&
-        _sameTags(remote.tags, local.tags)) {
+        Note.tagsEqual(remote.tags, local.tags)) {
       // 内容与删除/置顶/标签/文件夹状态均一致：仅对齐版本/时间戳（防“全量同步→
       // 版本+1→回推→再+1”膨胀）。
       final aligned = Note(
@@ -509,13 +488,4 @@ class NoteRepository {
 
   /// 释放事件通道（应用退出或测试收尾时调用）。
   Future<void> dispose() => _changes.close();
-}
-
-/// 标签列表相等比较（顺序敏感，task-28 mergeRemoteNote 对齐判断用）。
-bool _sameTags(List<String> a, List<String> b) {
-  if (a.length != b.length) return false;
-  for (var i = 0; i < a.length; i++) {
-    if (a[i] != b[i]) return false;
-  }
-  return true;
 }

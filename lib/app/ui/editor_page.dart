@@ -324,6 +324,9 @@ class _EditorPageState extends ConsumerState<EditorPage>
   /// 保存串行队列：防抖与返回兜底共用，保证同一时刻只有一个写库请求。
   Future<void> _saveChain = Future.value();
 
+  /// 生命周期监听（退后台兜底保存，见 initState）。
+  late final AppLifecycleListener _lifecycleListener;
+
   _SaveStatus? _saveStatus;
 
   /// 进入编辑页时笔记是否为空（标题与正文均无内容，只认第一帧数据）。
@@ -347,8 +350,19 @@ class _EditorPageState extends ConsumerState<EditorPage>
     _contentScrollController.addListener(_onEditorScroll);
     _noteId = widget.id;
     _attachDocListener();
+    // 退后台兜底保存：iOS 上滑预览/切应用、Android Home/最近任务把进程
+    // 挂起甚至杀死时，防抖（1s）/强存（5s）窗口内的输入会随之丢失——
+    // onHide 立即落盘（幂等：内容与已保存一致时 _performSave 跳过）。
+    _lifecycleListener = AppLifecycleListener(onHide: _saveOnHide);
     // 方案B（无新建态）：路由恒带 id，进入即编辑态，直接订阅笔记流。
     _subscribeNoteStream();
+  }
+
+  /// 退后台（onHide）：立即落盘未保存变更。
+  void _saveOnHide() {
+    if (!_dirty) return;
+    _debounce?.cancel();
+    _enqueueSave();
   }
 
   /// 订阅正文文档变化（QuillEditor 输入 → 自动保存链）。
@@ -368,6 +382,7 @@ class _EditorPageState extends ConsumerState<EditorPage>
 
   @override
   void dispose() {
+    _lifecycleListener.dispose();
     _noteSub?.close();
     _debounce?.cancel();
     _maxIntervalTimer?.cancel();
@@ -437,11 +452,30 @@ class _EditorPageState extends ConsumerState<EditorPage>
     if (_localOnly != note.localOnly) {
       setState(() => _localOnly = note.localOnly);
     }
-    // 本地保存回推判定（需求 12）：version 等于刚保存的版本 → 是自己保存
-    // 触发的 drift 流推送，不是远端修改。保存期间继续输入时内容比较会
-    // 不成立，若不在此拦截会误走 _applyRemoteNote 强覆盖（输入被替换）。
-    // 只对齐快照，绝不触碰输入框；新输入由后续防抖保存正常落库。
-    if (_lastSavedVersion != null && note.version == _lastSavedVersion) {
+    // 本地保存回推判定（需求 12 修订，输入丢失根因修复）：
+    //
+    // 每次本地保存产生**两次写库**（DAO _mutate + 仓库 origin 标记
+    // replace），各自触发一次 drift watch 重查推送；连续输入时保存链
+    // 1s 一发，前一次保存的推送可能**迟到**——送达时 _lastSavedVersion
+    // 已被下一次保存抬高。此前精确判等（version == lastSaved）漏判迟到
+    // 回推：内容与当前输入必然不等 → 误走 _applyRemoteNote 强覆盖，把
+    // 保存窗口内的未保存输入整段替换且 _dirty=false 永不落库（输入丢失
+    // 的主因）。DB version 单调不减，**小于 lastSaved 的推送必然是本机
+    // 旧保存的迟到回声**，直接跳过。
+    final lastSaved = _lastSavedVersion;
+    if (lastSaved != null && note.version < lastSaved) {
+      debugPrint(
+        '[editor] 迟到回推：version=${note.version} < lastSaved=$lastSaved，'
+        '跳过（旧保存的延迟推送，不触碰输入与快照）',
+      );
+      return;
+    }
+    // version == lastSaved：内容与保存快照一致才是回声；不一致 = 远端
+    // 同版本时间裁决采纳（赢了我们的保存），是真远端修改 → 落到覆盖。
+    if (lastSaved != null &&
+        note.version == lastSaved &&
+        note.title == _savedTitle &&
+        note.content == _savedContent) {
       debugPrint(
         '[editor] 保存回推 echo：version=${note.version}，'
         '跳过覆盖（输入保持不变）',
@@ -480,28 +514,34 @@ class _EditorPageState extends ConsumerState<EditorPage>
     _debounce?.cancel();
     _maxIntervalTimer?.cancel();
     _suppressChanges = true;
-    // 记录替换前的光标位置：替换 document 会把 selection 重置到开头
-    // （光标跳最前），替换后按焦点位置恢复（clamp 到新内容长度）。
-    final titleFocus = _titleFocusNode.hasFocus;
-    final titleOffset = _titleController.selection.baseOffset;
-    final bodyFocus = _contentFocusNode.hasFocus;
-    final bodyOffset = _contentController.selection.baseOffset;
-    _titleController.text = note.title;
-    _contentController.document = _documentFromStored(note.content);
-    _suppressChanges = false;
-    if (titleFocus) {
-      _titleController.selection = TextSelection.collapsed(
-        offset: titleOffset.clamp(0, _titleController.text.length),
-      );
+    try {
+      // 记录替换前的光标位置：替换 document 会把 selection 重置到开头
+      // （光标跳最前），替换后按焦点位置恢复（clamp 到新内容长度）。
+      final titleFocus = _titleFocusNode.hasFocus;
+      final titleOffset = _titleController.selection.baseOffset;
+      final bodyFocus = _contentFocusNode.hasFocus;
+      final bodyOffset = _contentController.selection.baseOffset;
+      _titleController.text = note.title;
+      _contentController.document = _documentFromStored(note.content);
+      if (titleFocus) {
+        _titleController.selection = TextSelection.collapsed(
+          offset: titleOffset.clamp(0, _titleController.text.length),
+        );
+      }
+      if (bodyFocus) {
+        final len = _contentController.document.toPlainText().length;
+        _contentController.updateSelection(
+          TextSelection.collapsed(offset: bodyOffset.clamp(0, len)),
+          ChangeSource.local,
+        );
+      }
+    } finally {
+      // 泄漏防护：替换中途抛异常（畸形 delta 等）也必须复位抑制标志并
+      // 重建订阅——标志卡 true 会让后续所有输入被 _onChanged 静默丢弃
+      //（永不 dirty、永不保存，直到退出编辑页）。
+      _suppressChanges = false;
+      _attachDocListener(); // 文档已替换：重建变更订阅
     }
-    if (bodyFocus) {
-      final len = _contentController.document.toPlainText().length;
-      _contentController.updateSelection(
-        TextSelection.collapsed(offset: bodyOffset.clamp(0, len)),
-        ChangeSource.local,
-      );
-    }
-    _attachDocListener(); // 文档已替换：重建变更订阅
     // 流推送的是库内最新值，即已保存快照。
     _savedTitle = note.title;
     _savedContent = note.content;
@@ -530,11 +570,19 @@ class _EditorPageState extends ConsumerState<EditorPage>
     if (stored.isEmpty) return Document();
     try {
       final decoded = jsonDecode(stored);
-      if (decoded is List) {
-        return Document.fromJson(decoded.cast<Map<String, dynamic>>());
+      // 元素必须全是 Map（delta op）才走 delta 构造：任何畸形元素（非
+      // Map / cast 失败）都落纯文本兜底——此前 cast<Map> 直接抛 TypeError，
+      // 调用方 _applyRemoteNote 的替换中断（_suppressChanges 防护外的
+      // 又一个输入黑洞入口）。
+      if (decoded is List &&
+          decoded.isNotEmpty &&
+          decoded.every((op) => op is Map)) {
+        return Document.fromJson(
+          decoded.map((op) => Map<String, dynamic>.from(op as Map)).toList(),
+        );
       }
     } catch (_) {
-      // 非 JSON：按纯文本转换
+      // 非 JSON / delta 构造失败：按纯文本转换
     }
     final text = stored.endsWith('\n') ? stored : '$stored\n';
     return Document.fromJson([

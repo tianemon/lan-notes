@@ -51,26 +51,8 @@ const Color kStatusConnecting = Color(0xFFFF9500); // 连接中：橙
 const Color kStatusDisconnected = Color(0xFF9AA0A6); // 未连接：灰
 
 // ============================================================
-// 表面分层（背景 / 卡片 / 浮层）
+// 阴影
 // ============================================================
-
-/// 表面层级：背景（scaffold）/ 卡片（列表卡片）/ 浮层（弹窗/菜单）。
-enum AppSurface { background, card, floating }
-
-/// 取当前主题下的表面颜色。
-///
-/// - 亮色：背景暖米白 #F7F5F0、卡片暖白 90% 半透明、浮层暖白 95% 半透明；
-/// - 暗色：背景 #0D1B2A、卡片 #1B2838、浮层 #223344（逐层提亮）。
-Color appSurfaceColor(BuildContext context, AppSurface layer) {
-  final isDark = Theme.of(context).brightness == Brightness.dark;
-  return switch (layer) {
-    AppSurface.background => isDark ? kDarkBackground : kLightBackground,
-    AppSurface.card =>
-      isDark ? kDarkCard : const Color(0xFFFDFCF9).withValues(alpha: 0.90),
-    AppSurface.floating =>
-      isDark ? kDarkFloating : const Color(0xFFFDFCF9).withValues(alpha: 0.95),
-  };
-}
 
 /// 阴影派生：从表面色向黑插值（非纯黑阴影，参考 EE ui_style.dart）。
 Color shadowFromSurface(Color surface, {double strength = 0.12}) {

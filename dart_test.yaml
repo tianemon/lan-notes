@@ -1,0 +1,5 @@
+# 包级测试配置：verify_sync 全链路包装测试默认跳过（真实 UDP + 全链路，
+# 耗时且依赖网络栈），手动运行：flutter test --tags manual
+tags:
+  manual:
+    skip: 手动全链路联调（flutter test --tags manual test/verify_sync_runner_test.dart）

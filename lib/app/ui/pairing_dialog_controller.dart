@@ -157,6 +157,21 @@ class PairingDialogController {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                // 已配对设备的重新配对请求：强提示（同意会覆盖原密钥，
+                // 真设备将失效——防伪造身份的社工风险，C3）。
+                if (request.alreadyPaired)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: Text(
+                      '注意：该设备已在配对列表中。若非你本人正在重新配对，'
+                      '请拒绝——同意会覆盖原配对密钥，导致真正的设备无法连接。',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: Theme.of(context).colorScheme.error,
+                      ),
+                    ),
+                  ),
                 if (ui.queued > 1)
                   Padding(
                     padding: const EdgeInsets.only(bottom: 8),
@@ -185,7 +200,14 @@ class PairingDialogController {
           );
         },
       ),
-    ).then((_) => _dialogOpen = false);
+    ).then((_) {
+      _dialogOpen = false;
+      // 系统返回键也可能关掉弹窗（barrierDismissible=false 不拦物理返回）：
+      // 队列若仍有待处理请求，重新弹窗（否则队首请求卡住不显示，低优修复）。
+      if (_pending.isNotEmpty) {
+        _ensureDialog();
+      }
+    });
   }
 
   /// 队列已空时关闭弹窗（幂等）。

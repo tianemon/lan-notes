@@ -33,6 +33,13 @@ final appRouter = GoRouter(
       builder: (context, state) => const HomePage(),
     ),
     GoRoute(
+      // 新建模式（M3）：无 id 进入即空笔记，首次保存兜底创建
+      //（editor_page _performSave 的 noteId == null 分支）。
+      path: '/editor',
+      name: 'editorNew',
+      builder: (context, state) => const EditorPage(id: null),
+    ),
+    GoRoute(
       path: '/editor/:id',
       name: 'editorDetail',
       builder: (context, state) => EditorPage(id: state.pathParameters['id']),

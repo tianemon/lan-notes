@@ -121,6 +121,11 @@ class _NotesListState extends ConsumerState<NotesList> {
   /// 全局指针路由（拖拽中接管 move/up；抽卡卸载手势源卡片后仍能收尾）。
   PointerRoute? _globalRoute;
 
+  /// 拖拽中登记的注册表通知器（dispose 路径不能再用 ref.read，拖拽开始
+  /// 时缓存引用，卸载兜底清理用）。
+  ValueNotifier<bool>? _dragFlagNotifier;
+  ValueNotifier<String?>? _highlightNotifier;
+
   /// 左侧拖放区是否显示（拖拽中）。
   bool _dragging = false;
 
@@ -129,9 +134,39 @@ class _NotesListState extends ConsumerState<NotesList> {
 
   @override
   void dispose() {
-    // 取消延迟拿起窗口，防止组件销毁后 Timer 触发崩溃。
+    // 取消延迟拿起窗口 + 完整清理拖拽态（ghost/全局指针路由/注册表标记/
+    // 抽卡集合）：NotesList 卸载时 _endDrag 永远不会再被触发，不清理会
+    // 泄漏 OverlayEntry 与全局指针路由（M1）。
     _cancelPendingDrag();
+    _teardownDrag();
     super.dispose();
+  }
+
+  /// 拖拽态的**无 setState** 清理（dispose / build 兜底路径调用前的
+  /// 共用部分）：移除 ghost、注销全局指针路由、复位注册表标记与字段。
+  void _teardownDrag() {
+    _drag = null;
+    _dragFromLongPress = false;
+    if (_globalRoute != null) {
+      WidgetsBinding.instance.pointerRouter.removeGlobalRoute(_globalRoute!);
+      _globalRoute = null;
+    }
+    _removeGhost();
+    _highlightNotifier?.value = null;
+    _dragFlagNotifier?.value = false;
+    _dragging = false;
+    _hiddenIds = {};
+    _zoneRect = null;
+  }
+
+  /// 拖拽态完整兜底清理（多选被外部退出时 build 内调用）：在
+  /// [_teardownDrag] 基础上刷新 UI（触发区/抽卡集合随 setState 消失）。
+  void _abortDrag() {
+    final needsRebuild = _dragging || _hiddenIds.isNotEmpty;
+    _teardownDrag();
+    if (needsRebuild && mounted) {
+      setState(() {});
+    }
   }
 
   @override
@@ -140,10 +175,28 @@ class _NotesListState extends ConsumerState<NotesList> {
     final isSearching = ref.watch(searchQueryProvider).trim().isNotEmpty;
     final layoutMode = ref.watch(layoutModeProvider);
     final multiActive = ref.watch(multiSelectProvider).isNotEmpty;
-    // 兜底：多选退出（拖到文件夹落点移动后 exit）时残留的拖拽态一并清除
-    //（拖拽回调因组件卸载不再触发清理的场景）。
-    if (!multiActive && _dragging) {
-      _dragging = false;
+    // 兜底：多选被外部退出（PopScope/系统返回/抽屉点击等）时，拖拽回调
+    // （_endDrag）不会再被触发——ghost、全局指针路由、落点高亮与抽卡
+    // 集合一并清理，不留残影、不泄漏（M1）。
+    if (!multiActive &&
+        (_dragging || _drag != null || _ghostEntry != null)) {
+      _abortDrag();
+    }
+    // 多选集合修剪（低优）：选中笔记被删除（回收站清空/远端同步删除等）
+    // 后从选中集合移除，避免操作栏计数与实际条目不一致。挂 post-frame，
+    // 不在 build 中写 provider。
+    if (multiActive) {
+      final noteIds = ref.read(notesStreamProvider).value;
+      if (noteIds != null) {
+        final alive = noteIds.map((n) => n.id).toSet();
+        if (ref.read(multiSelectProvider).any((id) => !alive.contains(id))) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) {
+              ref.read(multiSelectProvider.notifier).pruneTo(alive);
+            }
+          });
+        }
+      }
     }
 
     final body = notesAsync.when(
@@ -300,7 +353,11 @@ class _NotesListState extends ConsumerState<NotesList> {
     );
     _drag = drag;
     // 拖拽中：抽屉隐藏所有文件夹选中背景（拖到目标才显示高亮）。
-    ref.read(dropZoneRegistryProvider).dragging.value = true;
+    // 通知器引用随手缓存：dispose 兜底清理不能用 ref（M1）。
+    final registry = ref.read(dropZoneRegistryProvider);
+    _dragFlagNotifier = registry.dragging;
+    _highlightNotifier = registry.highlighted;
+    registry.dragging.value = true;
     setState(() {
       _dragging = true;
       // 抽卡：选中的卡片从列表抽走（其他卡片补位），松手恢复。

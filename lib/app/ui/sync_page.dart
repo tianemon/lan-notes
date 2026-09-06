@@ -15,7 +15,7 @@ import 'widgets/glass_style.dart';
 /// 同步管理页：开启/关闭同步（P2P 总开关）、设备发现与对端连接管理、
 /// 状态显示、手动同步、设备设置（含重置设备 ID）。
 ///
-/// 布局（flat 风格，Material 3，见 docs/技术架构.md 第 4 节组件树）：
+/// 布局（Material 3 毛玻璃卡片分组，见 docs/技术架构.md 第 4 节组件树）：
 /// - 顶部同步总开关：开启后本机同时担任服务端（固定端口 WebSocket 监听 +
 ///   常驻监听）与客户端（v4 智能扫描：直连优先 + 按需扫描），见
 ///   [SyncService.enable]；状态说明展示本机设备名与固定端口；
@@ -29,8 +29,8 @@ import 'widgets/glass_style.dart';
 ///   [PairingDialogController] 弹出，任意页面可见）；
 /// - 设备 ID 冲突横幅：握手/发现/手动连接检测到同 ID 设备时置顶展示，
 ///   提示在设置中重置设备 ID；
-/// - SyncStatusBar：同步开关状态、已连接设备数、最近同步时间、同步中指示；
-/// - 「立即同步」按钮：向所有已连接对端发送 sync_request 触发全量对齐；
+/// - SyncStatusBar：同步开关状态、已连接设备数、最近同步时间、同步中指示
+///   （任一对端会话就绪触发全量对齐期间转圈，完成或 8s 超时后停止）。
 /// - 设置入口：本机设备名修改（v4 已移除连接密码）+ **重置设备 ID**
 ///   （重新生成 deviceId，旧配对关系失效需重新配对）。
 ///
@@ -119,12 +119,19 @@ class _SyncPageState extends ConsumerState<SyncPage> {
       _setSyncing(false);
       if (mounted) setState(() {});
     });
-    // 本机连接表变化（连接/断开/登记）：触发重建，列表读 service.connectedDevices。
-    _devicesSub = _service.devicesUpdates.listen((_) {
+    // 「同步中」指示接线（M2）：任一对端会话就绪（由未连接/连接中翻转为
+    // 已连接）即触发全量对齐——置「同步中」直到 syncCompleted（8s 超时兜底）。
+    bool anyPeerConnected = false;
+    _peersSub = _service.peerDevices.listen((peers) {
+      final connected = peers.any((p) => p.status == PeerStatus.connected);
+      if (connected && !anyPeerConnected) {
+        _setSyncing(true);
+      }
+      anyPeerConnected = connected;
       if (mounted) setState(() {});
     });
-    // 对端设备列表（连接表 + 信任列表合并）：已配对设备卡数据源。
-    _peersSub = _service.peerDevices.listen((_) {
+    // 本机连接表变化（连接/断开/登记）：触发重建，列表读 service.connectedDevices。
+    _devicesSub = _service.devicesUpdates.listen((_) {
       if (mounted) setState(() {});
     });
     _discoverySub = _service.discoveredDevices.listen((devices) {
@@ -181,11 +188,18 @@ class _SyncPageState extends ConsumerState<SyncPage> {
         // 标记，回前台不自动重新开启（尊重用户操作；重启后按 auto_sync 配置恢复）。
         await _service.disableByUser();
         _syncTimeout?.cancel();
+        // UI 态与 service 对齐（M4）：service.disable 已停止广播/扫描，
+        // 页面本地的「广播中/扫描中/同步中」转圈一并复位，避免再开同步时
+        // 开关状态显示错误。
+        _announceTimer?.cancel();
+        _scanUiTimer?.cancel();
         if (mounted) {
           setState(() {
             _syncEnabled = false;
             _discoveredDevices = const [];
             _syncing = false;
+            _announcing = false;
+            _scanning = false;
           });
         }
       }
@@ -939,77 +953,28 @@ class _StatusBadge extends StatelessWidget {
   }
 }
 
-/// 彩色状态圆点：已连接绿 / 连接中橙（呼吸动画）/ 未连接灰。
-///
-/// [pulse] 为 true 时透明度循环呼吸（连接中/自动连接中状态），
-/// 动画轻量（单个 FadeTransition，不叠加 GPU 开销）。
-class _StatusDot extends StatefulWidget {
-  const _StatusDot({required this.color, this.pulse = false});
+/// 彩色状态圆点：已连接绿 / 未连接灰（静态；历史上的呼吸动画参数
+/// [pulse] 恒为 false，已移除——不保留永不生效的动画代码路径）。
+class _StatusDot extends StatelessWidget {
+  const _StatusDot({required this.color});
 
   final Color color;
-  final bool pulse;
-
-  @override
-  State<_StatusDot> createState() => _StatusDotState();
-}
-
-class _StatusDotState extends State<_StatusDot>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _pulse;
-
-  @override
-  void initState() {
-    super.initState();
-    // initState 显式创建（非惰性）：避免 dispose 时首次访问 late 字段
-    // 触发创建 → 此时 widget 已 deactivated → 查 TickerMode ancestor 崩溃。
-    _pulse = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 900),
-    );
-    if (widget.pulse) _pulse.repeat(reverse: true);
-  }
-
-  @override
-  void didUpdateWidget(_StatusDot oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (widget.pulse && !oldWidget.pulse) {
-      _pulse.repeat(reverse: true);
-    } else if (!widget.pulse && oldWidget.pulse) {
-      _pulse.stop();
-      _pulse.value = 1;
-    }
-  }
-
-  @override
-  void dispose() {
-    _pulse.dispose();
-    super.dispose();
-  }
 
   @override
   Widget build(BuildContext context) {
-    final opacity = widget.pulse
-        ? Tween<double>(
-            begin: 0.4,
-            end: 1,
-          ).animate(CurvedAnimation(parent: _pulse, curve: Curves.easeInOut))
-        : const AlwaysStoppedAnimation(1.0);
-    return FadeTransition(
-      opacity: opacity,
-      child: Container(
-        width: 10,
-        height: 10,
-        decoration: BoxDecoration(
-          color: widget.color,
-          shape: BoxShape.circle,
-          boxShadow: [
-            BoxShadow(
-              color: widget.color.withValues(alpha: 0.5),
-              blurRadius: 4,
-              spreadRadius: 1,
-            ),
-          ],
-        ),
+    return Container(
+      width: 10,
+      height: 10,
+      decoration: BoxDecoration(
+        color: color,
+        shape: BoxShape.circle,
+        boxShadow: [
+          BoxShadow(
+            color: color.withValues(alpha: 0.5),
+            blurRadius: 4,
+            spreadRadius: 1,
+          ),
+        ],
       ),
     );
   }
@@ -1028,7 +993,7 @@ List<Widget> _peerLeading(String name, Color statusColor) {
   }
   // 猜不到类型：圆点兜底（在线绿/离线灰，连接中按离线显示）。
   return [
-    _StatusDot(color: statusColor, pulse: false),
+    _StatusDot(color: statusColor),
     const SizedBox(width: 12),
   ];
 }

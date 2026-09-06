@@ -42,6 +42,7 @@ class PairingRequestedEvent extends PairingEvent {
     required this.deviceId,
     required this.deviceName,
     this.connectionId,
+    this.alreadyPaired = false,
   });
 
   /// 请求方设备 ID。
@@ -52,6 +53,11 @@ class PairingRequestedEvent extends PairingEvent {
 
   /// 对应会话 ID（task-13 P2P：入站/出站会话统一为 session id）。
   final String? connectionId;
+
+  /// 该设备 ID 已在本机信任列表且持密钥（重新配对场景）：弹窗需展示
+  /// 强提示——有设备正用已配对身份请求重新配对，同意会**覆盖原密钥**；
+  /// 若非本人操作请拒绝（防伪造身份覆盖密钥的社工风险，C3）。
+  final bool alreadyPaired;
 }
 
 /// 配对失败（请求被拒绝 / 协议版本不兼容）：请求方提示原因。
@@ -355,6 +361,17 @@ class SyncService {
   /// [PairingRequestedEvent] 后与本队列保持同序（队首即当前弹窗目标）。
   /// v4（task-27）：接受方生成密钥经 pairing_accept 发送，请求方确认回发。
   final List<_PeerSession> _pairingQueue = [];
+
+  /// 配对请求队列上限（洪泛防护）：未认证方可伪造 pairing_request 无限
+  /// 堆积全局弹窗队列；超限的请求直接丢弃（不弹窗、不断连接）。
+  static const int maxPairingQueue = 8;
+
+  /// 同一 deviceId 配对请求冷却期（洪泛防护）：冷却期内的重复请求丢弃，
+  /// 防单条连接反复投递请求刷屏（重试由对端新建连接自然间隔）。
+  static const Duration pairingRequestCooldown = Duration(seconds: 10);
+
+  /// 最近一次配对请求时间（deviceId → 时间，洪泛冷却用；disable 时清空）。
+  final Map<String, DateTime> _lastPairingRequestAt = {};
 
   /// 信任列表缓存（deviceId → 设备）：供 [peerList] 合并展示与
   /// 发现列表「已配对/未配对」标记；配对成功/重置身份后刷新。
@@ -682,6 +699,10 @@ class SyncService {
       // UI 提示后用户可排查端口再重试）。
       throw lastError!;
     }
+    // disable() 可能恰在本方法的 await 间隙执行（服务端刚 start 就被
+    // stop）：此后不得继续装配监听/直连，否则常驻监听与连接尝试会在
+    // 同步关闭后残留（重开同步前 devices 流仍可能触发连接尝试）。
+    if (!isEnabled) return;
     // 实际端口持久化（需求 9：重启沿用调整后的端口），并记录是否发生顺延，
     // 供同步页展示「默认端口被占用，已自动调整」提示。
     _lastPortFallbackBase = startedPort != basePort ? basePort : null;
@@ -769,6 +790,7 @@ class SyncService {
     _fileSendsInFlight.clear();
     // 发现列表冲突去重状态随开关重置：重新开启后同一冲突设备可再上报。
     _reportedDiscoveryConflicts.clear();
+    _lastPairingRequestAt.clear(); // 配对请求冷却随开关重置
     _emitDevices();
   }
 
@@ -2050,6 +2072,17 @@ class SyncService {
     return hmac.toString(); // Digest.toString() 即 hex
   }
 
+  /// 常数时间字符串比较（HMAC 比对用）：逐字符异或累积差值，长度不同
+  /// 直接不等（长度本身非机密）。LAN 个人威胁模型下属纵深防御，成本一行。
+  static bool constantTimeEquals(String a, String b) {
+    if (a.length != b.length) return false;
+    var diff = 0;
+    for (var i = 0; i < a.length; i++) {
+      diff |= a.codeUnitAt(i) ^ b.codeUnitAt(i);
+    }
+    return diff == 0;
+  }
+
   /// 生成 [bytes] 个随机字节的 hex 编码（crypto 安全随机源）。
   String _randomHex(int bytes) {
     final rnd = math.Random.secure();
@@ -2254,6 +2287,16 @@ class _PeerSession {
   String? _challengeNonce; // 本机已发挑战的 nonce（验证响应回显是否匹配）
   Timer? _challengeTimer; // 挑战超时（对端不应答按未配对处理，防会话卡死）
 
+  // 未认证握手阶段的暂存（载荷可伪造，就绪后才生效，见 _onReady）：
+  Map<String, bool>? _pendingSyncTo; // hello 携带的对端「向」配置
+  String? _pendingPeerAddress; // hello/入站连接解析出的对端地址
+  int? _pendingPeerPort; // hello 携带的对端监听端口
+
+  // 已配对 ID 的重新配对验证状态（防伪造配对请求覆盖密钥，C3）：
+  // 持密钥 ID 的 pairing_request 先经挑战验证；挑战失败/超时后置位，
+  // 后续请求跳过挑战直接进队列（带「已配对设备重新配对」强提示）。
+  bool _rePairChallengeFailed = false;
+
   /// 是否已触发过全量对齐（sync_request）。
   ///
   /// pairing_accept 与 welcome 双路径都会调用 [_onReady]，该标志保证一次
@@ -2402,6 +2445,10 @@ class _PeerSession {
     _challengeNonce = null;
     _challengeTimer?.cancel();
     _challengeTimer = null;
+    _pendingSyncTo = null; // 未认证暂存随重连作废（等下一次 hello 重报）
+    _pendingPeerAddress = null;
+    _pendingPeerPort = null;
+    _rePairChallengeFailed = false;
     _fullSyncTriggered = false; // 重连后需重新全量对齐（task-15）
     _stopHeartbeat(); // 会话断开：停止心跳（重连握手就绪后重新启动）
   }
@@ -2504,30 +2551,58 @@ class _PeerSession {
   /// 本机作为**接受方**进入配对队列（FIFO）：UI 收到 pairing_request 弹窗
   /// 「xx 请求连接」。多对端同时请求时按到达顺序排队（task-14 解决单槽位
   /// 覆盖）。
-  void _enterConsenter(String peerId, String peerName) {
+  ///
+  /// [alreadyPaired]：该 ID 已在本机信任列表且持密钥（重新配对场景）——
+  /// UI 据此展示强提示（防伪造身份覆盖密钥的社工风险，C3）。
+  ///
+  /// 洪泛防护（C5）：同 ID 冷却期内的重复请求与超上限的请求直接丢弃
+  /// （未认证方可伪造 pairing_request 无限堆积全局弹窗队列）。
+  void _enterConsenter(String peerId, String peerName,
+      {bool alreadyPaired = false}) {
     _pairingRole = _PairingRole.consenter;
-    if (!service._pairingQueue.contains(this)) {
-      service._pairingQueue.add(this);
-      service._pairingController.add(
-        PairingRequestedEvent(
-          deviceId: peerId,
-          deviceName: service._safePeerName(peerName, fallback: peerId),
-          connectionId: id,
-        ),
-      );
+    if (service._pairingQueue.contains(this)) {
+      return;
     }
+    final last = service._lastPairingRequestAt[peerId];
+    if (last != null &&
+        DateTime.now().difference(last) < SyncService.pairingRequestCooldown) {
+      return; // 冷却期内：丢弃（保持 consenter 角色，等下一轮合法重试）
+    }
+    if (service._pairingQueue.length >= SyncService.maxPairingQueue) {
+      return; // 队列已满：丢弃（弹窗数有上限，不无限堆积）
+    }
+    service._lastPairingRequestAt[peerId] = DateTime.now();
+    service._pairingQueue.add(this);
+    service._pairingController.add(
+      PairingRequestedEvent(
+        deviceId: peerId,
+        deviceName: service._safePeerName(peerName, fallback: peerId),
+        connectionId: id,
+        alreadyPaired: alreadyPaired,
+      ),
+    );
   }
 
   /// 配对成功离开队列（不通知 UI 取消；[PairingSucceededEvent] 由调用方发出）。
   void _leaveQueueOnSuccess() {
     _pairingRole = _PairingRole.none;
     service._pairingQueue.remove(this);
+    // 请求已决议：清除冷却，允许对端立即重新发起（如同意后的重连）。
+    if (peerDeviceId != null) {
+      service._lastPairingRequestAt.remove(peerDeviceId);
+    }
   }
 
   /// 离开队列并通知 UI 该请求已失效（连接断开/用户取消/拒绝）。
   void _leaveQueueCancelled(String reason) {
     _pairingRole = _PairingRole.none;
     service._pairingQueue.remove(this);
+    // 请求已决议（拒绝/取消/断开）：清除冷却——用户拒绝后立即重试是
+    // 正常操作，不应被洪泛冷却拦截（verify_sync 场景十）；洪泛防护仍
+    // 覆盖「未决议请求堆积」场景（未离队的请求不重置冷却）。
+    if (peerDeviceId != null) {
+      service._lastPairingRequestAt.remove(peerDeviceId);
+    }
     service._pairingController.add(
       PairingCancelledEvent(
         deviceId: peerDeviceId ?? '',
@@ -2568,10 +2643,10 @@ class _PeerSession {
         syncTo: final peerSyncTo,
       ):
         if (peerSyncTo.isNotEmpty) {
-          service._peerSyncToConfigs = {
-            ...service._peerSyncToConfigs,
-            peerId: peerSyncTo,
-          };
+          // hello 在认证前到达（载荷可伪造）：配置先暂存，会话就绪（双方
+          // 互信）后才生效（_onReady）——防未认证方覆写转发过滤配置
+          //（同 sync_config 的信任门控，见 C2/C4 安全加固）。
+          _pendingSyncTo = peerSyncTo;
         }
         await _onPeerHello(
           peerId,
@@ -2599,7 +2674,12 @@ class _PeerSession {
       case PairingFailMessage(reason: final reason):
         await _onPairingFail(reason);
       case UnpairMessage(deviceId: final claimedPeerId):
-        await service._onUnpairReceived(this, claimedPeerId);
+        // 信任门控：unpair 是破坏性消息（静默解除配对），仅本机已通过
+        // HMAC 验证的会话可触发——会话身份来自未认证 hello，攻击者声明
+        // 任意已配对设备 ID 即可伪造 unpair 清空信任列表（未认证 DoS）。
+        if (_peerTrusted) {
+          await service._onUnpairReceived(this, claimedPeerId);
+        }
       case ChallengeMessage(nonce: final nonce):
         await _onChallenge(nonce);
       case ChallengeResponseMessage(nonce: final nonce, hmac: final hmac):
@@ -2633,12 +2713,16 @@ class _PeerSession {
       case AutoConnectRejectedMessage(deviceId: final rejectingPeerId):
         // 对端关闭了对本机的自动连接：本机收到被拒通知 → 自动关闭对
         // 该对端的自动连接开关（持久化），避免反复尝试自动连被拒（Q4）。
-        await service._onAutoConnectRejected(rejectingPeerId);
+        // 信任门控：该消息可改变本机连接行为，仅已验证会话可触发。
+        if (_peerTrusted) {
+          await service._onAutoConnectRejected(rejectingPeerId);
+        }
         break;
       case SyncConfigMessage(syncTo: final peerConfig):
         // 对端同步方向配置变更：更新缓存（fan-out 转发/接收过滤依据）。
+        // 信任门控：覆写该缓存可让本机错误丢弃/转发他人数据（未认证 DoS）。
         final fromPeer = peerDeviceId;
-        if (fromPeer != null && peerConfig.isNotEmpty) {
+        if (_peerTrusted && fromPeer != null && peerConfig.isNotEmpty) {
           service._peerSyncToConfigs = {
             ...service._peerSyncToConfigs,
             fromPeer: peerConfig,
@@ -2649,8 +2733,10 @@ class _PeerSession {
         // 对端主动断开（手动断开/关同步）：标记该对端为「手动断开」——
         // 本机不再自动重连它（切前台凭缓存直连也跳过），直到用户手动
         // 恢复（手动连接开关 / connectTrustedPeer 清除标记）。
+        // 信任门控：该标记阻断自动重连，伪造可让真设备「手动断开」假象；
+        // 无论是否已验证，连接本身都要关闭（对端要求断开时挂起会话无意义）。
         final fromPeer = peerDeviceId;
-        if (fromPeer != null && fromPeer.isNotEmpty) {
+        if (_peerTrusted && fromPeer != null && fromPeer.isNotEmpty) {
           service._manuallyDisconnected.add(fromPeer);
           service._emitPeers();
         }
@@ -2703,11 +2789,15 @@ class _PeerSession {
     // 入站缓存对端地址（task-32）：从连接对端 IP + hello 携带的监听端口
     // 写入地址缓存——入站方（被连接方）重新上线时可凭缓存直连对方。
     // 旧对端不带 port 时跳过（无法得知对端监听端口）。
+    // hello 未认证（deviceId 可伪造）：地址先暂存，会话就绪（HMAC 通过
+    // /配对完成）后才写入缓存（_onReady）——防未认证方把已配对设备的
+    // 缓存地址改写为攻击者 IP（地址缓存投毒，C4）。
     final link = this.link;
     if (link is _IncomingLink && peerPort != null && peerPort > 0) {
       final address = link.connection.remoteAddress?.address;
       if (address != null && address.isNotEmpty) {
-        service._cachePeerAddress(peerId, address, peerPort);
+        _pendingPeerAddress = address;
+        _pendingPeerPort = peerPort;
       }
     }
     // 设备 ID 冲突：对端 deviceId 与本机相同 → 拒绝该连接并断开（用户需求）。
@@ -2747,6 +2837,9 @@ class _PeerSession {
       if (!_challengeSent || _closed) return;
       _challengeSent = false;
       _challengeNonce = null;
+      // 挑战超时也计为验证失败：若这是「已配对 ID 重新配对验证」（C3），
+      // 后续 pairing_request 不再重复挑战，直接进队列（带强提示）。
+      _rePairChallengeFailed = true;
       _sendWelcome(trusted: false); // 对端未应答挑战：按未配对处理
     });
     sendMessage(ChallengeMessage(nonce: _challengeNonce!).toJson());
@@ -2804,12 +2897,32 @@ class _PeerSession {
     final displayName = peerName.trim().isNotEmpty
         ? peerName
         : (this.peerName ?? peerId);
-    _enterConsenter(peerId, displayName);
+    // 已配对 ID 的配对请求验证（C3 防伪造配对覆盖密钥）：本机持有该 ID
+    // 的密钥时，真正的已配对设备永远走 HMAC 握手（不会发 pairing_request）
+    // ——先挑战验证，通过则按已认证流程放行（不进配对队列、不弹窗）；
+    // 验证失败/超时后才允许进队列，且弹窗带「已配对设备重新配对」强提示
+    //（覆盖密钥会使真设备失效、攻击者取而代之，须用户明确确认）。
+    final secret = await service._identity.getTrustedSecret(peerId);
+    final hasSecret = secret != null && secret.isNotEmpty;
+    if (hasSecret && !_peerTrusted && !_rePairChallengeFailed) {
+      _sendChallenge();
+      return;
+    }
+    _enterConsenter(peerId, displayName, alreadyPaired: hasSecret);
   }
 
   /// 收到 challenge（对端验证本机）：用本地存储的该设备密钥计算 HMAC 响应。
   Future<void> _onChallenge(String nonce) async {
     if (nonce.isEmpty) return;
+    // 反射预言机防护（C1 认证级漏洞）：挑战只应答两类会话——
+    // 1) 本机为发起方：接受方验证本机的首个挑战（合法流程中发起方此时
+    //    尚未验证对端，必须应答）；
+    // 2) 本机已验证过对端（_peerTrusted）：发起方在 welcome{trusted:true}
+    //    后发反向挑战时，接受方必然已先完成对发起方的验证。
+    // 未验证的入站会话发来的挑战一律不应答：否则攻击者可把本机发出的
+    // 挑战原样反射回来，骗本机算出 HMAC 答案，从而以任意已配对设备身份
+    // 通过认证（局域网内完全冒充）。
+    if (!isInitiator && !_peerTrusted) return;
     final peerId = peerDeviceId;
     if (peerId == null) return;
     final secret = await service._identity.getTrustedSecret(peerId);
@@ -2838,7 +2951,7 @@ class _PeerSession {
       return;
     }
     final expected = service.hmacHex(secret, nonce);
-    if (hmac == expected) {
+    if (SyncService.constantTimeEquals(hmac, expected)) {
       // 真身（持有配对时交换的密钥）：放行。
       _peerTrusted = true;
       _sendWelcome(trusted: true);
@@ -2847,7 +2960,10 @@ class _PeerSession {
       _onReady();
       service._emitDevices();
     } else {
-      // 伪造密钥/伪装 deviceId：视为未配对。
+      // 伪造密钥/伪装 deviceId：视为未配对。已配对 ID 的重新配对验证
+      // （C3）就此失败：后续 pairing_request 不再重复挑战，直接进队列
+      // （弹窗带强提示，交用户裁决）。
+      _rePairChallengeFailed = true;
       _peerTrusted = false;
       _sendWelcome(trusted: false);
     }
@@ -3206,13 +3322,33 @@ class _PeerSession {
     service._emitPeers(); // ready 翻转/中间态：统一刷新设备列表状态
     // task-32：存量信任条目存了 ID（旧包配对/对端空名）时，用会话名刷新。
     unawaited(_refreshTrustedNameIfId());
+    // 未认证阶段暂存的 hello 载荷此刻才生效（双方已互信，C4）：
+    // 对端「向」配置 → 转发过滤缓存；对端地址 → 地址缓存（内存+持久化）。
+    final peerId = peerDeviceId;
+    if (ready && peerId != null) {
+      final pendingSyncTo = _pendingSyncTo;
+      if (pendingSyncTo != null && pendingSyncTo.isNotEmpty) {
+        _pendingSyncTo = null;
+        service._peerSyncToConfigs = {
+          ...service._peerSyncToConfigs,
+          peerId: pendingSyncTo,
+        };
+      }
+      final pendingAddress = _pendingPeerAddress;
+      final pendingPort = _pendingPeerPort;
+      if (pendingAddress != null && pendingPort != null) {
+        _pendingPeerAddress = null;
+        _pendingPeerPort = null;
+        service._cachePeerAddress(peerId, pendingAddress, pendingPort);
+      }
+    }
     if (!ready || _fullSyncTriggered) return;
     _fullSyncTriggered = true;
     _startHeartbeat(); // 会话就绪：启动心跳探活（离线检测）
     service._emitDevices();
     // task-32：连接建立时按方向开关拉取——「从此设备同步」开才发
     // sync_request（对端是否响应受其「向本机同步」开关控制）。
-    final peerId = peerDeviceId;
+    // （peerId 复用上方声明。）
     if (peerId != null && (service._syncFromByPeerId[peerId] ?? true)) {
       _sendSyncRequest();
     }

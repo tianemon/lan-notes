@@ -131,11 +131,11 @@ CodeGraph 用于**结构性**问题——谁调了谁、改动会影响什么、
 
 - **项目名称**: EasyNote（局域网笔记，软件显示名 EasyNote，迭代改名——task-30 后用户驱动，无 task 编号）
 - **一句话描述**: 纯局域网内同步笔记的跨平台应用，手机记、电脑看，不依赖公网
-- **核心功能**: 笔记增删改查/搜索/本地持久化（drift·SQLite）+ mDNS 设备发现 + WebSocket 同步（LWW 冲突合并）
+- **核心功能**: 笔记增删改查/搜索/本地持久化（drift·SQLite）+ UDP 广播设备发现 + WebSocket 同步（LWW 冲突合并 + HMAC 挑战认证）
 
 ## 4.2 技术栈与启动
 
-- **技术栈**: Flutter 3.38 / Dart 3.10，drift（SQLite）、flutter_riverpod、go_router、multicast_dns、web_socket_channel
+- **技术栈**: Flutter 3.38 / Dart 3.10，drift（SQLite）、flutter_riverpod、go_router、web_socket_channel（发现为自研 UDP 广播，无 mDNS 依赖）
 - **目标平台**: iOS / Android / Windows / macOS（本机仅能编译验证 Windows 与 Android，iOS/macOS 需 Mac）
 - **启动命令**:
 

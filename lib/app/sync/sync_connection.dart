@@ -274,8 +274,12 @@ class SyncClient {
   /// 可空=不限）后返回当前是否已连接。
   Future<bool> waitForTerminal({Duration? timeout}) async {
     final completer = Completer<bool>();
+    Timer? timeoutTimer;
     late final StreamSubscription<SyncConnectionState> sub;
     void settle() {
+      // 先取消超时兜底 Timer：settle 后它若再触发会空转（引用已 cancel
+      // 的订阅），且让测试/调用的 Future 等待期残留无意义定时器。
+      timeoutTimer?.cancel();
       if (completer.isCompleted) return;
       completer.complete(_state == SyncConnectionState.connected);
       sub.cancel();
@@ -292,7 +296,7 @@ class SyncClient {
       settle();
     }
     if (timeout != null) {
-      Timer(timeout, settle);
+      timeoutTimer = Timer(timeout, settle);
     }
     return completer.future;
   }

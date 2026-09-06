@@ -58,8 +58,6 @@ dependencies:
   file_picker: ^10.0.0
   # 图片保存到相册（移动端，task-31 图片保存本地）：Android 13+ 免权限，iOS 需相册权限（已配 Info.plist）
   gal: ^2.3.0
-  # 图片压缩（task-29）：纯 Dart 解码/缩放/JPEG 编码（最长边 1600px、质量 85）。
-  image: ^4.9.1
   # 附件目录（task-29）：应用支持目录 attachments/（path_provider）。
   path_provider: ^2.1.6
   # flutter_quill 工具栏本地化必需（task-29）：不带 delegate 会抛异常。

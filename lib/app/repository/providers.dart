@@ -80,6 +80,13 @@ class MultiSelectNotifier extends StateNotifier<Set<String>> {
   /// 全选/取消全选（[all] 为当前全部可选项）。
   void selectAll(Iterable<String> all) => state = all.toSet();
 
+  /// 修剪选中集合：只保留 [alive] 中仍存在的 id（选中笔记被删除后的
+  /// 清理，防操作栏计数与实际条目不一致）；清空后即退出多选。
+  void pruneTo(Set<String> alive) {
+    if (state.every(alive.contains)) return;
+    state = state.where(alive.contains).toSet();
+  }
+
   /// 退出多选（清空）。
   void exit() => state = const {};
 }
@@ -124,8 +131,10 @@ class DropZoneRegistry {
   /// 当前注册的全部目标 id（落点命中遍历用）。
   List<String> get keys => _keys.keys.toList();
 
-  /// 清空注册（FolderDrawer build 开头调用，防残留）。
-  void reset() => _keys.clear();
+  // 无 reset()：FolderDrawer 每次 rebuild 清空注册表会连带清掉 const
+  // 子组件（_NewFolderDropTarget）注册的 __new__（它不随之重建、无法
+  // 重新注册，拖到按钮无反应的根因）；stale 条目由 rectOf 返回 null
+  // 自动跳过，无需清理。
 
   /// 取目标在全局坐标系中的矩形（未挂载返回 null）。
   Rect? rectOf(String id) {

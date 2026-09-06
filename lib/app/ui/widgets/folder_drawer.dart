@@ -490,6 +490,21 @@ class _FolderItemState extends ConsumerState<_FolderItem> {
   /// 语义，不高亮则看不出菜单属于哪个文件夹——用户反馈）。
   bool _menuOpen = false;
 
+  /// 展示中的菜单浮层（[showFolderItemMenu] 打开时登记）：条目在菜单
+  /// 打开期间被卸载（文件夹被删除/列表刷新）时 dispose 兜底移除，
+  /// 防浮层泄漏滞留（低优修复）。
+  OverlayEntry? _menuEntry;
+
+  @override
+  void dispose() {
+    if (_menuOpen && _menuEntry != null) {
+      _menuOpen = false;
+      _menuEntry?.remove();
+      _menuEntry = null;
+    }
+    super.dispose();
+  }
+
   String? get id => widget.id;
   String get name => widget.name;
   Widget get icon => widget.icon;
@@ -670,6 +685,7 @@ class _FolderItemState extends ConsumerState<_FolderItem> {
     void removeMenu() {
       if (!_menuOpen) return;
       _menuOpen = false;
+      _menuEntry = null;
       overlayEntry.remove();
       if (mounted) setState(() {});
     }
@@ -779,6 +795,7 @@ class _FolderItemState extends ConsumerState<_FolderItem> {
         ],
       ),
     );
+    _menuEntry = overlayEntry;
     overlay.insert(overlayEntry);
   }
 }

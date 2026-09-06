@@ -154,7 +154,8 @@ Future<void> _restoreNote(
   WidgetRef ref,
   Note note,
 ) async {
-  await ref.read(noteRepositoryProvider).restoreNote(note.id);
+  final repo = ref.read(noteRepositoryProvider); // 先取（await 后 ref 不可用）
+  await repo.restoreNote(note.id);
   if (!context.mounted) return;
   showAppSnackBar('已恢复', duration: const Duration(seconds: 1));
 }
@@ -183,7 +184,8 @@ Future<void> _confirmPurgeOne(
     ],
   );
   if (confirmed != true) return;
-  await ref.read(noteRepositoryProvider).purgeNote(note.id);
+  final repo = ref.read(noteRepositoryProvider); // 弹窗 await 后 ref 不可用
+  await repo.purgeNote(note.id);
 }
 
 /// 清空全部：二次确认后对当前列表逐条 [NoteRepository.purgeNote]。
@@ -211,7 +213,8 @@ Future<void> _confirmPurgeAll(
     ],
   );
   if (confirmed != true) return;
+  final repo = ref.read(noteRepositoryProvider); // 弹窗 await 后 ref 不可用
   for (final note in notes) {
-    await ref.read(noteRepositoryProvider).purgeNote(note.id);
+    await repo.purgeNote(note.id);
   }
 }

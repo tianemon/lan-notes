@@ -397,8 +397,19 @@ class _EditorPageState extends ConsumerState<EditorPage>
   ///   覆盖后用户继续输入照常防抖保存（version+1 推送），保存回推内容一致
   ///   跳过，不产生循环。
   void _subscribeNoteStream() {
+    final id = _noteId;
+    if (id == null) {
+      // 新建模式（/editor 无 id）：无既有笔记可订阅——直接按「空笔记
+      // 已就绪」处理，捕获空基线（S1 判定用）；首次保存创建笔记后由
+      // _performSave 转入编辑态并订阅笔记流。
+      // 直接赋值不走 _setStatus（initState 路径无需 setState）。
+      _initialized = true;
+      _saveStatus = _SaveStatus.saved;
+      _captureBaseline(title: '', content: '');
+      return;
+    }
     _noteSub = ref.listenManual(
-      editorNoteProvider(_noteId!),
+      editorNoteProvider(id),
       _onNoteStream,
       fireImmediately: true,
     );
@@ -579,9 +590,15 @@ class _EditorPageState extends ConsumerState<EditorPage>
     if (_saveStatus != _SaveStatus.saving && _saveStatus != _SaveStatus.error) {
       _setStatus(_SaveStatus.saving);
     }
-    _wordCountCache =
+    // 字数缓存仅在变化时刷新 UI：每键全量提取不可避免（缓存语义），
+    // 但整页 setState 每键一次会让光标区外的整棵子树无谓重建（低优修复）。
+    final wordCount =
         _titleController.text.length +
         _contentController.document.toPlainText().length;
+    if (wordCount != _wordCountCache) {
+      _wordCountCache = wordCount;
+      setState(() {});
+    }
     // idle 防抖重置。
     _debounce?.cancel();
     _debounce = Timer(_debounceDuration, () {
@@ -592,7 +609,6 @@ class _EditorPageState extends ConsumerState<EditorPage>
     _maxIntervalTimer ??= Timer(_maxSaveInterval, () {
       _enqueueSave();
     });
-    setState(() {}); // 字数统计实时刷新
   }
 
   /// 标题+正文合计字数（中英文按字符计；正文按 delta 纯文本提取，task-29）。
@@ -625,7 +641,26 @@ class _EditorPageState extends ConsumerState<EditorPage>
       return;
     }
     final noteId = _noteId;
-    if (noteId == null) return; // 防御：路由恒带 id，正常不会走到。
+    if (noteId == null) {
+      // 新建模式兜底创建（M3，/editor 无 id 路由）：防抖窗口内输入后
+      // 首次保存在此创建笔记，随后转入编辑态（订阅新 id 的笔记流）。
+      final created = await ref
+          .read(noteRepositoryProvider)
+          .createNote(title: title, content: content);
+      if (!mounted) return;
+      setState(() {
+        _noteId = created.id;
+        _lastSavedVersion = created.version;
+        _savedTitle = created.title;
+        _savedContent = created.content;
+      });
+      _dirty = false;
+      _maxIntervalTimer?.cancel();
+      _maxIntervalTimer = null;
+      _setStatus(_SaveStatus.saved);
+      _subscribeNoteStream();
+      return;
+    }
     // 真正写库开始：才亮「保存中」。
     _setStatus(_SaveStatus.saving);
     try {
@@ -703,8 +738,11 @@ class _EditorPageState extends ConsumerState<EditorPage>
       await _flushPendingSave();
       return;
     }
-    if (isEmptyNow && _baselineEmpty) {
+    if (isEmptyNow && _baselineEmpty && _baselineCaptured) {
       // 进入时为空、现在仍为空：直接物理删除（同步会广播删除，对端一致）。
+      // 必须以基线已捕获（drift 首帧已推送）为前提——首帧未到时无法知道
+      // 笔记进入时是否为空，此时物理删除会把一篇有内容的笔记删掉（S1：
+      // 首帧前按返回丢数据），未捕获基线一律走兜底保存路径。
       await ref.read(noteRepositoryProvider).deleteNote(noteId);
       if (!mounted) return;
       context.pop();
@@ -968,8 +1006,9 @@ class _EditorPageState extends ConsumerState<EditorPage>
         ),
         body: Stack(
           children: [
-            // 编辑器卡片始终构建（编辑态含 Hero，目标 Hero 首帧即存在，
-            // 保证列表→编辑页的 Hero 飞行可触发）；加载中叠加浮层。
+            // 编辑器卡片始终构建；加载中叠加浮层。
+            // （列表侧 heroTag 恒为 null，编辑页未包 Hero——无飞行过渡，
+            // 相关注释已对齐现实，勿再引用 Hero。）
             _buildEditor(),
             if (!_initialized)
               const Positioned.fill(
@@ -1002,10 +1041,10 @@ class _EditorPageState extends ConsumerState<EditorPage>
   }
 
   /// 编辑器主体：干净输入区（无卡片框包裹，直接铺在页面背景，像备忘录）。
-  /// 编辑态（有 id）包 Hero 与列表卡片同 tag，实现列表→编辑页
-  /// 的 Hero 过渡（task-25）；新建态无 Hero。
   /// 布局：标题 → 标签编辑（task-28，仅编辑态）→ 富文本工具栏 → 正文
   /// QuillEditor → 底部字数统计。
+  /// （历史上有列表→编辑页的 Hero 过渡（task-25），列表侧 heroTag 已
+  /// 恒为 null、本页未包 Hero，过渡不存在——保留此说明防误恢复。）
   Widget _buildEditor() {
     final editorCard = Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,

@@ -600,6 +600,124 @@ class _EditorPageState extends ConsumerState<EditorPage>
     });
   }
 
+  // ---------- 剪贴板快捷键兜底（macOS ⌘C 失效修复） ----------
+
+  /// 本机桌面修饰键：macOS ⌘，其余 Ctrl（移动端无硬件键盘，不受影响）。
+  bool get _useMetaModifier => Platform.isMacOS;
+
+  /// ⌘C/X/V/A 的快捷键映射。quill 11.5.1 默认表**没有绑定纯 ⌘C/X/V/A**
+  /// （只绑了 ⌘Shift+C 变体），且其 copy action 在选区折叠时禁用——按键
+  /// 一路漏到 macOS 默认 Edit 菜单的 `copy:` 选择器，无响应者时系统播放
+  /// 提示音（用户实测「⌘C 经常复制不上 + 触发系统音效」）。此映射经
+  /// quill 的 customShortcuts 注入（**优先于 quill 默认表**），经页面级
+  /// Shortcuts 兜底（覆盖焦点在工具栏按钮等编辑器子树外的场景）。
+  Map<ShortcutActivator, Intent> get _editorClipboardShortcuts => {
+    SingleActivator(
+      LogicalKeyboardKey.keyC,
+      meta: _useMetaModifier,
+      control: !_useMetaModifier,
+    ): const _EditorClipboardIntent(
+      _EditorClipboardKind.copy,
+    ),
+    SingleActivator(
+      LogicalKeyboardKey.keyX,
+      meta: _useMetaModifier,
+      control: !_useMetaModifier,
+    ): const _EditorClipboardIntent(
+      _EditorClipboardKind.cut,
+    ),
+    SingleActivator(
+      LogicalKeyboardKey.keyV,
+      meta: _useMetaModifier,
+      control: !_useMetaModifier,
+    ): const _EditorClipboardIntent(
+      _EditorClipboardKind.paste,
+    ),
+    SingleActivator(
+      LogicalKeyboardKey.keyA,
+      meta: _useMetaModifier,
+      control: !_useMetaModifier,
+    ): const _EditorClipboardIntent(
+      _EditorClipboardKind.selectAll,
+    ),
+  };
+
+  /// 快捷键动作表（CallbackAction 恒可用 → 按键必被消费，不再漏到系统
+  /// 菜单产生提示音）。标题聚焦时禁用：标题复制/粘贴走 Flutter 原生
+  /// TextField 链，不能被正文 handler 抢走。
+  Map<Type, Action<Intent>> get _editorClipboardActions => {
+    _EditorClipboardIntent: _EditorClipboardAction<_EditorClipboardIntent>(
+      canInvoke: () => !_titleFocusNode.hasFocus,
+      onInvoke: _handleClipboardShortcut,
+    ),
+  };
+
+  /// 剪贴板快捷键处理：有选区才复制/剪切（无选区静默消费——拦下按键即
+  /// 消除提示音）；粘贴/全选作用于正文选区（无需正文聚焦，焦点在工具栏
+  /// 时仍可粘贴）。
+  void _handleClipboardShortcut(_EditorClipboardKind kind) {
+    final selection = _contentController.selection;
+    final hasSelection = selection.isValid && !selection.isCollapsed;
+    switch (kind) {
+      case _EditorClipboardKind.copy:
+        if (hasSelection) {
+          // ignore: experimental_member_use
+          _contentController.clipboardSelection(true);
+        }
+      case _EditorClipboardKind.cut:
+        if (hasSelection) {
+          // ignore: experimental_member_use
+          _contentController.clipboardSelection(false);
+        }
+      case _EditorClipboardKind.paste:
+        unawaited(_pasteFromClipboardIntoBody());
+      case _EditorClipboardKind.selectAll:
+        _contentController.updateSelection(
+          TextSelection(
+            baseOffset: 0,
+            extentOffset: _contentController.document.length,
+          ),
+          ChangeSource.local,
+        );
+    }
+  }
+
+  /// 富文本粘贴（quill 内部读剪贴板：优先 quill delta，回退纯文本），
+  /// 替换走 changes 流 → 自动保存。
+  Future<void> _pasteFromClipboardIntoBody() async {
+    try {
+      // ignore: experimental_member_use
+      await _contentController.clipboardPaste();
+    } catch (_) {
+      // 剪贴板读取失败：忽略（无内容可粘贴）。
+    }
+  }
+
+  /// 粘贴纯文本到正文选区（右键/长按菜单「粘贴纯文本」项）。
+  Future<void> _pastePlainTextIntoBody() async {
+    final data = await Clipboard.getData(Clipboard.kTextPlain);
+    final text = data?.text;
+    if (text == null || text.isEmpty) return;
+    final docLength = _contentController.document.length;
+    final selection = _contentController.selection;
+    // 选区越界防御（远端覆盖后剪贴板操作间的时序差）。
+    final base = (selection.start < 0 || selection.start > docLength)
+        ? docLength
+        : selection.start;
+    final end = (selection.end < 0 || selection.end > docLength)
+        ? base
+        : selection.end;
+    final length = (end - base).clamp(0, docLength - base);
+    // 纯字符串经 replaceText 插入为无格式文本；替换走 changes 流 →
+    // _onChanged → 防抖自动保存。
+    _contentController.replaceText(
+      base,
+      length,
+      text,
+      TextSelection.collapsed(offset: base + text.length),
+    );
+  }
+
   // ---------- 进入基线（空笔记判定） ----------
 
   /// 记录进入编辑页时的空态（只认第一帧数据，后续推送不覆盖）。
@@ -1051,51 +1169,63 @@ class _EditorPageState extends ConsumerState<EditorPage>
 
   @override
   Widget build(BuildContext context) {
-    return PopScope(
-      canPop: false,
-      onPopInvokedWithResult: _onPopInvoked,
-      child: Scaffold(
-        appBar: AppBar(
-          title: const Text('编辑笔记'),
-          actions: [
-            _SaveStatusIndicator(status: _saveStatus),
-            // 原「移到回收站」按钮位置改为「仅本机保存」开关（用户确认：
-            // 编辑页不再提供删除入口，删除走列表菜单）。
-            _LocalOnlyToggle(value: _localOnly, onChanged: _toggleLocalOnly),
-            const SizedBox(width: 8),
-          ],
-        ),
-        body: Stack(
-          children: [
-            // 编辑器卡片始终构建；加载中叠加浮层。
-            // （列表侧 heroTag 恒为 null，编辑页未包 Hero——无飞行过渡，
-            // 相关注释已对齐现实，勿再引用 Hero。）
-            _buildEditor(),
-            if (!_initialized)
-              const Positioned.fill(
-                // AbsorbPointer：加载期间拦截点击，避免误触空白编辑器
-                child: AbsorbPointer(
-                  child: ColoredBox(
-                    color: Colors.transparent,
-                    child: Center(child: CircularProgressIndicator()),
-                  ),
+    // 页面级 ⌘C/X/V/A 兜底：焦点落在工具栏按钮等编辑器子树外时仍能复制
+    // 正文选区（quill 层只覆盖正文聚焦场景）；标题聚焦时该动作表禁用，
+    // 不抢 Flutter 原生 TextField 的复制/粘贴链。
+    return Shortcuts(
+      shortcuts: _editorClipboardShortcuts,
+      child: Actions(
+        actions: _editorClipboardActions,
+        child: PopScope(
+          canPop: false,
+          onPopInvokedWithResult: _onPopInvoked,
+          child: Scaffold(
+            appBar: AppBar(
+              title: const Text('编辑笔记'),
+              actions: [
+                _SaveStatusIndicator(status: _saveStatus),
+                // 原「移到回收站」按钮位置改为「仅本机保存」开关（用户确认：
+                // 编辑页不再提供删除入口，删除走列表菜单）。
+                _LocalOnlyToggle(
+                  value: _localOnly,
+                  onChanged: _toggleLocalOnly,
                 ),
+                const SizedBox(width: 8),
+              ],
+            ),
+            body: Stack(
+              children: [
+                // 编辑器卡片始终构建；加载中叠加浮层。
+                // （列表侧 heroTag 恒为 null，编辑页未包 Hero——无飞行过渡，
+                // 相关注释已对齐现实，勿再引用 Hero。）
+                _buildEditor(),
+                if (!_initialized)
+                  const Positioned.fill(
+                    // AbsorbPointer：加载期间拦截点击，避免误触空白编辑器
+                    child: AbsorbPointer(
+                      child: ColoredBox(
+                        color: Colors.transparent,
+                        child: Center(child: CircularProgressIndicator()),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+            // 底部栏（工具栏+字数）：包 AnimatedPadding 跟随键盘上移——
+            // 注：Scaffold 的 bottomNavigationBar 默认**不会**随键盘顶起
+            // （Flutter 已知行为，body 才避让键盘），否则键盘弹出时被盖。
+            // 这里手动加 viewInsets.bottom 内边距，让工具栏/字数显示在键盘上方。
+            bottomNavigationBar: AnimatedPadding(
+              duration: const Duration(milliseconds: 200),
+              curve: Curves.easeOut,
+              padding: EdgeInsets.only(
+                bottom:
+                    MediaQuery.of(context).viewInsets.bottom +
+                    MediaQuery.paddingOf(context).bottom,
               ),
-          ],
-        ),
-        // 底部栏（工具栏+字数）：包 AnimatedPadding 跟随键盘上移——
-        // 注：Scaffold 的 bottomNavigationBar 默认**不会**随键盘顶起
-        // （Flutter 已知行为，body 才避让键盘），否则键盘弹出时被盖。
-        // 这里手动加 viewInsets.bottom 内边距，让工具栏/字数显示在键盘上方。
-        bottomNavigationBar: AnimatedPadding(
-          duration: const Duration(milliseconds: 200),
-          curve: Curves.easeOut,
-          padding: EdgeInsets.only(
-            bottom:
-                MediaQuery.of(context).viewInsets.bottom +
-                MediaQuery.paddingOf(context).bottom,
+              child: _buildToolbar(),
+            ),
           ),
-          child: _buildToolbar(),
         ),
       ),
     );
@@ -1150,7 +1280,7 @@ class _EditorPageState extends ConsumerState<EditorPage>
                   ),
                 ],
                 // 显示前拦截：图片右键（标志）→ 空菜单；其他情况 → 默认菜单
-                // （复制/粘贴正常）。比事后 removeAny 更干净（无闪烁）。
+                // + 「粘贴纯文本」项。比事后 removeAny 更干净（无闪烁）。
                 contextMenuBuilder: (context, state) {
                   // 右键位置命中图片：quill 菜单返回空并立即关闭——
                   // 保存菜单由编辑页 Overlay 统一管理（可每次右键重新定位、
@@ -1166,13 +1296,33 @@ class _EditorPageState extends ConsumerState<EditorPage>
                     });
                     return const SizedBox.shrink();
                   }
-                  // 默认 4 选项菜单（剪切/复制/粘贴/全选）。曾尝试自定义紧凑
-                  // 工具栏/精简项数，用户要求恢复原样（宽度不强改）。
-                  return QuillRawEditorConfig.defaultContextMenuBuilder(
-                    context,
-                    state,
+                  // 默认项（剪切/复制/粘贴/全选）+「粘贴纯文本」：
+                  // 富文本粘贴会带来源样式/结构，笔记场景常需要去格式粘贴
+                  //（右键与移动端长按菜单同源，均经此 builder）。
+                  final items = List<ContextMenuButtonItem>.of(
+                    state.contextMenuButtonItems,
+                  );
+                  items.add(
+                    ContextMenuButtonItem(
+                      label: '粘贴纯文本',
+                      onPressed: () {
+                        state.hideToolbar();
+                        unawaited(_pastePlainTextIntoBody());
+                      },
+                    ),
+                  );
+                  return TextFieldTapRegion(
+                    child: AdaptiveTextSelectionToolbar.buttonItems(
+                      buttonItems: items,
+                      anchors: state.contextMenuAnchors,
+                    ),
                   );
                 },
+                // ⌘C/X/V/A 兜底（macOS 复制失效修复，见
+                // [_editorClipboardShortcuts] 说明）；customShortcuts 优先
+                // 于 quill 默认表。
+                customShortcuts: _editorClipboardShortcuts,
+                customActions: _editorClipboardActions,
               ),
             ),
           ),
@@ -1897,4 +2047,32 @@ class _SearchHighlightPainter extends CustomPainter {
       old.color != color ||
       old.rects.length != rects.length ||
       (rects.isNotEmpty && old.rects.first != rects.first);
+}
+
+/// 编辑页剪贴板快捷键种类（⌘C/X/V/A 兜底，macOS 复制失效修复）。
+enum _EditorClipboardKind { copy, cut, paste, selectAll }
+
+/// 编辑页剪贴板快捷键 intent（正文层与页面层 Shortcuts 共用）。
+class _EditorClipboardIntent extends Intent {
+  const _EditorClipboardIntent(this.kind);
+
+  final _EditorClipboardKind kind;
+}
+
+/// 剪贴板快捷键动作：[isEnabled] 为 false 时按键继续向上冒泡（标题聚焦
+/// 时让 Flutter 原生 TextField 链处理标题的复制/粘贴）；enabled 时调用
+/// [onInvoke] 并消费按键——保证 ⌘C/X/V/A 不再漏到 macOS 系统菜单产生
+/// 提示音。
+class _EditorClipboardAction<T extends _EditorClipboardIntent>
+    extends ContextAction<T> {
+  _EditorClipboardAction({required this.canInvoke, required this.onInvoke});
+
+  final bool Function() canInvoke;
+  final void Function(_EditorClipboardKind kind) onInvoke;
+
+  @override
+  bool get isActionEnabled => canInvoke();
+
+  @override
+  void invoke(T intent, [BuildContext? context]) => onInvoke(intent.kind);
 }

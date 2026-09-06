@@ -7,6 +7,14 @@ import 'package:web_socket_channel/io.dart';
 /// WebSocket 连接状态。
 enum SyncConnectionState { disconnected, connecting, connected }
 
+/// 单帧大小上限（UTF-16 code units，ASCII JSON 下 ≈ 字节）：防未认证
+/// 连接投递超大帧把 JSON 解码/消息处理放大成内存尖峰。合法消息远低于
+/// 此——附件按 64KB 分片（单帧约 90KB 含 base64），全量快照为纯笔记
+/// JSON（个人使用量级 MB 以下）。超限帧按敌意/损坏处理：丢弃并断开。
+/// 注：检查发生在整帧接收之后（dart:io WebSocket 无接收侧上限可配），
+/// 拦截的是「解码/处理」放大，不是传输层接收缓冲本身。
+const int kMaxFrameLength = 16 * 1024 * 1024;
+
 /// 统一底层 WebSocket 通道。
 ///
 /// 服务端（dart:io [WebSocket]）与客户端（web_socket_channel 的
@@ -93,6 +101,10 @@ class SyncServerConnection {
 
   void _onData(dynamic data) {
     if (data is! String) return;
+    if (data.length > kMaxFrameLength) {
+      _handleClosed(); // 超限帧（敌意/损坏）：断开连接，经 onClosed 通知上层清理
+      return;
+    }
     final message = _tryDecodeJson(data);
     if (message == null) return;
     // 心跳消息不再在传输层消化：统一进入业务流，由会话层
@@ -391,6 +403,10 @@ class SyncClient {
 
   void _onData(dynamic data) {
     if (data is! String) return;
+    if (data.length > kMaxFrameLength) {
+      _handleDisconnected(); // 超限帧（敌意/损坏）：断开连接（上层按断线处理）
+      return;
+    }
     final message = _tryDecodeJson(data);
     if (message == null) return;
     // 心跳消息不再在传输层消化：统一进入业务流，由会话层

@@ -178,9 +178,17 @@ class _NotesListState extends ConsumerState<NotesList> {
     // 兜底：多选被外部退出（PopScope/系统返回/抽屉点击等）时，拖拽回调
     // （_endDrag）不会再被触发——ghost、全局指针路由、落点高亮与抽卡
     // 集合一并清理，不留残影、不泄漏（M1）。
+    // 必须挂 post-frame：build 阶段同步写共享 ValueNotifier/移除
+    // OverlayEntry 会触发**其他**组件的 setState/markNeedsBuild——框架
+    // 禁止且在 debug 下直接抛「setState called during build」。post-frame
+    // 执行只残影一帧，可接受；重查多选仍为空才清理（帧内被重新进入则跳过）。
     if (!multiActive &&
         (_dragging || _drag != null || _ghostEntry != null)) {
-      _abortDrag();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && ref.read(multiSelectProvider).isEmpty) {
+          _abortDrag();
+        }
+      });
     }
     // 多选集合修剪（低优）：选中笔记被删除（回收站清空/远端同步删除等）
     // 后从选中集合移除，避免操作栏计数与实际条目不一致。挂 post-frame，

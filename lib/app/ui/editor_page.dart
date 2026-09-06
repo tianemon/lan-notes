@@ -725,10 +725,10 @@ class _EditorPageState extends ConsumerState<EditorPage>
     _debounce?.cancel();
     _maxIntervalTimer?.cancel();
     final noteId = _noteId;
-    final isEmptyNow =
-        _titleController.text.trim().isEmpty &&
-        _contentController.document.toPlainText().trim().isEmpty;
     if (noteId == null) {
+      final isEmptyNow =
+          _titleController.text.trim().isEmpty &&
+          _contentController.document.toPlainText().trim().isEmpty;
       if (isEmptyNow) {
         // 新建模式且没输入：还没有笔记，直接离开。
         if (mounted) context.pop();
@@ -738,11 +738,24 @@ class _EditorPageState extends ConsumerState<EditorPage>
       await _flushPendingSave();
       return;
     }
+    // S1 完善：基线未捕获（进入后立刻返回，drift 首帧未推送）时主动等
+    // 一帧——StreamProvider.future 随下一次流推送完成，通常毫秒级；500ms
+    // 超时兜底。拿到「进入时状态」再裁决：既不误删有内容的笔记，也不把
+    // 本应删除的空笔记残留下来；极端等不到（超时）则走保存路径保数据。
+    if (!_baselineCaptured) {
+      try {
+        await ref
+            .read(editorNoteProvider(noteId).future)
+            .timeout(const Duration(milliseconds: 500));
+      } catch (_) {}
+      if (!mounted) return;
+    }
+    final isEmptyNow =
+        _titleController.text.trim().isEmpty &&
+        _contentController.document.toPlainText().trim().isEmpty;
     if (isEmptyNow && _baselineEmpty && _baselineCaptured) {
       // 进入时为空、现在仍为空：直接物理删除（同步会广播删除，对端一致）。
-      // 必须以基线已捕获（drift 首帧已推送）为前提——首帧未到时无法知道
-      // 笔记进入时是否为空，此时物理删除会把一篇有内容的笔记删掉（S1：
-      // 首帧前按返回丢数据），未捕获基线一律走兜底保存路径。
+      // 基线必须已捕获（S1）：未捕获时上方已等首帧，仍未知则走保存路径。
       await ref.read(noteRepositoryProvider).deleteNote(noteId);
       if (!mounted) return;
       context.pop();

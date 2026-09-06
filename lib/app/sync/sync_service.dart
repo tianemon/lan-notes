@@ -905,17 +905,39 @@ class SyncService {
     return false;
   }
 
-  /// 等会话握手就绪（ready）：TCP 已连上后握手可能被拒/卡住，超时失败。
+  /// 等会话握手就绪（ready）：事件驱动——ready 的所有翻转路径必经
+  /// [_PeerSession._onReady] → [_emitPeers] → peerDevices 流，会话消失
+  /// 同样必经 _onSessionLinkClosed → _emitPeers，因此订阅该流即可感知，
+  /// 无需轮询；5s 超时兜底（握手卡死不无限等待）。
   Future<bool> _waitReady(String peerId) async {
-    final deadline = DateTime.now().add(const Duration(seconds: 5));
-    while (DateTime.now().isBefore(deadline)) {
+    bool sessionReady() {
       final sid = _sessionByPeerId[peerId];
       final s = sid == null ? null : _sessions[sid];
       if (s == null) return false; // 会话被关闭（对端拒绝/异常）
-      if (s.ready) return true;
-      await Future<void>.delayed(const Duration(milliseconds: 200));
+      return s.ready;
     }
-    return false; // 握手超时未就绪
+
+    if (sessionReady()) return true;
+    final completer = Completer<bool>();
+    late final StreamSubscription<List<PeerDevice>> sub;
+    Timer? timer;
+    void finish(bool ok) {
+      if (completer.isCompleted) return;
+      timer?.cancel();
+      sub.cancel();
+      completer.complete(ok);
+    }
+
+    sub = _peersController.stream.listen((_) {
+      if (sessionReady()) {
+        finish(true);
+      } else if (_sessionByPeerId[peerId] == null ||
+          _sessions[_sessionByPeerId[peerId]] == null) {
+        finish(false); // 会话消失：立即失败
+      }
+    });
+    timer = Timer(const Duration(seconds: 5), () => finish(sessionReady()));
+    return completer.future;
   }
 
   /// 凭缓存地址发起一次出站连接尝试（无会话则创建；已有出站会话则重新

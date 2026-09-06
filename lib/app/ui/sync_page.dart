@@ -119,9 +119,12 @@ class _SyncPageState extends ConsumerState<SyncPage> {
       _setSyncing(false);
       if (mounted) setState(() {});
     });
-    // 「同步中」指示接线（M2）：任一对端会话就绪（由未连接/连接中翻转为
-    // 已连接）即触发全量对齐——置「同步中」直到 syncCompleted（8s 超时兜底）。
-    bool anyPeerConnected = false;
+    // 「同步中」指示接线（M2）：任一对端会话由未就绪翻转为就绪即触发
+    // 全量对齐——置「同步中」直到 syncCompleted（8s 超时兜底）。基线用
+    // 当前列表快照初始化：页面打开时本就连接着的对端不误触发，只有真正
+    // 的「断开 → 重连就绪」翻转才亮转圈。
+    bool anyPeerConnected = _service.peerList
+        .any((p) => p.status == PeerStatus.connected);
     _peersSub = _service.peerDevices.listen((peers) {
       final connected = peers.any((p) => p.status == PeerStatus.connected);
       if (connected && !anyPeerConnected) {

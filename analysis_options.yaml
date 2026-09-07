@@ -14,6 +14,11 @@ include: package:flutter_lints/flutter.yaml
 analyzer:
   exclude:
     - temp/**
+    # 本地 fork 的第三方源码（flutter_quill）：上游自带大量 lint 噪音
+    # （prefer_initializing_formals / invalid_export_of_internal_element 等），
+    # 且它有自己的 analysis_options.yaml。改动是否正确以编译为准，
+    # 不要让上游噪音淹没本项目的告警。
+    - third_party/**
 
 linter:
   # The lint rules applied to this project can be customized in the

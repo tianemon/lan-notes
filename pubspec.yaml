@@ -66,6 +66,24 @@ dependencies:
   intl: ^0.20.2
   # 附件路径拼接（task-29）。
   path: ^1.9.1
+# 本地 fork：优化移动端选区手柄的拖拽手感。
+#
+# 原因：手柄的拖拽逻辑在**未导出**的 _TextSelectionHandleOverlay
+# （third_party/flutter_quill/lib/src/editor/widgets/text/text_selection.dart）
+# 里，三处问题都无法通过 QuillEditorConfig 从外部覆盖：
+#   1. 把手指坐标直接当文本位置用（手柄画在文字下方 → 命中相邻行）；
+#   2. dragStartBehavior 为 start，按住停顿后会被编辑器的长按手势抢走；
+#   3. 拖到对端直接 return，且选区折叠会 dispose 整个 overlay（手柄消失）。
+# 只改行为，**不动手柄外观**（外观改动方案已试过三版，均被否决）。
+#
+# 不走 git 依赖：本环境 GitHub 不可达（sqlite3 已因同样原因改为本地打包）。
+# 副本来源：~/.pub-cache/hosted/pub.dev/flutter_quill-11.5.1（已删 example/test/doc）。
+# 升级上游时：重新复制同版本源码，再把 third_party/flutter_quill.patch 重放一遍。
+# ⚠️ third_party/ 必须提交进 git，否则别的设备 pub get 会失败（lock 里 relative: true）。
+dependency_overrides:
+  flutter_quill:
+    path: third_party/flutter_quill
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

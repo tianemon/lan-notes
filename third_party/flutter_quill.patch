@@ -1,0 +1,188 @@
+--- /Users/amon/.pub-cache/hosted/pub.dev/flutter_quill-11.5.1/lib/src/editor/widgets/text/text_selection.dart	2026-08-15 00:26:57
++++ third_party/flutter_quill/lib/src/editor/widgets/text/text_selection.dart	2026-09-07 20:38:44
+@@ -25,6 +25,7 @@
+ /// [start] handle always moves the [start]/[baseOffset] of the selection.
+ enum _TextSelectionHandlePosition { start, end }
+ 
++
+ /// internal use, used to get drag direction information
+ class DragTextSelection extends TextSelection {
+   const DragTextSelection({
+@@ -75,7 +76,8 @@
+     required this.contextMenuBuilder,
+     this.clipboardStatus,
+     this.onSelectionHandleTapped,
+-    this.dragStartBehavior = DragStartBehavior.start,
++    // 本地修改（lan-notes）：见字段处说明，start → down。
++    this.dragStartBehavior = DragStartBehavior.down,
+     this.handlesVisible = false,
+     this.dragOffsetNotifier,
+   }) {
+@@ -157,12 +159,18 @@
+   /// animation smoother and setting it to [DragStartBehavior.down] will make
+   /// drag behavior feel slightly more reactive.
+   ///
+-  /// By default, the drag start behavior is [DragStartBehavior.start].
++  /// By default, the drag start behavior is [DragStartBehavior.down].
+   ///
+   /// See also:
+   ///
+   ///  * [DragGestureRecognizer.dragStartBehavior],
+   ///  which gives an example for the different behaviors.
++  // 本地修改（lan-notes）：默认改为 down。
++  // 原值 start 会等手指移动超过 touch slop 才触发 onPanStart，手柄要先
++  // 「空划一段」才开始响应；期间若按下停顿超过 kLongPressTimeout(500ms)，
++  // 编辑器的 LongPressGestureRecognizer 会在手势竞技场里取胜，把手柄的
++  // Pan 判负 —— 表现为「偶尔按住手柄却拖不动」。down 让 Pan 在按下瞬间
++  // 即进入待命，移动一个像素就能宣告胜利，抢在长按超时之前。
+   final DragStartBehavior dragStartBehavior;
+ 
+   /// {@template flutter.widgets.textSelection.onSelectionHandleTapped}
+@@ -398,7 +406,8 @@
+     required this.onSelectionHandleChanged,
+     required this.onSelectionHandleTapped,
+     required this.selectionControls,
+-    this.dragStartBehavior = DragStartBehavior.start,
++    // 本地修改（lan-notes）：见字段处说明，start → down。
++    this.dragStartBehavior = DragStartBehavior.down,
+     this.dragOffsetNotifier,
+   });
+ 
+@@ -417,6 +426,9 @@
+   _TextSelectionHandleOverlayState createState() =>
+       _TextSelectionHandleOverlayState();
+ 
++  /// 该手柄操纵的是选区的哪一端。
++  bool get isStartHandle => position == _TextSelectionHandlePosition.start;
++
+   ValueListenable<bool> get _visibility {
+     switch (position) {
+       case _TextSelectionHandlePosition.start:
+@@ -430,8 +442,17 @@
+ class _TextSelectionHandleOverlayState
+     extends State<_TextSelectionHandleOverlay>
+     with SingleTickerProviderStateMixin {
+-  // ignore: unused_field
++  /// 手柄当前指向的**文本位置**（全局坐标）。
++  ///
++  /// 这不是手指位置：手柄画在选区端点的上方（iOS 风格）或下方，手指按在
++  /// 手柄上时，其 y 与文字行并不重合，直接拿手指坐标算文本位置会命中相邻
++  /// 行。上游原实现正是这么做的（并且算出但未使用的 `_dragPosition` 就躺在
++  /// 旁边），结果就是「必须把手指挪到文字本体上才能选准」，而手指一挪过去
++  /// 就把要选的字挡住了。这里改为端点跟随手指做等量位移。
+   late Offset _dragPosition;
++
++  /// 手指按下点 → 手柄锚点（选区端点）的全局偏移，一次拖动内保持不变。
++  Offset _grabOffset = Offset.zero;
+ 
+   late AnimationController _controller;
+ 
+@@ -471,26 +492,83 @@
+     super.dispose();
+   }
+ 
+-  void _handleDragStart(DragStartDetails details) {
+-    widget.dragOffsetNotifier?.value = details.globalPosition;
++  /// 用「选区端点的实际渲染位置」反推抓握偏移。
++  ///
++  /// 端点与 RenderEditor 绘制手柄 LayerLink 用的是同一个点
++  /// （`_paintHandleLayers`），所以这是最精确的一档：手指按在手柄的哪个部位
++  /// 都能算对。拿不到时返回 null，交给后面的几何兜底。
++  Offset? _grabOffsetFromRender(Offset pointerGlobal) {
++    final renderObject = widget.renderObject;
++    if (!renderObject.attached) {
++      return null;
++    }
++    final endpoints = renderObject.getEndpointsForSelection(widget.selection);
++    if (endpoints.isEmpty) {
++      return null;
++    }
++    final local =
++        widget.isStartHandle ? endpoints.first.point : endpoints.last.point;
++    final offset = renderObject.localToGlobal(local) - pointerGlobal;
++    // 异常值保护：
++    //  - 退化成 0 说明这条链路没拿到端点位置（此时用几何兜底，否则表现与
++    //    「不做偏移」完全一样 —— 手指移到手柄位置就选到相邻行）；
++    //  - 端点不可能离手指这么远，说明渲染状态不对。
++    if (offset.distance < 1 || offset.dx.abs() > 200 || offset.dy.abs() > 200) {
++      return null;
++    }
++    return offset;
++  }
++
++  /// 计算「手指按下点 → 手柄锚点（选区端点）」的偏移。
++  ///
++  /// 拖动时端点按这个偏移跟着手指做**等量位移**，而不是把手指坐标直接当成
++  /// 文本位置 —— 后者在手柄画在文字上/下方时会命中相邻行。
++  ///
++  /// 取值优先级：
++  /// 1. [_grabOffsetFromRender]：按端点的实际渲染位置反推，最精确；
++  /// 2. 拿不到时按手柄几何近似：手指默认按在手柄几何中心，
++  ///    于是 `端点 − 中心 = anchor − size / 2`。
++  Offset _computeGrabOffset(Offset pointerGlobal) {
++    final fromRender = _grabOffsetFromRender(pointerGlobal);
++    if (fromRender != null) {
++      return fromRender;
++    }
++
+     final textPosition = widget.position == _TextSelectionHandlePosition.start
+         ? widget.selection.base
+         : widget.selection.extent;
+     final lineHeight = widget.renderObject.preferredLineHeight(textPosition);
+-    final handleSize = widget.selectionControls.getHandleSize(lineHeight);
+-    _dragPosition = details.globalPosition + Offset(0, -handleSize.height);
++    final type = widget.position == _TextSelectionHandlePosition.start
++        ? _chooseType(widget.renderObject.textDirection,
++            TextSelectionHandleType.left, TextSelectionHandleType.right)
++        : _chooseType(widget.renderObject.textDirection,
++            TextSelectionHandleType.right, TextSelectionHandleType.left);
++
++    final controls = widget.selectionControls;
++    final size = controls.getHandleSize(lineHeight);
++    final anchor =
++        controls.getHandleAnchor(type ?? TextSelectionHandleType.left,
++            lineHeight);
++    return anchor - Offset(size.width / 2, size.height / 2);
+   }
+ 
++  void _handleDragStart(DragStartDetails details) {
++    _grabOffset = _computeGrabOffset(details.globalPosition);
++    _dragPosition = details.globalPosition + _grabOffset;
++    widget.dragOffsetNotifier?.value = _dragPosition;
++  }
++
+   void _handleDragEnd(DragEndDetails details) {
+     // when the drag is complete, we need to clear the drag offset
+     widget.dragOffsetNotifier?.value = null;
+   }
+ 
+   void _handleDragUpdate(DragUpdateDetails details) {
+-    widget.dragOffsetNotifier?.value = details.globalPosition;
+     _dragPosition += details.delta;
+-    final position =
+-        widget.renderObject.getPositionForOffset(details.globalPosition);
++    // 上报的是端点位置而非手指位置：放大镜要聚焦「选到了哪个字」，
++    // 而不是被手指压住的那一块。
++    widget.dragOffsetNotifier?.value = _dragPosition;
++    final position = widget.renderObject.getPositionForOffset(_dragPosition);
+     if (widget.selection.isCollapsed) {
+       widget.onSelectionHandleChanged(TextSelection.fromPosition(position));
+       return;
+@@ -519,7 +597,16 @@
+     }
+ 
+     if (newSelection.baseOffset >= newSelection.extentOffset) {
+-      return; // don't allow order swapping.
++      // 上游原实现在此直接 return，两个后果：
++      // 1) 手柄拖到与另一端重合前的一瞬就「完全卡住」，手指继续动也毫无反应；
++      // 2) 一旦真的重合，选区折叠会让 _updateOrDisposeSelectionOverlayIfNeeded
++      //    把整个 overlay dispose 掉，手柄凭空消失、手指还按着却拖不回来。
++      // 改为夹紧到最小 1 字符选区：手柄继续跟随手指，也不会触发 dispose。
++      newSelection = widget.position == _TextSelectionHandlePosition.start
++          ? newSelection.copyWith(
++              baseOffset: math.max(newSelection.extentOffset - 1, 0))
++          : newSelection.copyWith(
++              extentOffset: newSelection.baseOffset + 1);
+     }
+ 
+     widget.onSelectionHandleChanged(newSelection);

@@ -17,6 +17,7 @@ import '../repository/attachments.dart';
 import '../repository/providers.dart';
 import 'widgets/editor_search_panel.dart';
 import 'widgets/glass_style.dart';
+import 'widgets/quill_magnifier.dart';
 import '../theme.dart';
 
 /// 保存状态：保存中 / 已保存 / 保存失败。
@@ -1318,6 +1319,14 @@ class _EditorPageState extends ConsumerState<EditorPage>
                     ),
                   );
                 },
+                // 拖动手柄 / 长按拖选时的放大镜（移动端）。quill 默认没有
+                // 放大镜（该字段缺省为 null），手指按住手柄后看不到选到
+                // 哪个字。桌面端 quill 的 dragOffsetNotifier 恒为 null，
+                // 本 builder 不会被调用，无需按平台分支。
+                // 注：手柄外观保持系统原生，不要注入 textSelectionControls
+                // （自定义外观方案已试过三版，均被否决，见 third_party/
+                // flutter_quill.patch 的说明）。
+                quillMagnifierBuilder: buildQuillMagnifier,
                 // ⌘C/X/V/A 兜底（macOS 复制失效修复，见
                 // [_editorClipboardShortcuts] 说明）；customShortcuts 优先
                 // 于 quill 默认表。

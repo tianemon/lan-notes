@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'app/repository/intro_note.dart';
 import 'app/repository/providers.dart';
+import 'app/repository/quill_clipboard.dart';
 import 'app/router.dart';
 import 'app/theme.dart';
 import 'app/ui/pairing_dialog_controller.dart';
@@ -34,6 +35,9 @@ void main() async {
       container.read(noteRepositoryProvider),
     );
   } catch (_) {}
+  // 剪贴板 HTML 净化：网页/Office 写进剪贴板的 CF_HTML 包装（描述头里的
+  // SourceURL 等）不能进正文，须在解析前清掉（见 quill_clipboard.dart）。
+  installSanitizingClipboardService();
   runApp(
     UncontrolledProviderScope(container: container, child: const LanNotesApp()),
   );

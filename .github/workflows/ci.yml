@@ -40,5 +40,11 @@ jobs:
 
       # drift 的生成码（lib/app/data/*.g.dart）已入库，无需 build_runner；
       # 若表结构改动后忘了重跑，这里也会跟着一起红。
+      #
+      # 显式列出测试文件，跳过 test/verify_sync_runner_test.dart：它 import 了
+      # temp/drafts/verify_sync.dart，而 temp/ 私有不入库，CI 上文件不存在 →
+      # **编译期** uri_does_not_exist，整个 test 目录一起挂（dart 的 import
+      # 无法条件短路，test tag 的 skip 只在编译后生效，--exclude-tags 同样无效）。
+      # analyze 侧已用 analysis_options.yaml 的 exclude 排掉同一文件。
       - name: Unit tests
-        run: flutter test
+        run: flutter test $(ls test/*_test.dart | grep -v verify_sync_runner)

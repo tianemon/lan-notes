@@ -19,6 +19,11 @@ analyzer:
     # 且它有自己的 analysis_options.yaml。改动是否正确以编译为准，
     # 不要让上游噪音淹没本项目的告警。
     - third_party/**
+    # verify_sync 全链路联调脚本的包装测试：import 了 temp/drafts/verify_sync.dart，
+    # 而 temp/ 不进版本控制（见上）。GitHub Actions 上该文件不存在，
+    # analyze 会报 uri_does_not_exist 让 CI 门禁恒红。
+    # 本机不受影响（temp/ 在本地存在），单独运行方式见文件头注释。
+    - test/verify_sync_runner_test.dart
 
 linter:
   # The lint rules applied to this project can be customized in the

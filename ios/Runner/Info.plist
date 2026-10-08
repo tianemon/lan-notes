@@ -2,6 +2,8 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>CADisableMinimumFrameDurationOnPhone</key>
+	<true/>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
@@ -24,6 +26,17 @@
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>局域网笔记需要在局域网内发现其他设备并同步笔记数据</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>保存图片到相册需要访问相册</string>
+	<key>UIApplicationSupportsIndirectInputEvents</key>
+	<true/>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
 	<key>UIMainStoryboardFile</key>
@@ -41,23 +54,5 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
-	<key>CADisableMinimumFrameDurationOnPhone</key>
-	<true/>
-	<key>UIApplicationSupportsIndirectInputEvents</key>
-	<true/>
-	<!-- 局域网同步：iOS 14+ 本地网络权限弹窗描述 -->
-	<key>NSPhotoLibraryAddUsageDescription</key>
-	<string>保存图片到相册需要访问相册</string>
-	<key>NSLocalNetworkUsageDescription</key>
-	<string>局域网笔记需要在局域网内发现其他设备并同步笔记数据</string>
-	<!-- 局域网明文 WebSocket（ws://）连接：iOS 14+ 默认不阻止本地明文，
-	     但 Apple 建议显式声明 NSAllowsLocalNetworking 作为意图声明
-	     （兼容旧系统 + 规范）；不开放全局 NSAllowsArbitraryLoads。
-	     task-24 发现已从 mDNS 改为 UDP 广播，NSBonjourServices 不再需要（已删）。 -->
-	<key>NSAppTransportSecurity</key>
-	<dict>
-		<key>NSAllowsLocalNetworking</key>
-		<true/>
-	</dict>
 </dict>
 </plist>

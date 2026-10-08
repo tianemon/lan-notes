@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 
 import '../repository/providers.dart';
 import '../theme.dart';
@@ -81,9 +82,50 @@ class SettingsPage extends ConsumerWidget {
               onTap: () => context.push('/trash'),
             ),
             const SizedBox(height: 16),
+            // ---- 关于组 ----
+            const Padding(
+              padding: EdgeInsets.fromLTRB(16, 16, 16, 8),
+              child: SectionLabel('关于'),
+            ),
+            const _AboutTile(),
+            const SizedBox(height: 16),
           ],
         ),
       ),
+    );
+  }
+}
+
+/// 「关于」条目：应用名 + 版本号（读 [PackageInfo]，随平台安装包元数据）。
+///
+/// 用 [FutureBuilder] 而非在 main 里预取：`PackageInfo.fromPlatform()` 在
+/// Android 上若在 `runApp()` 之前调用会抛异常
+/// （https://github.com/fluttercommunity/plus_plugins/issues/309），
+/// 而本项目 main() 里已有若干首帧前异步逻辑，预取并不安全。
+class _AboutTile extends StatelessWidget {
+  const _AboutTile();
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return FutureBuilder<PackageInfo>(
+      future: PackageInfo.fromPlatform(),
+      builder: (context, snapshot) {
+        // 加载中/失败都不占位报错：版本号只是辅助信息，取不到就只显示应用名。
+        final data = snapshot.data;
+        final version = data == null
+            ? null
+            : (data.buildNumber.isEmpty
+                  ? data.version
+                  : '${data.version} (${data.buildNumber})');
+        return ListTile(
+          leading: const Icon(Icons.info_outline),
+          title: const Text('EasyNote'),
+          subtitle: version == null
+              ? null
+              : Text('版本 $version', style: theme.textTheme.bodySmall),
+        );
+      },
     );
   }
 }

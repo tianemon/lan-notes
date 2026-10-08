@@ -66,6 +66,7 @@ dependencies:
   intl: ^0.20.2
   # 附件路径拼接（task-29）。
   path: ^1.9.1
+  package_info_plus: ^9.0.1
 # 本地 fork：优化移动端选区手柄的拖拽手感。
 #
 # 原因：手柄的拖拽逻辑在**未导出**的 _TextSelectionHandleOverlay

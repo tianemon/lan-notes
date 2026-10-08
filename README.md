@@ -54,7 +54,7 @@ flutter build apk --debug              # Android debug APK
 ### 端到端联调验证脚本
 
 ```bash
-flutter test  # 单元/组件/安全回归（41 项）
+flutter test  # 单元/组件/安全回归（54 项）
 flutter test --run-skipped --tags manual test/verify_sync_runner_test.dart  # 驱动真实网络栈的 97 场景全链路（temp/drafts/verify_sync.dart 包装）
 ```
 

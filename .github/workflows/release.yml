@@ -1,0 +1,189 @@
+name: Build & Release
+
+# 打 v* tag 时三端并行构建，统一挂到该 tag 的 GitHub Release。
+#
+# 产物一律不签名（用户首次运行的放行步骤见 README「下载」章节）：
+#   - macOS：Flutter 的 macOS build 默认 ad-hoc 签名（codesign 显示
+#     flags=adhoc），未经 Apple 公证。用户在 Gatekeeper 上需手动放行：
+#     右键打开，或「系统设置 → 隐私与安全性 → 仍要打开」。走付费的 Apple
+#     Developer Program（Developer ID 证书 + notarytool 公证）可去掉这一步，
+#     但需另配 keychain 与公证凭据。
+#   - Windows：未做 Authenticode 签名，exe 双击会弹 SmartScreen 窗口，
+#     点「更多信息 → 仍要运行」即可。
+#   - Android：release 走 debug 签名（android/app/build.gradle.kts 未配
+#     release keystore），产物仅供自行安装，不能上架应用市场。
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  prepare-notes:
+    runs-on: ubuntu-latest
+    outputs:
+      notes: ${{ steps.extract.outputs.notes }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Extract changelog for tag
+        id: extract
+        shell: bash
+        run: |
+          TAG="${{ github.ref_name }}"
+          # v1.0.0 → 1.0.0。CHANGELOG 标题兼容两种格式：## v1.0.0 与 ## [v1.0.0]。
+          # 字面 [ 用字符类 [[] 匹配——POSIX 写法，BSD/GNU awk 均支持。
+          VERSION="${TAG#v}"
+          NOTES=$(awk -v v="$VERSION" '
+            $0 ~ "^## v" v " " || $0 ~ "^## [[]v" v "[]] " { found=1; next }
+            found && ($0 ~ "^## v" || $0 ~ "^## [[]v") { exit }
+            found { print }
+          ' CHANGELOG.md)
+          if [ -z "$NOTES" ]; then
+            NOTES="Release $TAG"
+          fi
+          echo "notes<<EOF" >> "$GITHUB_OUTPUT"
+          echo "$NOTES" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+
+  build-macos:
+    needs: prepare-notes
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version-file: pubspec.yaml
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Build release app
+        run: flutter build macos --release
+
+      # 打 zip 而非 dmg：dmg 需要额外的 hdiutil 打包步骤，而未签名场景下
+      # 用户对 zip 解压后拖进 Applications 的接受度更高（不需要挂载镜像）。
+      - name: Package app as zip
+        run: |
+          set -euo pipefail
+          cd build/macos/Build/Products/Release
+          if [ ! -d "EasyNote.app" ]; then
+            echo "::error::未找到 EasyNote.app，构建未产出应用"
+            exit 1
+          fi
+          # 打印签名状态便于排查 Gatekeeper 行为（未公证 → 用户需手动放行）
+          codesign -dv EasyNote.app 2>&1 | head -5 || true
+          # -r 递归。传目录名本身即保留 EasyNote.app/ 层级（用户解压后直接
+          # 拖进「应用程序」），无需 --keepParent。
+          zip -r EasyNote-macos.zip EasyNote.app
+          ls -lh EasyNote-macos.zip
+
+      - name: Upload artifacts
+        uses: softprops/action-gh-release@v3
+        with:
+          body: ${{ needs.prepare-notes.outputs.notes }}
+          files: |
+            build/macos/Build/Products/Release/EasyNote-macos.zip
+
+  build-windows:
+    needs: prepare-notes
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # windows-latest 预装 Visual Studio Enterprise 2022 且带
+      # Microsoft.VisualStudio.Workload.NativeDesktop（即「使用 C++ 的桌面
+      # 开发」工作负载，含 MSVC + Windows SDK），无需额外装工具链。
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version-file: pubspec.yaml
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      # --no-tree-shake-icons 必须带：MaterialIcons 字体会被子集化，漏掉运行
+      # 时才引用的字形会让文件夹/设备图标显示为空白（见 build_install.sh
+      # 内的同款说明与 CLAUDE.md 规则 8）。
+      - name: Build release exe
+        run: flutter build windows --release --no-tree-shake-icons
+
+      # 整目录打包：exe 依赖同级的 data/ 与若干 dll，单发 exe 跑不起来。
+      # 用 tar（Windows 10+ 自带 bsdtar）而非 Compress-Archive：后者官方文档
+      # 明确「ignores hidden files and folders」并建议改用 .NET API，且有 2GB 上限。
+      - name: Package release directory as zip
+        shell: pwsh
+        run: |
+          $src = "build\windows\x64\runner\Release"
+          if (-not (Test-Path "$src\data")) {
+            throw "缺少 $src\data —— Flutter 运行时资源未生成，打包会得到跑不起来的 exe"
+          }
+          New-Item -ItemType Directory -Force -Path "build\windows\package" | Out-Null
+          # -C 指定工作目录 + 内容通配，使 zip 解压后直接是 exe/dll/data 而非多一层目录
+          tar -a -c -f build\windows\package\EasyNote-windows.zip -C $src .
+          Write-Host "packaged: build\windows\package\EasyNote-windows.zip"
+
+      - name: Upload artifacts
+        uses: softprops/action-gh-release@v3
+        with:
+          body: ${{ needs.prepare-notes.outputs.notes }}
+          files: |
+            build\windows\package\EasyNote-windows.zip
+
+  build-android:
+    needs: prepare-notes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version-file: pubspec.yaml
+          cache: true
+
+      # JDK 21：AGP 8.11.1 与之兼容（pubspec 的 hooks 里 sqlite3 用
+      # source: system，不走 native assets 下载，不需要额外网络准备）。
+      - name: Set up JDK
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      # release 用 debug 签名（android/app/build.gradle.kts 未配 release
+      # keystore）——apk 可直接安装，但不能上架应用市场。
+      - name: Build release APK
+        run: |
+          flutter build apk --release
+          ls -lh build/app/outputs/flutter-apk/app-release.apk
+
+      # 冒烟校验：确认预编译 libsqlite3.so 真的打进了 APK（Android 无系统库可
+      # dlopen，靠 android/app/src/main/jniLibs/ 里的 .so；漏了会在真机运行时
+      # 才炸，这里提前发现）。注意 APK 内路径是 lib/<abi>/——jniLibs 只是
+      # Gradle 的源目录名，打包时会重映射。
+      - name: Verify libsqlite3.so is bundled
+        run: |
+          set -euo pipefail
+          found=$(unzip -l build/app/outputs/flutter-apk/app-release.apk \
+            | grep -cE 'lib/[^/]+/libsqlite3\.so' || true)
+          if [ "$found" -lt 1 ]; then
+            echo "::error::APK 内未找到 libsqlite3.so，真机运行会失败"
+            exit 1
+          fi
+          echo "libsqlite3.so 已打包（$found 个 ABI）"
+
+      - name: Upload artifacts
+        uses: softprops/action-gh-release@v3
+        with:
+          body: ${{ needs.prepare-notes.outputs.notes }}
+          files: |
+            build/app/outputs/flutter-apk/app-release.apk

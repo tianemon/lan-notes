@@ -1,7 +1,7 @@
 # EasyNote（局域网笔记）
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Flutter](https://img.shields.io/badge/Flutter-3.38%2B-02569B?logo=flutter&logoColor=white)](https://flutter.dev)
+[![Flutter](https://img.shields.io/badge/Flutter-3.44-02569B?logo=flutter&logoColor=white)](https://flutter.dev)
 [![platform](https://img.shields.io/badge/platform-iOS%20%7C%20Android%20%7C%20Windows%20%7C%20macOS-lightgrey)](#运行方式)
 
 > 纯局域网内同步笔记的跨平台应用：手机随手记，电脑自动同步，不依赖公网服务器。
@@ -20,11 +20,30 @@
 - 断线重连（重新上线方凭地址缓存自动直连），重连后全量对齐、数据无丢失
 - P2P 对等拓扑：每台设备既是服务端又是客户端，多台设备全互联 mesh
 
+## 下载
+
+Releases 页提供 **macOS / Windows / Android** 三端构建产物（打 `v*` tag 时由 GitHub
+Actions 自动构建并上传）：https://github.com/tianemon/lan-notes/releases
+
+| 平台 | 产物 | 说明 |
+| --- | --- | --- |
+| macOS | `EasyNote-macos.zip` | 解压后把 `EasyNote.app` 拖进「应用程序」 |
+| Windows | `EasyNote-windows.zip` | 解压后运行 `lan_notes.exe`（需整个目录，不能只取 exe） |
+| Android | `app-release.apk` | 直接安装到手机 |
+
+**关于签名提示**：自动构建的产物**未做商业代码签名**，首次运行需要手动放行一次：
+
+- **macOS**：应用为 ad-hoc 签名（未经 Apple 公证）。双击会被 Gatekeeper 拦下，
+  选「右键 → 打开」即可；或到「系统设置 → 隐私与安全性」里点「仍要打开」。
+- **Windows**：无 Authenticode 签名，SmartScreen 会弹蓝色窗口，点「更多信息 →
+  仍要运行」。
+- **Android**：release 包使用 debug 签名，仅供自行安装，不能上架应用市场。
+
 ## 运行方式
 
 ### 环境要求
 
-- Flutter 3.38+ / Dart 3.10+
+- Flutter 3.44.9 / Dart 3.12（版本在 pubspec.yaml 的 `environment.flutter` 锁定，CI 与本机一致）
 - Windows 桌面：Visual Studio 2019+（C++ 工具链）
 - Android：Android SDK（API 35+）；构建 APK 需要能访问 Maven 仓库
 - iOS / macOS：需要 Mac 环境（本仓库在 Windows 上以 Windows + Android 验证）
@@ -244,6 +263,6 @@ flutter test --run-skipped --tags manual test/verify_sync_runner_test.dart  # �
 
 ## 技术栈
 
-- Flutter 3.38 / Dart 3.10，Material 3 flat 风格
+- Flutter 3.44 / Dart 3.12，Material 3 flat 风格
 - drift（SQLite）本地持久化，Riverpod 状态管理，go_router 路由
 - 自研 UDP 广播发现（JSON 通告，端口 58888；参考 Syncthing/LocalSend），web_socket_channel（WebSocket 同步）

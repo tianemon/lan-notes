@@ -135,7 +135,7 @@ CodeGraph 用于**结构性**问题——谁调了谁、改动会影响什么、
 
 ## 4.2 技术栈与启动
 
-- **技术栈**: Flutter 3.38 / Dart 3.10，drift（SQLite）、flutter_riverpod、go_router、web_socket_channel（发现为自研 UDP 广播，无 mDNS 依赖）
+- **技术栈**: Flutter 3.44 / Dart 3.12，drift（SQLite）、flutter_riverpod、go_router、web_socket_channel（发现为自研 UDP 广播，无 mDNS 依赖）
 - **目标平台**: iOS / Android / Windows / macOS（本机仅能编译验证 Windows 与 Android，iOS/macOS 需 Mac）
 - **启动命令**:
 

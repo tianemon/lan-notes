@@ -20,6 +20,12 @@ version: 1.0.0+1
 
 environment:
   sdk: ^3.10.4
+  # 精确版本（非范围）：GitHub Actions 的 subosito/flutter-action 用
+  # flutter-version-file: pubspec.yaml 读取 CI 用的 Flutter 版本，该 action
+  # 要求此处是精确值——写成 ">=3.44.0" 之类会被它拒绝。
+  # 本机验证通过的版本：3.44.9（stable，2026-08-05）。
+  # 升级 Flutter 时同步改这里，否则 CI 与本机会构建出不同产物。
+  flutter: 3.44.9
 
 # Dependencies specify other packages that your package needs in order to work.
 # To automatically upgrade your package dependencies to the latest versions

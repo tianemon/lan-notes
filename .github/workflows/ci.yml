@@ -1,0 +1,44 @@
+name: CI
+
+# 质量门禁：分支 push / pull_request 时跑静态检查与单元测试。
+#
+# 限定 branches（不含 tag）：发版时 tag 与 main 指向同一 commit，裸 on: push
+# 会让同一次提交跑两遍（tag 那次与 main 那次完全等价）。
+# paths-ignore：纯文档提交（README/CHANGELOG/CLAUDE.md 等）无静态检查与单测
+# 可查，跳过；提交里只要有一个非 .md 文件即照常触发。
+# docs/ 与 .easymint/ 已在 .gitignore、不进仓库，无需列出。
+
+on:
+  push:
+    branches: ['**']
+    paths-ignore: ['**/*.md']
+  pull_request:
+    paths-ignore: ['**/*.md']
+
+permissions:
+  contents: read
+
+jobs:
+  quality-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # 版本从 pubspec.yaml 的 environment.flutter 读取（须为精确版本，
+      # 见 pubspec 内注释）。channel: stable 与该版本对齐。
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version-file: pubspec.yaml
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Analyze
+        run: flutter analyze
+
+      # drift 的生成码（lib/app/data/*.g.dart）已入库，无需 build_runner；
+      # 若表结构改动后忘了重跑，这里也会跟着一起红。
+      - name: Unit tests
+        run: flutter test
